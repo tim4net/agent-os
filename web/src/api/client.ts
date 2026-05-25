@@ -145,3 +145,66 @@ export function sendChat(
 export function createEventSource(): EventSource {
   return new EventSource('/api/events')
 }
+
+// --- Artifacts ---
+
+export interface Artifact {
+  id: string
+  agent_id: string
+  filename: string
+  content_type: string
+  artifact_type: 'image' | 'video' | 'audio' | 'code' | 'text'
+  size: number
+  created_at: string
+  metadata?: Record<string, string>
+}
+
+export interface ListArtifactsResponse {
+  artifacts: Artifact[]
+  total: number
+}
+
+export function listArtifacts(
+  type?: string,
+  agentId?: string,
+  limit?: number,
+  offset?: number,
+): Promise<ListArtifactsResponse> {
+  const params = new URLSearchParams()
+  if (type) params.set('type', type)
+  if (agentId) params.set('agent_id', agentId)
+  if (limit !== undefined) params.set('limit', String(limit))
+  if (offset !== undefined) params.set('offset', String(offset))
+  const qs = params.toString()
+  return request<ListArtifactsResponse>(`/api/artifacts${qs ? `?${qs}` : ''}`)
+}
+
+export function getArtifact(id: string): Promise<Artifact> {
+  return request<Artifact>(`/api/artifacts/${id}`)
+}
+
+export async function deleteArtifact(id: string): Promise<void> {
+  const res = await fetch(`/api/artifacts/${id}`, { method: 'DELETE' })
+  if (!res.ok) {
+    throw new Error(`API error ${res.status}: ${res.statusText}`)
+  }
+}
+
+export async function uploadArtifact(
+  file: File,
+  metadata?: Record<string, string>,
+): Promise<Artifact> {
+  const form = new FormData()
+  form.append('file', file)
+  if (metadata) {
+    form.append('metadata', JSON.stringify(metadata))
+  }
+  const res = await fetch('/api/artifacts', {
+    method: 'POST',
+    body: form,
+  })
+  if (!res.ok) {
+    throw new Error(`API error ${res.status}: ${res.statusText}`)
+  }
+  return res.json() as Promise<Artifact>
+}

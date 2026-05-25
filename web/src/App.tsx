@@ -1,9 +1,11 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import type { Agent } from './api/client'
+import { uploadArtifact } from './api/client'
 import { useAgents } from './hooks/useAgents'
 import { Sidebar } from './components/layout/Sidebar'
 import { AgentCard } from './components/agents/AgentCard'
 import { ChatPanel } from './components/chat/ChatPanel'
+import { ArtifactGrid } from './components/workspace/ArtifactGrid'
 
 const tabs = ['Overview', 'Chat', 'Studio', 'Workspace', 'Kanban', 'Memory', 'Goals', 'Pipeline'] as const
 type Tab = (typeof tabs)[number]
@@ -11,11 +13,30 @@ type Tab = (typeof tabs)[number]
 function App() {
   const [activeTab, setActiveTab] = useState<Tab>('Overview')
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null)
+  const [artifactGridKey, setArtifactGridKey] = useState(0)
   const { agents, loading } = useAgents()
+  const uploadInputRef = useRef<HTMLInputElement>(null)
 
   function handleSelectAgent(agent: Agent) {
     setSelectedAgent(agent)
     setActiveTab('Chat')
+  }
+
+  function handleUploadClick() {
+    uploadInputRef.current?.click()
+  }
+
+  async function handleFileSelected(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    try {
+      await uploadArtifact(file)
+      setArtifactGridKey((k) => k + 1)
+    } catch (err) {
+      console.error('Upload failed:', err)
+    }
+    // Reset input so same file can be re-uploaded
+    e.target.value = ''
   }
 
   function renderContent() {
@@ -46,6 +67,15 @@ function App() {
           )
         }
         return <ChatPanel agent={selectedAgent} />
+      case 'Workspace':
+        return (
+          <ArtifactGrid
+            key={artifactGridKey}
+            agents={agents}
+            selectedAgent={selectedAgent}
+            onUploadClick={handleUploadClick}
+          />
+        )
       default:
         return (
           <div>
@@ -89,6 +119,14 @@ function App() {
           {renderContent()}
         </main>
       </div>
+
+      {/* Hidden file input for artifact upload */}
+      <input
+        ref={uploadInputRef}
+        type="file"
+        className="hidden"
+        onChange={handleFileSelected}
+      />
     </div>
   )
 }

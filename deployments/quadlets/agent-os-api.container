@@ -12,6 +12,7 @@ PublishPort=8080:8080
 
 Volume=/mnt/truenas/obsidian:/data/obsidian
 Volume=/mnt/truenas/repos:/data/repos:ro
+Volume=agent-os-artifacts:/data/artifacts
 
 Environment=DATABASE_URL=postgres://agentos:agentos_dev@agent-os-db:5432/agentos?sslmode=disable
 Environment=LITELLM_URL=http://100.113.84.43:4000
