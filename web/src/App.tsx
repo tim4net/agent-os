@@ -6,6 +6,11 @@ import { Sidebar } from './components/layout/Sidebar'
 import { AgentCard } from './components/agents/AgentCard'
 import { ChatPanel } from './components/chat/ChatPanel'
 import { ArtifactGrid } from './components/workspace/ArtifactGrid'
+import { FileTree } from './components/memory/FileTree'
+import { NoteViewer } from './components/memory/NoteViewer'
+import { SearchBar } from './components/memory/SearchBar'
+import { GeneratorForm } from './components/studio/GeneratorForm'
+import { MediaPreview } from './components/studio/MediaPreview'
 
 const tabs = ['Overview', 'Chat', 'Studio', 'Workspace', 'Kanban', 'Memory', 'Goals', 'Pipeline'] as const
 type Tab = (typeof tabs)[number]
@@ -14,6 +19,8 @@ function App() {
   const [activeTab, setActiveTab] = useState<Tab>('Overview')
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null)
   const [artifactGridKey, setArtifactGridKey] = useState(0)
+  const [memoryFilePath, setMemoryFilePath] = useState<string | null>(null)
+  const [mediaPreviewKey, setMediaPreviewKey] = useState(0)
   const { agents, loading } = useAgents()
   const uploadInputRef = useRef<HTMLInputElement>(null)
 
@@ -75,6 +82,39 @@ function App() {
             selectedAgent={selectedAgent}
             onUploadClick={handleUploadClick}
           />
+        )
+      case 'Memory':
+        return (
+          <div className="flex flex-col h-full">
+            {/* Search bar at top */}
+            <div className="px-4 py-3 border-b border-gray-800 flex-shrink-0">
+              <SearchBar onFileSelect={setMemoryFilePath} />
+            </div>
+            {/* Split layout: file tree on left, note viewer on right */}
+            <div className="flex flex-1 min-h-0">
+              <div className="w-72 flex-shrink-0 border-r border-gray-800 overflow-y-auto bg-gray-900/50">
+                <FileTree onFileSelect={setMemoryFilePath} selectedPath={memoryFilePath ?? undefined} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <NoteViewer filePath={memoryFilePath} />
+              </div>
+            </div>
+          </div>
+        )
+      case 'Studio':
+        return (
+          <div className="flex h-full gap-6 p-4">
+            {/* Generator form on left */}
+            <div className="w-96 flex-shrink-0">
+              <GeneratorForm
+                onGenerated={() => setMediaPreviewKey((k) => k + 1)}
+              />
+            </div>
+            {/* Media preview gallery on right */}
+            <div className="flex-1 min-w-0 overflow-y-auto">
+              <MediaPreview key={mediaPreviewKey} />
+            </div>
+          </div>
         )
       default:
         return (

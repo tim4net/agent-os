@@ -208,3 +208,88 @@ export async function uploadArtifact(
   }
   return res.json() as Promise<Artifact>
 }
+
+// --- Memory ---
+
+export interface MemoryTreeNode {
+  name: string
+  path: string
+  type: 'file' | 'folder'
+  children?: MemoryTreeNode[]
+}
+
+export interface MemoryFile {
+  path: string
+  content: string
+}
+
+export interface MemorySearchResult {
+  path: string
+  title: string
+  snippet: string
+}
+
+export function getMemoryTree(path?: string): Promise<MemoryTreeNode[]> {
+  const params = new URLSearchParams()
+  if (path) params.set('path', path)
+  const qs = params.toString()
+  return request<MemoryTreeNode[]>(`/api/memory/tree${qs ? `?${qs}` : ''}`)
+}
+
+export function getMemoryFile(path: string): Promise<MemoryFile> {
+  const params = new URLSearchParams({ path })
+  return request<MemoryFile>(`/api/memory/file?${params}`)
+}
+
+export function saveMemoryFile(path: string, content: string): Promise<MemoryFile> {
+  return request<MemoryFile>('/api/memory/file', {
+    method: 'POST',
+    body: JSON.stringify({ path, content }),
+  })
+}
+
+export function searchMemory(query: string): Promise<MemorySearchResult[]> {
+  const params = new URLSearchParams({ query })
+  return request<MemorySearchResult[]>(`/api/memory/search?${params}`)
+}
+
+export interface SynthesizeResponse {
+  path: string
+  content: string
+}
+
+export function synthesizeMemory(
+  paths: string[],
+  type: string,
+): Promise<SynthesizeResponse> {
+  return request<SynthesizeResponse>('/api/memory/synthesize', {
+    method: 'POST',
+    body: JSON.stringify({ paths, type }),
+  })
+}
+
+// --- Studio ---
+
+export interface StudioGeneration {
+  id: string
+  prompt: string
+  type: 'image' | 'video' | 'audio'
+  model: string
+  url: string
+  created_at: string
+}
+
+export function studioGenerate(
+  prompt: string,
+  type: string,
+  model?: string,
+): Promise<StudioGeneration> {
+  return request<StudioGeneration>('/api/studio/generate', {
+    method: 'POST',
+    body: JSON.stringify({ prompt, type, model }),
+  })
+}
+
+export function listGenerations(): Promise<StudioGeneration[]> {
+  return request<StudioGeneration[]>('/api/studio/generations')
+}
