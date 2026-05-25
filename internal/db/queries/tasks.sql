@@ -1,6 +1,6 @@
 -- name: ListTasks :many
 SELECT * FROM tasks
-WHERE ($1::text IS NULL OR status = $1)
+WHERE ($1::text = '' OR status = $1)
   AND ($2::uuid IS NULL OR agent_id = $2)
 ORDER BY priority DESC, created_at ASC;
 

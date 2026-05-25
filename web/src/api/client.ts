@@ -496,12 +496,20 @@ export interface ActivityEvent {
   target?: string
 }
 
+interface ActivityListResponse {
+  events: ActivityEvent[]
+  total: number
+  limit: number
+  offset: number
+}
+
 export function getActivity(limit?: number, offset?: number): Promise<ActivityEvent[]> {
   const params = new URLSearchParams()
   if (limit !== undefined) params.set('limit', String(limit))
   if (offset !== undefined) params.set('offset', String(offset))
   const qs = params.toString()
-  return request<ActivityEvent[]>(`/api/activity${qs ? `?${qs}` : ''}`)
+  return request<ActivityListResponse>(`/api/activity${qs ? `?${qs}` : ''}`)
+    .then((res) => res.events)
 }
 
 // --- Obsidian Export ---

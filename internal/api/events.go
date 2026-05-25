@@ -39,7 +39,7 @@ func (a *API) StreamEvents(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			data := event.ToJSON()
-			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event.Type, data)
+			fmt.Fprintf(w, "data: %s\n\n", data)
 			if canFlush {
 				flusher.Flush()
 			}

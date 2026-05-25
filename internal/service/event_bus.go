@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/json"
 	"sync"
+	"time"
 )
 
 // Event represents a published event on the bus.
@@ -21,13 +22,17 @@ const (
 
 // EventBus provides a simple pub/sub mechanism using Go channels.
 type EventBus struct {
-	mu          sync.RWMutex
-	subscribers []chan Event
+	mu            sync.RWMutex
+	subscribers   []chan Event
+	throttleMu    sync.Mutex
+	lastPublished map[string]time.Time
 }
 
 // NewEventBus creates a new EventBus.
 func NewEventBus() *EventBus {
-	return &EventBus{}
+	return &EventBus{
+		lastPublished: make(map[string]time.Time),
+	}
 }
 
 // Subscribe returns a channel that receives all published events.
@@ -57,7 +62,18 @@ func (eb *EventBus) Unsubscribe(ch <-chan Event) {
 
 // Publish sends an event to all subscribers.
 // Events are dropped for slow consumers (non-blocking send).
+// Same event type is throttled: if published within the last 2 seconds, it is skipped.
 func (eb *EventBus) Publish(event Event) {
+	// Throttle check: skip if same event type was published within the last 2 seconds
+	eb.throttleMu.Lock()
+	now := time.Now()
+	if last, ok := eb.lastPublished[event.Type]; ok && now.Sub(last) < 2*time.Second {
+		eb.throttleMu.Unlock()
+		return
+	}
+	eb.lastPublished[event.Type] = now
+	eb.throttleMu.Unlock()
+
 	eb.mu.RLock()
 	defer eb.mu.RUnlock()
 

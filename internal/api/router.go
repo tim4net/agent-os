@@ -17,13 +17,14 @@ type API struct {
 	feed         *service.ActivityFeed
 	litellmURL   string
 	obsidianPath string
+	hermesAPIKey string
 	artifacts    *ArtifactAPI
 	memory       *MemoryAPI
 	studio       *StudioAPI
 }
 
 // NewAPI creates a new API instance with the given dependencies.
-func NewAPI(queries *db.Queries, registry *harness.Registry, bus *service.EventBus, feed *service.ActivityFeed, litellmURL string, artifactsPath string, obsidianPath string, xaiAPIKey string) *API {
+func NewAPI(queries *db.Queries, registry *harness.Registry, bus *service.EventBus, feed *service.ActivityFeed, litellmURL string, artifactsPath string, obsidianPath string, xaiAPIKey string, hermesAPIKey string) *API {
 	var provider StudioProvider
 	if xaiAPIKey != "" {
 		provider = NewXAIProvider(xaiAPIKey)
@@ -38,6 +39,7 @@ func NewAPI(queries *db.Queries, registry *harness.Registry, bus *service.EventB
 		feed:         feed,
 		litellmURL:   litellmURL,
 		obsidianPath: obsidianPath,
+		hermesAPIKey: hermesAPIKey,
 		artifacts:    NewArtifactAPI(queries, artifactsPath),
 		memory:       NewMemoryAPI(queries, obsidianPath, litellmURL),
 		studio:       NewStudioAPI(queries, artifactsPath, provider),
@@ -49,9 +51,14 @@ func (a *API) buildHarnessConfig(agent db.Agent) map[string]any {
 	config := map[string]any{
 		"base_url": agent.BaseUrl,
 	}
-	// Pass litellm_url for hermes harness so it can list models
-	if agent.Harness == "hermes" && a.litellmURL != "" {
-		config["litellm_url"] = a.litellmURL
+	// Pass harness-specific config for hermes
+	if agent.Harness == "hermes" {
+		if a.litellmURL != "" {
+			config["litellm_url"] = a.litellmURL
+		}
+		if a.hermesAPIKey != "" {
+			config["api_key"] = a.hermesAPIKey
+		}
 	}
 	return config
 }

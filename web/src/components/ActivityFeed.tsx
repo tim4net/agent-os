@@ -65,7 +65,7 @@ export function ActivityFeed({ onNavigate }: ActivityFeedProps) {
   const loadEvents = useCallback(async () => {
     try {
       const data = await getActivity(50, 0)
-      setEvents(data as ActivityEvent[])
+      setEvents(Array.isArray(data) ? data : [])
     } catch {
       // backend may not return events yet, use empty
       setEvents([])

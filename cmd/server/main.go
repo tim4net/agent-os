@@ -45,7 +45,7 @@ func main() {
 	harness.Register("litellm", harness.NewLiteLLMHarness)
 
 	// Start agent watcher
-	watcher := service.NewAgentWatcher(queries, harness.DefaultRegistry, bus, cfg.LiteLLMURL)
+	watcher := service.NewAgentWatcher(queries, harness.DefaultRegistry, bus, cfg.LiteLLMURL, cfg.HermesAPIKey)
 	watcher.Start(ctx)
 	defer watcher.Stop()
 
@@ -67,7 +67,7 @@ func main() {
 	r.Use(middleware.Timeout(60 * time.Second))
 
 	// Mount API routes
-	a := api.NewAPI(queries, harness.DefaultRegistry, bus, feed, cfg.LiteLLMURL, cfg.ArtifactsPath, cfg.ObsidianPath, cfg.XAIAPIKey)
+	a := api.NewAPI(queries, harness.DefaultRegistry, bus, feed, cfg.LiteLLMURL, cfg.ArtifactsPath, cfg.ObsidianPath, cfg.XAIAPIKey, cfg.HermesAPIKey)
 	r.Mount("/api", a.Router())
 
 	// Start server with graceful shutdown

@@ -16,6 +16,7 @@ import (
 type HermesHarness struct {
 	baseURL    string
 	litellmURL string
+	apiKey     string
 	httpClient *http.Client
 }
 
@@ -37,6 +38,10 @@ func (h *HermesHarness) Init(config map[string]any) error {
 	// litellm_url is optional for chat but needed for models
 	if v, ok := config["litellm_url"].(string); ok {
 		h.litellmURL = v
+	}
+	// api_key for Bearer auth
+	if v, ok := config["api_key"].(string); ok {
+		h.apiKey = v
 	}
 	return nil
 }
@@ -108,6 +113,9 @@ func (h *HermesHarness) Chat(ctx context.Context, messages []ChatMessage, opts C
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
+	if h.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+h.apiKey)
+	}
 
 	resp, err := h.httpClient.Do(req)
 	if err != nil {

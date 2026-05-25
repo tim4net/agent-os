@@ -2,6 +2,7 @@ import { useState, useRef } from 'react'
 import type { Agent } from './api/client'
 import { uploadArtifact } from './api/client'
 import { useAgents } from './hooks/useAgents'
+import { useSSE } from './hooks/useSSE'
 import { Sidebar } from './components/layout/Sidebar'
 import { AgentCard } from './components/agents/AgentCard'
 import { ChatPanel } from './components/chat/ChatPanel'
@@ -29,6 +30,7 @@ function App() {
   const [memoryFilePath, setMemoryFilePath] = useState<string | null>(null)
   const [mediaPreviewKey, setMediaPreviewKey] = useState(0)
   const { agents, loading, refresh: refreshAgents } = useAgents()
+  const { lastEvent } = useSSE()
   const uploadInputRef = useRef<HTMLInputElement>(null)
 
   function handleSelectAgent(agent: Agent) {
@@ -184,6 +186,7 @@ function App() {
         selectedAgent={selectedAgent}
         onSelectAgent={handleSelectAgent}
         onAgentsChanged={refreshAgents}
+        activeTab={activeTab}
       />
 
       <div className="flex-1 flex flex-col min-w-0">
@@ -212,7 +215,10 @@ function App() {
         </main>
 
         {/* Status Footer */}
-        <StatusFooter />
+        <StatusFooter
+          backendStatus={lastEvent ? 'ok' : 'unknown'}
+          sseStatus={lastEvent ? 'connected' : 'disconnected'}
+        />
       </div>
 
       {/* Hidden file input for artifact upload */}

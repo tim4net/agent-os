@@ -8,6 +8,7 @@ interface SidebarProps {
   selectedAgent: Agent | null
   onSelectAgent: (agent: Agent) => void
   onAgentsChanged?: () => void
+  activeTab: string
 }
 
 function statusColor(status: string): string {
@@ -22,7 +23,7 @@ function statusColor(status: string): string {
   }
 }
 
-export function Sidebar({ agents, selectedAgent, onSelectAgent, onAgentsChanged }: SidebarProps) {
+export function Sidebar({ agents, selectedAgent, onSelectAgent, onAgentsChanged, activeTab }: SidebarProps) {
   const [models, setModels] = useState<Model[]>([])
   const [showDiscover, setShowDiscover] = useState(false)
   const [discovered, setDiscovered] = useState<DiscoveredAgent[]>([])
@@ -100,7 +101,7 @@ export function Sidebar({ agents, selectedAgent, onSelectAgent, onAgentsChanged 
           ))}
 
           {/* Models */}
-          {selectedAgent && models.length > 0 && (
+          {selectedAgent && models.length > 0 && activeTab === 'Chat' && (
             <>
               <p className="text-xs text-gray-500 uppercase tracking-wider font-semibold pt-4 hidden md:block">Models</p>
               {models.map((m) => (

@@ -82,7 +82,7 @@ func (q *Queries) GetTask(ctx context.Context, id pgtype.UUID) (Task, error) {
 
 const listTasks = `-- name: ListTasks :many
 SELECT id, agent_id, title, description, status, priority, metadata, created_at, updated_at FROM tasks
-WHERE ($1::text IS NULL OR status = $1)
+WHERE ($1::text = '' OR status = $1)
   AND ($2::uuid IS NULL OR agent_id = $2)
 ORDER BY priority DESC, created_at ASC
 `

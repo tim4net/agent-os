@@ -9,6 +9,7 @@ type Config struct {
 	ObsidianPath  string
 	ArtifactsPath string
 	XAIAPIKey     string
+	HermesAPIKey  string
 	Port          string
 }
 
@@ -20,6 +21,7 @@ func Load() *Config {
 		ObsidianPath:  getEnv("OBSIDIAN_PATH", "./obsidian"),
 		ArtifactsPath: getEnv("ARTIFACTS_PATH", "/data/artifacts"),
 		XAIAPIKey:     getEnv("XAI_API_KEY", ""),
+		HermesAPIKey:  getEnv("HERMES_API_KEY", ""),
 		Port:          getEnv("PORT", "8080"),
 	}
 }

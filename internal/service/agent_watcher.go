@@ -12,23 +12,25 @@ import (
 
 // AgentWatcher periodically checks agent health and publishes status changes.
 type AgentWatcher struct {
-	queries    *db.Queries
-	registry   *harness.Registry
-	bus        *EventBus
-	litellmURL string
-	interval   time.Duration
-	done       chan struct{}
+	queries       *db.Queries
+	registry      *harness.Registry
+	bus           *EventBus
+	litellmURL    string
+	hermesAPIKey  string
+	interval      time.Duration
+	done          chan struct{}
 }
 
 // NewAgentWatcher creates a new AgentWatcher.
-func NewAgentWatcher(queries *db.Queries, registry *harness.Registry, bus *EventBus, litellmURL string) *AgentWatcher {
+func NewAgentWatcher(queries *db.Queries, registry *harness.Registry, bus *EventBus, litellmURL string, hermesAPIKey string) *AgentWatcher {
 	return &AgentWatcher{
-		queries:    queries,
-		registry:   registry,
-		bus:        bus,
-		litellmURL: litellmURL,
-		interval:   30 * time.Second,
-		done:       make(chan struct{}),
+		queries:      queries,
+		registry:     registry,
+		bus:          bus,
+		litellmURL:   litellmURL,
+		hermesAPIKey: hermesAPIKey,
+		interval:     30 * time.Second,
+		done:         make(chan struct{}),
 	}
 }
 
@@ -87,8 +89,13 @@ func (aw *AgentWatcher) checkAgent(ctx context.Context, agent db.Agent) {
 	config := map[string]any{
 		"base_url": agent.BaseUrl,
 	}
-	if agent.Harness == "hermes" && aw.litellmURL != "" {
-		config["litellm_url"] = aw.litellmURL
+	if agent.Harness == "hermes" {
+		if aw.litellmURL != "" {
+			config["litellm_url"] = aw.litellmURL
+		}
+		if aw.hermesAPIKey != "" {
+			config["api_key"] = aw.hermesAPIKey
+		}
 	}
 	if err := h.Init(config); err != nil {
 		slog.Error("agent watcher: init harness", "agent", agent.Name, "error", err)

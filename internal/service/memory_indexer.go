@@ -116,19 +116,18 @@ func (mi *MemoryIndexer) index(ctx context.Context) {
 
 		count++
 
-		// Publish event
-		if mi.bus != nil {
-			mi.bus.PublishTyped("memory_indexed", map[string]any{
-				"file_path": relPath,
-				"title":     title,
-			})
-		}
-
 		return nil
 	})
 
 	if err != nil {
 		slog.Error("memory-indexer: walk error", "error", err)
+	}
+
+	// Publish a single summary event at the end of the index cycle
+	if mi.bus != nil && count > 0 {
+		mi.bus.PublishTyped("memory_indexed", map[string]any{
+			"total": count,
+		})
 	}
 
 	slog.Info("memory-indexer: indexed files", "count", count)
