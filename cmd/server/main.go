@@ -51,6 +51,11 @@ func main() {
 	scanner.Start(ctx)
 	defer scanner.Stop()
 
+	// Start memory indexer
+	indexer := service.NewMemoryIndexer(queries, bus, cfg.ObsidianPath)
+	indexer.Start(ctx)
+	defer indexer.Stop()
+
 	// Build router
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
@@ -67,7 +72,7 @@ func main() {
 	})
 
 	// Mount API routes
-	a := api.NewAPI(queries, harness.DefaultRegistry, bus, cfg.LiteLLMURL, cfg.ArtifactsPath)
+	a := api.NewAPI(queries, harness.DefaultRegistry, bus, cfg.LiteLLMURL, cfg.ArtifactsPath, cfg.ObsidianPath, cfg.XAIAPIKey)
 	r.Mount("/api", a.Router())
 
 	// Start server with graceful shutdown

@@ -8,6 +8,7 @@ type Config struct {
 	LiteLLMURL    string
 	ObsidianPath  string
 	ArtifactsPath string
+	XAIAPIKey     string
 	Port          string
 }
 
@@ -18,6 +19,7 @@ func Load() *Config {
 		LiteLLMURL:    getEnv("LITELLM_URL", "http://localhost:4000"),
 		ObsidianPath:  getEnv("OBSIDIAN_PATH", "./obsidian"),
 		ArtifactsPath: getEnv("ARTIFACTS_PATH", "/data/artifacts"),
+		XAIAPIKey:     getEnv("XAI_API_KEY", ""),
 		Port:          getEnv("PORT", "8080"),
 	}
 }
