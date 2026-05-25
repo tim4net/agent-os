@@ -1,0 +1,27 @@
+[Unit]
+Description=Agent OS Go API Backend
+After=agent-os-db.service
+Wants=agent-os-db.service
+
+[Container]
+Image=agent-os-api:latest
+Network=agent-os.network
+ContainerName=agent-os-api
+
+PublishPort=8080:8080
+
+Volume=/mnt/truenas/obsidian:/data/obsidian
+Volume=/mnt/truenas/repos:/data/repos:ro
+
+Environment=DATABASE_URL=postgres://agentos:agentos_dev@agent-os-db:5432/agentos?sslmode=disable
+Environment=LITELLM_URL=http://100.113.84.43:4000
+Environment=OBSIDIAN_PATH=/data/obsidian
+Environment=ARTIFACTS_PATH=/data/artifacts
+Environment=PORT=8080
+
+[Service]
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

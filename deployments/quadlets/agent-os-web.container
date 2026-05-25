@@ -1,0 +1,23 @@
+[Unit]
+Description=Agent OS Web Frontend
+After=agent-os-api.service
+Wants=agent-os-api.service
+
+[Container]
+Image=agent-os-web:latest
+Network=agent-os.network
+ContainerName=agent-os-web
+
+PublishPort=3000:80
+
+HealthCmd=curl -sf http://localhost:80/ || exit 1
+HealthInterval=15s
+HealthTimeout=5s
+HealthRetries=3
+
+[Service]
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

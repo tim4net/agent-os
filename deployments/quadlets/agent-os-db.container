@@ -1,0 +1,27 @@
+[Unit]
+Description=Agent OS PostgreSQL Database
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=docker.io/library/postgres:17-alpine
+Network=agent-os.network
+ContainerName=agent-os-db
+
+Volume=agent-os-db-data:/var/lib/postgresql/data
+
+Environment=POSTGRES_DB=agentos
+Environment=POSTGRES_USER=agentos
+Environment=POSTGRES_PASSWORD=agentos_dev
+
+HealthCmd=pg_isready -U agentos
+HealthInterval=10s
+HealthTimeout=5s
+HealthRetries=3
+
+[Service]
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,5 @@
+[Unit]
+Description=Agent OS Internal Network
+
+[Network]
+NetworkName=agent-os-net
