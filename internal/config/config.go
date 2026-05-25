@@ -1,0 +1,30 @@
+package config
+
+import "os"
+
+// Config holds application configuration loaded from environment variables.
+type Config struct {
+	DatabaseURL   string
+	LiteLLMURL    string
+	ObsidianPath  string
+	ArtifactsPath string
+	Port          string
+}
+
+// Load reads configuration from environment variables with sensible defaults.
+func Load() *Config {
+	return &Config{
+		DatabaseURL:   getEnv("DATABASE_URL", "postgres://localhost:5432/agentos?sslmode=disable"),
+		LiteLLMURL:    getEnv("LITELLM_URL", "http://localhost:4000"),
+		ObsidianPath:  getEnv("OBSIDIAN_PATH", "./obsidian"),
+		ArtifactsPath: getEnv("ARTIFACTS_PATH", "./artifacts"),
+		Port:          getEnv("PORT", "8080"),
+	}
+}
+
+func getEnv(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
