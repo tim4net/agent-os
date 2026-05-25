@@ -16,8 +16,8 @@ func (a *API) StreamEvents(w http.ResponseWriter, r *http.Request) {
 
 	flusher, canFlush := w.(http.Flusher)
 
-	// Send initial connection event
-	fmt.Fprintf(w, "event: connected\ndata: {\"message\":\"connected\"}\n\n")
+	// Send initial connection event (unnamed so onmessage catches it)
+	fmt.Fprintf(w, "data: {\"type\":\"connected\",\"payload\":{\"message\":\"connected\"}}\n\n")
 	if canFlush {
 		flusher.Flush()
 	}

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -64,7 +65,15 @@ func main() {
 	r.Use(api.CORS)
 	r.Use(api.RequestLogger)
 	r.Use(middleware.Recoverer)
-	r.Use(middleware.Timeout(60 * time.Second))
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.URL.Path, "/api/events") {
+				next.ServeHTTP(w, r)
+				return
+			}
+			middleware.Timeout(60*time.Second)(next).ServeHTTP(w, r)
+		})
+	})
 
 	// Mount API routes
 	a := api.NewAPI(queries, harness.DefaultRegistry, bus, feed, cfg.LiteLLMURL, cfg.ArtifactsPath, cfg.ObsidianPath, cfg.XAIAPIKey, cfg.HermesAPIKey)

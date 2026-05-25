@@ -10,12 +10,25 @@ import (
 // responseWriter wraps http.ResponseWriter to capture status code.
 type responseWriter struct {
 	http.ResponseWriter
-	status int
+	status  int
+	written bool
 }
 
 func (rw *responseWriter) WriteHeader(code int) {
+	if rw.written {
+		return
+	}
+	rw.written = true
 	rw.status = code
 	rw.ResponseWriter.WriteHeader(code)
+}
+
+func (rw *responseWriter) Write(b []byte) (int, error) {
+	if !rw.written {
+		rw.written = true
+		rw.status = http.StatusOK
+	}
+	return rw.ResponseWriter.Write(b)
 }
 
 // Flush implements http.Flusher so SSE and streaming responses work through the middleware.
