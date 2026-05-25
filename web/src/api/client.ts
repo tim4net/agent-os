@@ -34,6 +34,7 @@ export interface SSEEvent {
 export interface ChatChunk {
   content: string
   done: boolean
+  conversation_id?: string
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {

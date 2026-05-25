@@ -62,8 +62,10 @@ export function ChatPanel({ agent }: ChatPanelProps) {
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
-        accumulated += value.content
-        setPartialContent(accumulated)
+        if (value.content !== undefined) {
+          accumulated += value.content
+          setPartialContent(accumulated)
+        }
 
         if (value.done) {
           const assistantMsg: Message = {
@@ -74,6 +76,9 @@ export function ChatPanel({ agent }: ChatPanelProps) {
           }
           setMessages((prev) => [...prev, assistantMsg])
           setPartialContent('')
+          if (value.conversation_id) {
+            setConversationId(value.conversation_id as string)
+          }
         }
       }
     } catch (err) {
