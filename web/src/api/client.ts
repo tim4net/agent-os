@@ -293,3 +293,195 @@ export function studioGenerate(
 export function listGenerations(): Promise<StudioGeneration[]> {
   return request<StudioGeneration[]>('/api/studio/generations')
 }
+
+// --- Tasks ---
+
+export interface Task {
+  id: string
+  title: string
+  description: string
+  status: 'backlog' | 'in_progress' | 'review' | 'done'
+  priority: number
+  agent_id: string | null
+  due_date: string | null
+  order: number
+  created_at?: string
+  updated_at?: string
+}
+
+export interface TaskCreate {
+  title: string
+  description?: string
+  status?: string
+  priority?: number
+  agent_id?: string | null
+  due_date?: string | null
+  order?: number
+}
+
+export interface TaskUpdate {
+  title?: string
+  description?: string
+  status?: string
+  priority?: number
+  agent_id?: string | null
+  due_date?: string | null
+  order?: number
+}
+
+export function listTasks(
+  status?: string,
+  agentId?: string,
+  priority?: number,
+): Promise<Task[]> {
+  const params = new URLSearchParams()
+  if (status) params.set('status', status)
+  if (agentId) params.set('agent_id', agentId)
+  if (priority !== undefined) params.set('priority', String(priority))
+  const qs = params.toString()
+  return request<Task[]>(`/api/tasks${qs ? `?${qs}` : ''}`)
+}
+
+export function createTask(data: TaskCreate): Promise<Task> {
+  return request<Task>('/api/tasks', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+}
+
+export function updateTask(id: string, data: TaskUpdate): Promise<Task> {
+  return request<Task>(`/api/tasks/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  })
+}
+
+export async function deleteTask(id: string): Promise<void> {
+  const res = await fetch(`/api/tasks/${id}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(`API error ${res.status}: ${res.statusText}`)
+}
+
+export function reorderTasks(tasks: { id: string; status: string; order: number }[]): Promise<Task[]> {
+  return request<Task[]>('/api/tasks/reorder', {
+    method: 'POST',
+    body: JSON.stringify({ tasks }),
+  })
+}
+
+// --- Goals ---
+
+export interface Goal {
+  id: string
+  title: string
+  description: string
+  status: 'active' | 'completed' | 'paused'
+  target_date: string | null
+  completed_tasks: number
+  total_tasks: number
+  created_at?: string
+  updated_at?: string
+}
+
+export interface GoalCreate {
+  title: string
+  description?: string
+  status?: string
+  target_date?: string | null
+}
+
+export interface GoalUpdate {
+  title?: string
+  description?: string
+  status?: string
+  target_date?: string | null
+}
+
+export function listGoals(): Promise<Goal[]> {
+  return request<Goal[]>('/api/goals')
+}
+
+export function createGoal(data: GoalCreate): Promise<Goal> {
+  return request<Goal>('/api/goals', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+}
+
+export function updateGoal(id: string, data: GoalUpdate): Promise<Goal> {
+  return request<Goal>(`/api/goals/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  })
+}
+
+export function breakdownGoal(id: string): Promise<Task[]> {
+  return request<Task[]>(`/api/goals/${id}/breakdown`, {
+    method: 'POST',
+  })
+}
+
+// --- Pipeline ---
+
+export interface PipelineItem {
+  id: string
+  title: string
+  type: 'blog' | 'social' | 'email' | 'ad' | 'other'
+  status: 'draft' | 'ai_review' | 'human_review' | 'published'
+  content: string
+  outline: string
+  created_at?: string
+  updated_at?: string
+}
+
+export interface PipelineCreate {
+  title: string
+  type?: string
+  status?: string
+  content?: string
+  outline?: string
+}
+
+export interface PipelineUpdate {
+  title?: string
+  type?: string
+  status?: string
+  content?: string
+  outline?: string
+}
+
+export function listPipeline(
+  status?: string,
+  type?: string,
+): Promise<PipelineItem[]> {
+  const params = new URLSearchParams()
+  if (status) params.set('status', status)
+  if (type) params.set('type', type)
+  const qs = params.toString()
+  return request<PipelineItem[]>(`/api/pipeline${qs ? `?${qs}` : ''}`)
+}
+
+export function createPipelineItem(data: PipelineCreate): Promise<PipelineItem> {
+  return request<PipelineItem>('/api/pipeline', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+}
+
+export function updatePipelineItem(id: string, data: PipelineUpdate): Promise<PipelineItem> {
+  return request<PipelineItem>(`/api/pipeline/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  })
+}
+
+export function generateContent(id: string): Promise<PipelineItem> {
+  return request<PipelineItem>(`/api/pipeline/${id}/generate`, {
+    method: 'POST',
+  })
+}
+
+export function advancePipeline(id: string): Promise<PipelineItem> {
+  return request<PipelineItem>(`/api/pipeline/${id}/advance`, {
+    method: 'POST',
+  })
+}

@@ -11,6 +11,9 @@ import { NoteViewer } from './components/memory/NoteViewer'
 import { SearchBar } from './components/memory/SearchBar'
 import { GeneratorForm } from './components/studio/GeneratorForm'
 import { MediaPreview } from './components/studio/MediaPreview'
+import { Board } from './components/kanban/Board'
+import { GoalList } from './components/goals/GoalList'
+import { PipelineBoard } from './components/pipeline/PipelineBoard'
 
 const tabs = ['Overview', 'Chat', 'Studio', 'Workspace', 'Kanban', 'Memory', 'Goals', 'Pipeline'] as const
 type Tab = (typeof tabs)[number]
@@ -116,6 +119,12 @@ function App() {
             </div>
           </div>
         )
+      case 'Kanban':
+        return <Board agents={agents} />
+      case 'Goals':
+        return <GoalList />
+      case 'Pipeline':
+        return <PipelineBoard />
       default:
         return (
           <div>
