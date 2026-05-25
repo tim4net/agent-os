@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -469,5 +469,5 @@ func pgtypeText(s string) pgtype.Text {
 
 // logf is a helper for logging.
 func logf(format string, args ...any) {
-	log.Printf("memory: "+format, args...)
+	slog.Info("memory: "+fmt.Sprintf(format, args...))
 }

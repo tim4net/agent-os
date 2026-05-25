@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Agent, Message, Model } from '../../api/client'
-import { getAgentModels, sendChat } from '../../api/client'
+import { getAgentModels, sendChat, exportConversation } from '../../api/client'
 import { MessageBubble } from './MessageBubble'
+import { showToast } from '../Toast'
 
 interface ChatPanelProps {
   agent: Agent
@@ -14,6 +15,8 @@ export function ChatPanel({ agent }: ChatPanelProps) {
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
   const [partialContent, setPartialContent] = useState('')
+  const [conversationId, setConversationId] = useState<string | null>(null)
+  const [exporting, setExporting] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -28,6 +31,7 @@ export function ChatPanel({ agent }: ChatPanelProps) {
     setInput('')
     setStreaming(false)
     setPartialContent('')
+    setConversationId(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agent.id])
 
@@ -51,7 +55,7 @@ export function ChatPanel({ agent }: ChatPanelProps) {
     setPartialContent('')
 
     try {
-      const stream = sendChat(agent.id, text, selectedModel || undefined)
+      const stream = sendChat(agent.id, text, selectedModel || undefined, conversationId ?? undefined)
       const reader = stream.getReader()
 
       let accumulated = ''
@@ -62,15 +66,13 @@ export function ChatPanel({ agent }: ChatPanelProps) {
         setPartialContent(accumulated)
 
         if (value.done) {
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: crypto.randomUUID(),
-              role: 'assistant',
-              content: accumulated,
-              created_at: new Date().toISOString(),
-            },
-          ])
+          const assistantMsg: Message = {
+            id: crypto.randomUUID(),
+            role: 'assistant',
+            content: accumulated,
+            created_at: new Date().toISOString(),
+          }
+          setMessages((prev) => [...prev, assistantMsg])
           setPartialContent('')
         }
       }
@@ -91,6 +93,22 @@ export function ChatPanel({ agent }: ChatPanelProps) {
     }
   }
 
+  async function handleExport() {
+    if (!conversationId) {
+      showToast('No conversation to export yet', 'info')
+      return
+    }
+    setExporting(true)
+    try {
+      const result = await exportConversation(conversationId)
+      showToast(`Exported to Obsidian: ${result.path}`, 'success')
+    } catch {
+      showToast('Failed to export conversation', 'error')
+    } finally {
+      setExporting(false)
+    }
+  }
+
   function handleKeyDown(e: React.KeyboardEvent) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
@@ -105,19 +123,29 @@ export function ChatPanel({ agent }: ChatPanelProps) {
         <h2 className="text-sm font-semibold text-white">
           Chat with {agent.display_name || agent.name}
         </h2>
-        {models.length > 0 && (
-          <select
-            value={selectedModel}
-            onChange={(e) => setSelectedModel(e.target.value)}
-            className="bg-gray-800 text-gray-200 text-sm border border-gray-700 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-500"
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleExport}
+            disabled={exporting || !conversationId}
+            className="px-3 py-1 text-xs font-medium rounded bg-gray-800 text-gray-300 hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            title="Export to Obsidian"
           >
-            {models.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.id}
-              </option>
-            ))}
-          </select>
-        )}
+            {exporting ? 'Exporting...' : '📝 Export to Obsidian'}
+          </button>
+          {models.length > 0 && (
+            <select
+              value={selectedModel}
+              onChange={(e) => setSelectedModel(e.target.value)}
+              className="bg-gray-800 text-gray-200 text-sm border border-gray-700 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            >
+              {models.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.id}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
       </div>
 
       {/* Messages */}

@@ -1,5 +1,6 @@
-import { useState } from 'react'
-import type { Task, Agent } from '../../api/client'
+import { useState, useEffect } from 'react'
+import type { Task, Agent, LinkedNote } from '../../api/client'
+import { getTaskNotes } from '../../api/client'
 
 interface CardProps {
   task: Task
@@ -30,8 +31,20 @@ export function Card({ task, agents, onDelete, onUpdate }: CardProps) {
   const [editTitle, setEditTitle] = useState(task.title)
   const [editDesc, setEditDesc] = useState(task.description)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [notes, setNotes] = useState<LinkedNote[]>([])
+  const [loadingNotes, setLoadingNotes] = useState(false)
 
   const agent = agents.find((a) => a.id === task.agent_id)
+
+  useEffect(() => {
+    if (expanded) {
+      setLoadingNotes(true)
+      getTaskNotes(task.id)
+        .then(setNotes)
+        .catch(() => setNotes([]))
+        .finally(() => setLoadingNotes(false))
+    }
+  }, [expanded, task.id])
 
   function handleSave() {
     onUpdate(task.id, { title: editTitle.trim(), description: editDesc })
@@ -92,6 +105,32 @@ export function Card({ task, agents, onDelete, onUpdate }: CardProps) {
               {task.description}
             </p>
           )}
+
+          {/* Related Notes */}
+          <div className="mb-3">
+            <p className="text-xs text-gray-400 font-medium mb-1">📝 Related Notes</p>
+            {loadingNotes ? (
+              <div className="space-y-1">
+                <div className="h-3 bg-gray-700 rounded animate-pulse w-3/4" />
+                <div className="h-3 bg-gray-700 rounded animate-pulse w-1/2" />
+              </div>
+            ) : notes.length === 0 ? (
+              <p className="text-xs text-gray-600">No related notes.</p>
+            ) : (
+              <div className="space-y-1">
+                {notes.map((note) => (
+                  <div
+                    key={note.path}
+                    className="bg-gray-700/50 rounded px-2 py-1"
+                  >
+                    <p className="text-xs text-blue-400 truncate">{note.title}</p>
+                    <p className="text-xs text-gray-500 line-clamp-1">{note.snippet}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           <div className="flex gap-2">
             <button
               onClick={(e) => { e.stopPropagation(); setEditing(true) }}

@@ -485,3 +485,80 @@ export function advancePipeline(id: string): Promise<PipelineItem> {
     method: 'POST',
   })
 }
+
+// --- Activity Feed ---
+
+export interface ActivityEvent {
+  id: string
+  type: 'agent_status' | 'chat' | 'artifact' | 'task' | 'other'
+  summary: string
+  timestamp: string
+  target?: string
+}
+
+export function getActivity(limit?: number, offset?: number): Promise<ActivityEvent[]> {
+  const params = new URLSearchParams()
+  if (limit !== undefined) params.set('limit', String(limit))
+  if (offset !== undefined) params.set('offset', String(offset))
+  const qs = params.toString()
+  return request<ActivityEvent[]>(`/api/activity${qs ? `?${qs}` : ''}`)
+}
+
+// --- Obsidian Export ---
+
+export interface ExportResult {
+  path: string
+  title: string
+}
+
+export function exportConversation(id: string): Promise<ExportResult> {
+  return request<ExportResult>(`/api/conversations/${id}/export`, {
+    method: 'POST',
+  })
+}
+
+export interface LinkedNote {
+  path: string
+  title: string
+  snippet: string
+}
+
+export function getArtifactNotes(id: string): Promise<LinkedNote[]> {
+  return request<LinkedNote[]>(`/api/artifacts/${id}/notes`)
+}
+
+export function getTaskNotes(id: string): Promise<LinkedNote[]> {
+  return request<LinkedNote[]>(`/api/tasks/${id}/notes`)
+}
+
+// --- Agent Discovery ---
+
+export interface DiscoveredAgent {
+  id: string
+  name: string
+  base_url: string
+  harness: string
+}
+
+export function discoverAgents(): Promise<DiscoveredAgent[]> {
+  return request<DiscoveredAgent[]>('/api/agents/discover')
+}
+
+export function autoRegisterAgents(agentIds?: string[]): Promise<Agent[]> {
+  return request<Agent[]>('/api/agents/auto-register', {
+    method: 'POST',
+    body: JSON.stringify(agentIds ? { agent_ids: agentIds } : {}),
+  })
+}
+
+// --- Health ---
+
+export interface HealthStatus {
+  status: string
+  uptime?: number
+  version?: string
+}
+
+export function getHealth(): Promise<HealthStatus> {
+  return request<HealthStatus>('/api/health')
+}

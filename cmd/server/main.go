@@ -2,8 +2,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -26,7 +25,8 @@ func main() {
 	ctx := context.Background()
 	pool, err := db.NewPool(ctx, cfg.DatabaseURL)
 	if err != nil {
-		log.Fatalf("failed to connect to database: %v", err)
+		slog.Error("failed to connect to database", "error", err)
+		os.Exit(1)
 	}
 	defer pool.Close()
 
@@ -34,6 +34,9 @@ func main() {
 
 	// Create event bus
 	bus := service.NewEventBus()
+
+	// Create activity feed (ring buffer of last 200 events)
+	feed := service.NewActivityFeed(bus, 200)
 
 	// Register harnesses
 	harness.Register("generic", harness.NewGenericHarness)
@@ -58,21 +61,13 @@ func main() {
 
 	// Build router
 	r := chi.NewRouter()
-	r.Use(middleware.Logger)
+	r.Use(api.CORS)
+	r.Use(api.RequestLogger)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(60 * time.Second))
 
-	// Health endpoint
-	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{
-			"status":  "ok",
-			"service": "agent-os",
-		})
-	})
-
 	// Mount API routes
-	a := api.NewAPI(queries, harness.DefaultRegistry, bus, cfg.LiteLLMURL, cfg.ArtifactsPath, cfg.ObsidianPath, cfg.XAIAPIKey)
+	a := api.NewAPI(queries, harness.DefaultRegistry, bus, feed, cfg.LiteLLMURL, cfg.ArtifactsPath, cfg.ObsidianPath, cfg.XAIAPIKey)
 	r.Mount("/api", a.Router())
 
 	// Start server with graceful shutdown
@@ -87,24 +82,34 @@ func main() {
 
 	// Listen for shutdown signals
 	done := make(chan os.Signal, 1)
-	signal.Notify(done, os.Interrupt, syscall.SIGTERM)
+	signal.Notify(done, os.Interrupt, syscall.SIGTERM, syscall.SIGINT)
 
 	go func() {
-		log.Printf("agent-os starting on %s", addr)
+		slog.Info("agent-os starting", "addr", addr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("server error: %v", err)
+			slog.Error("server error", "error", err)
+			os.Exit(1)
 		}
 	}()
 
 	<-done
-	log.Println("shutting down...")
+	slog.Info("shutting down gracefully...")
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// Stop background services
+	watcher.Stop()
+	scanner.Stop()
+	indexer.Stop()
+
+	// Drain connections with 10s timeout
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
-		log.Printf("server shutdown error: %v", err)
+		slog.Error("server shutdown error", "error", err)
 	}
 
-	log.Println("agent-os stopped")
+	// Close database pool
+	pool.Close()
+
+	slog.Info("agent-os stopped")
 }

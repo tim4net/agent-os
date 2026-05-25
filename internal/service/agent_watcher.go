@@ -2,7 +2,7 @@ package service
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -35,7 +35,7 @@ func NewAgentWatcher(queries *db.Queries, registry *harness.Registry, bus *Event
 // Start begins the background health-check loop.
 func (aw *AgentWatcher) Start(ctx context.Context) {
 	go aw.run(ctx)
-	log.Println("agent watcher started")
+	slog.Info("agent watcher started")
 }
 
 // Stop signals the watcher to stop.
@@ -53,10 +53,10 @@ func (aw *AgentWatcher) run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("agent watcher stopped (context cancelled)")
+			slog.Info("agent watcher stopped (context cancelled)")
 			return
 		case <-aw.done:
-			log.Println("agent watcher stopped")
+			slog.Info("agent watcher stopped")
 			return
 		case <-ticker.C:
 			aw.checkAll(ctx)
@@ -67,7 +67,7 @@ func (aw *AgentWatcher) run(ctx context.Context) {
 func (aw *AgentWatcher) checkAll(ctx context.Context) {
 	agents, err := aw.queries.ListAgents(ctx)
 	if err != nil {
-		log.Printf("agent watcher: list agents: %v", err)
+		slog.Error("agent watcher: list agents", "error", err)
 		return
 	}
 
@@ -79,7 +79,7 @@ func (aw *AgentWatcher) checkAll(ctx context.Context) {
 func (aw *AgentWatcher) checkAgent(ctx context.Context, agent db.Agent) {
 	h, err := aw.registry.Get(agent.Harness)
 	if err != nil {
-		log.Printf("agent watcher: unknown harness %q for agent %q", agent.Harness, agent.Name)
+		slog.Error("agent watcher: unknown harness", "harness", agent.Harness, "agent", agent.Name)
 		return
 	}
 
@@ -91,7 +91,7 @@ func (aw *AgentWatcher) checkAgent(ctx context.Context, agent db.Agent) {
 		config["litellm_url"] = aw.litellmURL
 	}
 	if err := h.Init(config); err != nil {
-		log.Printf("agent watcher: init harness for %q: %v", agent.Name, err)
+		slog.Error("agent watcher: init harness", "agent", agent.Name, "error", err)
 		return
 	}
 	defer h.Close()
@@ -102,7 +102,7 @@ func (aw *AgentWatcher) checkAgent(ctx context.Context, agent db.Agent) {
 
 	health, err := h.Health(healthCtx)
 	if err != nil {
-		log.Printf("agent watcher: health check for %q failed: %v", agent.Name, err)
+		slog.Error("agent watcher: health check failed", "agent", agent.Name, "error", err)
 		health = &harness.HealthStatus{Status: "offline"}
 	}
 
@@ -120,19 +120,19 @@ func (aw *AgentWatcher) checkAgent(ctx context.Context, agent db.Agent) {
 			Status: newStatus,
 		})
 		if err != nil {
-			log.Printf("agent watcher: update status for %q: %v", agent.Name, err)
+			slog.Error("agent watcher: update status", "agent", agent.Name, "error", err)
 			return
 		}
 
-		log.Printf("agent watcher: %q status changed: %s -> %s", agent.Name, oldStatus, newStatus)
+		slog.Info("agent watcher: status changed", "agent", agent.Name, "old", oldStatus, "new", newStatus)
 
 		// Publish event
 		aw.bus.PublishTyped(EventAgentStatusChanged, map[string]any{
-			"agent_id":    agent.ID.String(),
-			"agent_name":  agent.Name,
-			"old_status":  oldStatus,
-			"new_status":  newStatus,
-			"timestamp":   time.Now().UTC().Format(time.RFC3339),
+			"agent_id":   agent.ID.String(),
+			"agent_name": agent.Name,
+			"old_status": oldStatus,
+			"new_status": newStatus,
+			"timestamp":  time.Now().UTC().Format(time.RFC3339),
 		})
 	} else {
 		// Just update last_seen

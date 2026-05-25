@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import type { Agent } from '../api/client'
 import { listAgents } from '../api/client'
 import { useSSE } from './useSSE'
@@ -8,12 +8,21 @@ export function useAgents() {
   const [loading, setLoading] = useState(true)
   const { lastEvent } = useSSE()
 
-  useEffect(() => {
-    listAgents()
-      .then(setAgents)
-      .catch((err) => console.error('Failed to fetch agents:', err))
-      .finally(() => setLoading(false))
+  const refresh = useCallback(async () => {
+    setLoading(true)
+    try {
+      const data = await listAgents()
+      setAgents(data)
+    } catch (err) {
+      console.error('Failed to fetch agents:', err)
+    } finally {
+      setLoading(false)
+    }
   }, [])
+
+  useEffect(() => {
+    refresh()
+  }, [refresh])
 
   useEffect(() => {
     if (!lastEvent) return
@@ -29,5 +38,5 @@ export function useAgents() {
     }
   }, [lastEvent])
 
-  return { agents, loading }
+  return { agents, loading, refresh }
 }

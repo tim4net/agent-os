@@ -2,7 +2,7 @@ package service
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,7 +19,7 @@ type ArtifactScanner struct {
 	queries       *db.Queries
 	bus           *EventBus
 	artifactsPath string
-	stopCh       chan struct{}
+	stopCh        chan struct{}
 }
 
 // NewArtifactScanner creates a new scanner.
@@ -28,7 +28,7 @@ func NewArtifactScanner(queries *db.Queries, bus *EventBus, artifactsPath string
 		queries:       queries,
 		bus:           bus,
 		artifactsPath: artifactsPath,
-		stopCh:       make(chan struct{}),
+		stopCh:        make(chan struct{}),
 	}
 }
 
@@ -36,7 +36,7 @@ func NewArtifactScanner(queries *db.Queries, bus *EventBus, artifactsPath string
 func (s *ArtifactScanner) Start(ctx context.Context) {
 	// Ensure base directory exists
 	if err := os.MkdirAll(s.artifactsPath, 0755); err != nil {
-		log.Printf("artifact-scanner: failed to create artifacts dir %s: %v", s.artifactsPath, err)
+		slog.Error("artifact-scanner: failed to create artifacts dir", "path", s.artifactsPath, "error", err)
 	}
 
 	go func() {
@@ -58,7 +58,7 @@ func (s *ArtifactScanner) Start(ctx context.Context) {
 		}
 	}()
 
-	log.Printf("artifact-scanner: started, watching %s every 60s", s.artifactsPath)
+	slog.Info("artifact-scanner: started", "path", s.artifactsPath, "interval", "60s")
 }
 
 // Stop signals the scanner to stop.
@@ -67,6 +67,7 @@ func (s *ArtifactScanner) Stop() {
 }
 
 func (s *ArtifactScanner) scan(ctx context.Context) {
+	count := 0
 	err := filepath.Walk(s.artifactsPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil // skip errors
@@ -105,11 +106,12 @@ func (s *ArtifactScanner) scan(ctx context.Context) {
 			Metadata:    []byte("{}"),
 		})
 		if err != nil {
-			log.Printf("artifact-scanner: failed to create record for %s: %v", relPath, err)
+			slog.Error("artifact-scanner: failed to create record", "path", relPath, "error", err)
 			return nil
 		}
 
-		log.Printf("artifact-scanner: auto-imported %s (type=%s, id=%s)", relPath, artifactType, uuid.UUID(artifact.ID.Bytes).String())
+		slog.Info("artifact-scanner: auto-imported", "path", relPath, "type", artifactType, "id", uuid.UUID(artifact.ID.Bytes).String())
+		count++
 
 		// Publish event
 		if s.bus != nil {
@@ -124,7 +126,11 @@ func (s *ArtifactScanner) scan(ctx context.Context) {
 		return nil
 	})
 	if err != nil {
-		log.Printf("artifact-scanner: walk error: %v", err)
+		slog.Error("artifact-scanner: walk error", "error", err)
+	}
+
+	if count > 0 {
+		slog.Info("artifact-scanner: scan complete", "imported", count)
 	}
 }
 

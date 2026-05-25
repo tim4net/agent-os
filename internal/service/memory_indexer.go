@@ -2,7 +2,7 @@ package service
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -53,7 +53,7 @@ func (mi *MemoryIndexer) Start(ctx context.Context) {
 		}
 	}()
 
-	log.Printf("memory-indexer: started, indexing %s every 5 minutes", mi.obsidianPath)
+	slog.Info("memory-indexer: started", "path", mi.obsidianPath, "interval", "5m")
 }
 
 // Stop signals the indexer to stop.
@@ -86,7 +86,7 @@ func (mi *MemoryIndexer) index(ctx context.Context) {
 		// Read file content
 		data, err := os.ReadFile(path)
 		if err != nil {
-			log.Printf("memory-indexer: failed to read %s: %v", path, err)
+			slog.Error("memory-indexer: failed to read file", "path", path, "error", err)
 			return nil
 		}
 
@@ -110,7 +110,7 @@ func (mi *MemoryIndexer) index(ctx context.Context) {
 			Tags:     []string{},
 		})
 		if err != nil {
-			log.Printf("memory-indexer: failed to upsert %s: %v", relPath, err)
+			slog.Error("memory-indexer: failed to upsert", "path", relPath, "error", err)
 			return nil
 		}
 
@@ -128,10 +128,10 @@ func (mi *MemoryIndexer) index(ctx context.Context) {
 	})
 
 	if err != nil {
-		log.Printf("memory-indexer: walk error: %v", err)
+		slog.Error("memory-indexer: walk error", "error", err)
 	}
 
-	log.Printf("memory-indexer: indexed %d files", count)
+	slog.Info("memory-indexer: indexed files", "count", count)
 }
 
 // extractTitle extracts the title from frontmatter or first heading.

@@ -1,6 +1,6 @@
-import { useState } from 'react'
-import type { Artifact } from '../../api/client'
-import { deleteArtifact } from '../../api/client'
+import { useState, useEffect } from 'react'
+import type { Artifact, LinkedNote } from '../../api/client'
+import { deleteArtifact, getArtifactNotes } from '../../api/client'
 
 interface ArtifactPreviewProps {
   artifact: Artifact
@@ -10,6 +10,15 @@ interface ArtifactPreviewProps {
 
 export function ArtifactPreview({ artifact, onClose, onDeleted }: ArtifactPreviewProps) {
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [notes, setNotes] = useState<LinkedNote[]>([])
+  const [loadingNotes, setLoadingNotes] = useState(true)
+
+  useEffect(() => {
+    getArtifactNotes(artifact.id)
+      .then(setNotes)
+      .catch(() => setNotes([]))
+      .finally(() => setLoadingNotes(false))
+  }, [artifact.id])
 
   function handleDelete() {
     if (!confirmDelete) {
@@ -92,6 +101,32 @@ export function ArtifactPreview({ artifact, onClose, onDeleted }: ArtifactPrevie
         {/* Content */}
         <div className="flex-1 overflow-auto p-4">
           {renderContent()}
+
+          {/* Linked Notes */}
+          <div className="mt-4 pt-4 border-t border-gray-800">
+            <h4 className="text-sm font-medium text-gray-300 mb-2">📝 Linked Notes</h4>
+            {loadingNotes ? (
+              <div className="space-y-2">
+                <div className="h-4 bg-gray-800 rounded animate-pulse w-3/4" />
+                <div className="h-4 bg-gray-800 rounded animate-pulse w-1/2" />
+              </div>
+            ) : notes.length === 0 ? (
+              <p className="text-xs text-gray-500">No linked notes found.</p>
+            ) : (
+              <div className="space-y-2">
+                {notes.map((note) => (
+                  <a
+                    key={note.path}
+                    href={`/api/memory/file?path=${encodeURIComponent(note.path)}`}
+                    className="block bg-gray-800 hover:bg-gray-750 border border-gray-700 rounded-lg px-3 py-2 transition-colors"
+                  >
+                    <p className="text-sm text-blue-400 font-medium truncate">{note.title}</p>
+                    <p className="text-xs text-gray-400 mt-0.5 line-clamp-2">{note.snippet}</p>
+                  </a>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Footer actions */}
