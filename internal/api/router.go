@@ -11,19 +11,21 @@ import (
 
 // API holds dependencies for the API handlers.
 type API struct {
-	queries   *db.Queries
-	registry  *harness.Registry
-	bus       *service.EventBus
+	queries    *db.Queries
+	registry   *harness.Registry
+	bus        *service.EventBus
 	litellmURL string
+	artifacts  *ArtifactAPI
 }
 
 // NewAPI creates a new API instance with the given dependencies.
-func NewAPI(queries *db.Queries, registry *harness.Registry, bus *service.EventBus, litellmURL string) *API {
+func NewAPI(queries *db.Queries, registry *harness.Registry, bus *service.EventBus, litellmURL string, artifactsPath string) *API {
 	return &API{
 		queries:    queries,
 		registry:   registry,
 		bus:        bus,
 		litellmURL: litellmURL,
+		artifacts:  NewArtifactAPI(queries, artifactsPath),
 	}
 }
 
@@ -62,6 +64,9 @@ func (a *API) Router() http.Handler {
 			r.Get("/messages", a.GetConversationMessages)
 		})
 	})
+
+	// Artifact routes
+	r.Mount("/artifacts", a.artifacts.ArtifactRoutes())
 
 	// Events SSE endpoint
 	r.Get("/events", a.StreamEvents)

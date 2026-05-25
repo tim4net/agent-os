@@ -93,6 +93,27 @@ func (q *Queries) GetArtifact(ctx context.Context, id pgtype.UUID) (Artifact, er
 	return i, err
 }
 
+const getArtifactByPath = `-- name: GetArtifactByPath :one
+SELECT id, agent_id, type, title, description, file_path, mime_type, metadata, created_at FROM artifacts WHERE file_path = $1
+`
+
+func (q *Queries) GetArtifactByPath(ctx context.Context, filePath pgtype.Text) (Artifact, error) {
+	row := q.db.QueryRow(ctx, getArtifactByPath, filePath)
+	var i Artifact
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.Type,
+		&i.Title,
+		&i.Description,
+		&i.FilePath,
+		&i.MimeType,
+		&i.Metadata,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const listArtifacts = `-- name: ListArtifacts :many
 SELECT id, agent_id, type, title, description, file_path, mime_type, metadata, created_at FROM artifacts
 WHERE ($1::text IS NULL OR type = $1)

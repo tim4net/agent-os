@@ -16,5 +16,8 @@ RETURNING *;
 -- name: DeleteArtifact :exec
 DELETE FROM artifacts WHERE id = $1;
 
+-- name: GetArtifactByPath :one
+SELECT * FROM artifacts WHERE file_path = $1;
+
 -- name: CountArtifacts :one
 SELECT COUNT(*) FROM artifacts WHERE ($1::text IS NULL OR type = $1);

@@ -28,6 +28,7 @@ type Querier interface {
 	GetAgent(ctx context.Context, id pgtype.UUID) (Agent, error)
 	GetAgentByName(ctx context.Context, name string) (Agent, error)
 	GetArtifact(ctx context.Context, id pgtype.UUID) (Artifact, error)
+	GetArtifactByPath(ctx context.Context, filePath pgtype.Text) (Artifact, error)
 	GetConversation(ctx context.Context, id pgtype.UUID) (Conversation, error)
 	GetGoal(ctx context.Context, id pgtype.UUID) (Goal, error)
 	GetMemoryByPath(ctx context.Context, filePath string) (MemoryIndex, error)

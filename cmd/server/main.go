@@ -46,6 +46,11 @@ func main() {
 	watcher.Start(ctx)
 	defer watcher.Stop()
 
+	// Start artifact scanner
+	scanner := service.NewArtifactScanner(queries, bus, cfg.ArtifactsPath)
+	scanner.Start(ctx)
+	defer scanner.Stop()
+
 	// Build router
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
@@ -62,7 +67,7 @@ func main() {
 	})
 
 	// Mount API routes
-	a := api.NewAPI(queries, harness.DefaultRegistry, bus, cfg.LiteLLMURL)
+	a := api.NewAPI(queries, harness.DefaultRegistry, bus, cfg.LiteLLMURL, cfg.ArtifactsPath)
 	r.Mount("/api", a.Router())
 
 	// Start server with graceful shutdown

@@ -17,7 +17,7 @@ func Load() *Config {
 		DatabaseURL:   getEnv("DATABASE_URL", "postgres://localhost:5432/agentos?sslmode=disable"),
 		LiteLLMURL:    getEnv("LITELLM_URL", "http://localhost:4000"),
 		ObsidianPath:  getEnv("OBSIDIAN_PATH", "./obsidian"),
-		ArtifactsPath: getEnv("ARTIFACTS_PATH", "./artifacts"),
+		ArtifactsPath: getEnv("ARTIFACTS_PATH", "/data/artifacts"),
 		Port:          getEnv("PORT", "8080"),
 	}
 }
