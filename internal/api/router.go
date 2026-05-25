@@ -85,6 +85,15 @@ func (a *API) Router() http.Handler {
 	// Studio routes
 	r.Mount("/studio", a.studio.StudioRoutes())
 
+	// Task (Kanban) routes
+	r.Mount("/tasks", a.TaskRoutes())
+
+	// Goals routes
+	r.Mount("/goals", a.GoalRoutes())
+
+	// Pipeline routes
+	r.Mount("/pipeline", a.PipelineRoutes())
+
 	// Events SSE endpoint
 	r.Get("/events", a.StreamEvents)
 
