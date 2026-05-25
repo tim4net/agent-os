@@ -42,7 +42,7 @@ func main() {
 	harness.Register("litellm", harness.NewLiteLLMHarness)
 
 	// Start agent watcher
-	watcher := service.NewAgentWatcher(queries, harness.DefaultRegistry, bus)
+	watcher := service.NewAgentWatcher(queries, harness.DefaultRegistry, bus, cfg.LiteLLMURL)
 	watcher.Start(ctx)
 	defer watcher.Stop()
 
@@ -62,7 +62,7 @@ func main() {
 	})
 
 	// Mount API routes
-	a := api.NewAPI(queries, harness.DefaultRegistry, bus)
+	a := api.NewAPI(queries, harness.DefaultRegistry, bus, cfg.LiteLLMURL)
 	r.Mount("/api", a.Router())
 
 	// Start server with graceful shutdown

@@ -11,18 +11,32 @@ import (
 
 // API holds dependencies for the API handlers.
 type API struct {
-	queries  *db.Queries
-	registry *harness.Registry
-	bus      *service.EventBus
+	queries   *db.Queries
+	registry  *harness.Registry
+	bus       *service.EventBus
+	litellmURL string
 }
 
 // NewAPI creates a new API instance with the given dependencies.
-func NewAPI(queries *db.Queries, registry *harness.Registry, bus *service.EventBus) *API {
+func NewAPI(queries *db.Queries, registry *harness.Registry, bus *service.EventBus, litellmURL string) *API {
 	return &API{
-		queries:  queries,
-		registry: registry,
-		bus:      bus,
+		queries:    queries,
+		registry:   registry,
+		bus:        bus,
+		litellmURL: litellmURL,
 	}
+}
+
+// buildHarnessConfig creates a harness config map for the given agent.
+func (a *API) buildHarnessConfig(agent db.Agent) map[string]any {
+	config := map[string]any{
+		"base_url": agent.BaseUrl,
+	}
+	// Pass litellm_url for hermes harness so it can list models
+	if agent.Harness == "hermes" && a.litellmURL != "" {
+		config["litellm_url"] = a.litellmURL
+	}
+	return config
 }
 
 // Router returns a Chi router with all API routes mounted under /api.

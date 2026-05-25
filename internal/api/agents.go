@@ -102,9 +102,7 @@ func (a *API) GetAgentModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	config := map[string]any{
-		"base_url": agent.BaseUrl,
-	}
+	config := a.buildHarnessConfig(agent)
 	if err := h.Init(config); err != nil {
 		http.Error(w, "harness init failed: "+err.Error(), http.StatusInternalServerError)
 		return

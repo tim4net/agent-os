@@ -12,21 +12,23 @@ import (
 
 // AgentWatcher periodically checks agent health and publishes status changes.
 type AgentWatcher struct {
-	queries  *db.Queries
-	registry *harness.Registry
-	bus      *EventBus
-	interval time.Duration
-	done     chan struct{}
+	queries    *db.Queries
+	registry   *harness.Registry
+	bus        *EventBus
+	litellmURL string
+	interval   time.Duration
+	done       chan struct{}
 }
 
 // NewAgentWatcher creates a new AgentWatcher.
-func NewAgentWatcher(queries *db.Queries, registry *harness.Registry, bus *EventBus) *AgentWatcher {
+func NewAgentWatcher(queries *db.Queries, registry *harness.Registry, bus *EventBus, litellmURL string) *AgentWatcher {
 	return &AgentWatcher{
-		queries:  queries,
-		registry: registry,
-		bus:      bus,
-		interval: 30 * time.Second,
-		done:     make(chan struct{}),
+		queries:    queries,
+		registry:   registry,
+		bus:        bus,
+		litellmURL: litellmURL,
+		interval:   30 * time.Second,
+		done:       make(chan struct{}),
 	}
 }
 
@@ -84,6 +86,9 @@ func (aw *AgentWatcher) checkAgent(ctx context.Context, agent db.Agent) {
 	// Initialize the harness with the agent's config
 	config := map[string]any{
 		"base_url": agent.BaseUrl,
+	}
+	if agent.Harness == "hermes" && aw.litellmURL != "" {
+		config["litellm_url"] = aw.litellmURL
 	}
 	if err := h.Init(config); err != nil {
 		log.Printf("agent watcher: init harness for %q: %v", agent.Name, err)
