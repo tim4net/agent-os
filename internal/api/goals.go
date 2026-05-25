@@ -2,11 +2,13 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -215,6 +217,11 @@ func (a *API) DeleteGoal(w http.ResponseWriter, r *http.Request) {
 
 // BreakdownGoal handles POST /api/goals/{id}/breakdown
 func (a *API) BreakdownGoal(w http.ResponseWriter, r *http.Request) {
+	// Use a detached context with generous timeout — the local LLM can be slow
+	// and Chi's middleware.Timeout(60s) would otherwise expire the request context.
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+
 	idStr := chi.URLParam(r, "id")
 
 	var id pgtype.UUID
@@ -223,7 +230,7 @@ func (a *API) BreakdownGoal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	goal, err := a.queries.GetGoal(r.Context(), id)
+	goal, err := a.queries.GetGoal(ctx, id)
 	if err != nil {
 		http.Error(w, "goal not found", http.StatusNotFound)
 		return
@@ -252,7 +259,7 @@ func (a *API) BreakdownGoal(w http.ResponseWriter, r *http.Request) {
 	}
 
 	chatReq := chatRequest{
-		Model: "gpt-4o",
+		Model: "local-qwen",
 		Messages: []chatMessage{
 			{Role: "system", Content: "You are a project planner. Break this goal into 5-10 specific actionable tasks. Return as JSON array of {title, description, priority(1-5)}. Return ONLY the JSON array, no other text."},
 			{Role: "user", Content: goalText},
@@ -260,7 +267,13 @@ func (a *API) BreakdownGoal(w http.ResponseWriter, r *http.Request) {
 	}
 
 	body, _ := json.Marshal(chatReq)
-	resp, err := http.Post(a.litellmURL+"/v1/chat/completions", "application/json", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.litellmURL+"/v1/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		http.Error(w, "LLM request create failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		http.Error(w, "LLM request failed: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -318,7 +331,7 @@ func (a *API) BreakdownGoal(w http.ResponseWriter, r *http.Request) {
 			priority = 5
 		}
 
-		task, err := a.queries.CreateTask(r.Context(), db.CreateTaskParams{
+		task, err := a.queries.CreateTask(ctx, db.CreateTaskParams{
 			Title:       t.Title,
 			Description: pgtypeText(t.Description),
 			Status:      "backlog",

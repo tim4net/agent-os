@@ -38,7 +38,6 @@ type xaiImageRequest struct {
 	Prompt string `json:"prompt"`
 	Model  string `json:"model"`
 	N      int    `json:"n"`
-	Size   string `json:"size"`
 }
 
 type xaiImageResponse struct {
@@ -61,7 +60,6 @@ func (p *XAIProvider) Generate(ctx context.Context, prompt string, genType strin
 		Prompt: prompt,
 		Model:  model,
 		N:      1,
-		Size:   "1024x1024",
 	}
 
 	body, err := json.Marshal(reqBody)

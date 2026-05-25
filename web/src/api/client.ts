@@ -250,7 +250,7 @@ export function saveMemoryFile(path: string, content: string): Promise<MemoryFil
 }
 
 export function searchMemory(query: string): Promise<MemorySearchResult[]> {
-  const params = new URLSearchParams({ query })
+  const params = new URLSearchParams({ q: query })
   return request<MemorySearchResult[]>(`/api/memory/search?${params}`)
 }
 
@@ -570,4 +570,14 @@ export interface HealthStatus {
 
 export function getHealth(): Promise<HealthStatus> {
   return request<HealthStatus>('/api/health')
+}
+
+/** Simple boolean health check for the status footer. */
+export async function checkHealth(): Promise<boolean> {
+  try {
+    const res = await fetch('/api/health')
+    return res.ok
+  } catch {
+    return false
+  }
 }

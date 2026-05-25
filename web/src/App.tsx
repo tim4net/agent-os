@@ -30,7 +30,7 @@ function App() {
   const [memoryFilePath, setMemoryFilePath] = useState<string | null>(null)
   const [mediaPreviewKey, setMediaPreviewKey] = useState(0)
   const { agents, loading, refresh: refreshAgents } = useAgents()
-  const { lastEvent } = useSSE()
+  const { sseConnected } = useSSE()
   const uploadInputRef = useRef<HTMLInputElement>(null)
 
   function handleSelectAgent(agent: Agent) {
@@ -215,10 +215,7 @@ function App() {
         </main>
 
         {/* Status Footer */}
-        <StatusFooter
-          backendStatus={lastEvent ? 'ok' : 'unknown'}
-          sseStatus={lastEvent ? 'connected' : 'disconnected'}
-        />
+        <StatusFooter sseConnected={sseConnected} />
       </div>
 
       {/* Hidden file input for artifact upload */}
