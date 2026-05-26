@@ -1,8 +1,7 @@
 package api
-
 import (
-	"bytes"
 	"context"
+	b64 "encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -23,106 +22,101 @@ type StudioProvider interface {
 	Generate(ctx context.Context, prompt string, genType string, model string) (url string, err error)
 }
 
-// XAIProvider implements StudioProvider using the xAI image generation API.
-type XAIProvider struct {
-	apiKey string
-}
-
-// NewXAIProvider creates a new XAIProvider.
-func NewXAIProvider(apiKey string) *XAIProvider {
-	return &XAIProvider{apiKey: apiKey}
-}
-
-// xAI request/response types
-type xaiImageRequest struct {
-	Prompt string `json:"prompt"`
-	Model  string `json:"model"`
-	N      int    `json:"n"`
-}
-
-type xaiImageResponse struct {
-	Data []struct {
-		URL string `json:"url"`
-	} `json:"data"`
-}
-
-// Generate calls the xAI API to generate an image.
-func (p *XAIProvider) Generate(ctx context.Context, prompt string, genType string, model string) (string, error) {
-	if p.apiKey == "" {
-		return "", fmt.Errorf("XAI_API_KEY not configured")
-	}
-
-	if model == "" {
-		model = "grok-2-image"
-	}
-
-	reqBody := xaiImageRequest{
-		Prompt: prompt,
-		Model:  model,
-		N:      1,
-	}
-
-	body, err := json.Marshal(reqBody)
-	if err != nil {
-		return "", fmt.Errorf("marshal request: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.x.ai/v1/images/generations", bytes.NewReader(body))
-	if err != nil {
-		return "", fmt.Errorf("create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+p.apiKey)
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("xAI API call failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("xAI API error (%d): %s", resp.StatusCode, string(respBody))
-	}
-
-	var xaiResp xaiImageResponse
-	if err := json.Unmarshal(respBody, &xaiResp); err != nil {
-		return "", fmt.Errorf("parse response: %w", err)
-	}
-
-	if len(xaiResp.Data) == 0 || xaiResp.Data[0].URL == "" {
-		return "", fmt.Errorf("no image URL in response")
-	}
-
-	return xaiResp.Data[0].URL, nil
+// ProviderInfo describes a registered studio provider.
+type ProviderInfo struct {
+	Name        string   `json:"name"`
+	Type        string   `json:"type"`         // "image", "video", "audio"
+	Models      []string `json:"models"`
+	RequiresKey bool     `json:"requires_key"`
+	Available   bool     `json:"available"`
 }
 
 // StudioAPI holds dependencies for studio/generation endpoints.
 type StudioAPI struct {
 	queries       *db.Queries
 	artifactsPath string
-	provider      StudioProvider
+	providers     map[string]StudioProvider
+	providerInfo  map[string]ProviderInfo
 }
 
-// NewStudioAPI creates a new StudioAPI.
-func NewStudioAPI(queries *db.Queries, artifactsPath string, provider StudioProvider) *StudioAPI {
-	return &StudioAPI{
+// NewStudioAPI creates a new StudioAPI with multiple providers.
+// The keys map contains API keys for providers that need them: "xai", "openrouter", "gemini", "fal".
+// Providers without a key are still registered but marked unavailable.
+func NewStudioAPI(queries *db.Queries, artifactsPath string, keys map[string]string) *StudioAPI {
+	s := &StudioAPI{
 		queries:       queries,
 		artifactsPath: artifactsPath,
-		provider:      provider,
+		providers:     make(map[string]StudioProvider),
+		providerInfo:  make(map[string]ProviderInfo),
 	}
+
+	// Provider 1: xAI
+	// NOTE: xAI has the API key but team has no billing credits — returns 403.
+	xaiKey := keys["xai"]
+	s.providers["xai"] = NewXAIProvider(xaiKey)
+	s.providerInfo["xai"] = ProviderInfo{
+		Name:        "xai",
+		Type:        "image",
+		Models:      []string{"grok-2-image"},
+		RequiresKey: true,
+		Available:   false, // No billing credits on team account
+	}
+
+	// Provider 2: Pollinations (always available, no key needed)
+	s.providers["pollinations"] = NewPollinationsProvider()
+	s.providerInfo["pollinations"] = ProviderInfo{
+		Name:        "pollinations",
+		Type:        "image",
+		Models:      []string{"flux"},
+		RequiresKey: false,
+		Available:   true,
+	}
+
+	// Provider 3: OpenRouter
+	// NOTE: OpenRouter's image models (gemini-2.5-flash-image, gpt-5-image-mini)
+	// don't actually return images through chat completions — they return text.
+	// Kept in code but marked unavailable until OpenRouter adds proper image support.
+	orKey := keys["openrouter"]
+	s.providers["openrouter"] = NewOpenRouterProvider(orKey)
+	s.providerInfo["openrouter"] = ProviderInfo{
+		Name:        "openrouter",
+		Type:        "image",
+		Models:      []string{"google/gemini-2.5-flash-image", "openai/gpt-5-image-mini"},
+		RequiresKey: true,
+		Available:   false, // OpenRouter doesn't actually return images via chat completions
+	}
+
+	// Provider 4: Google Gemini
+	geminiKey := keys["gemini"]
+	s.providers["gemini"] = NewGeminiProvider(geminiKey, artifactsPath)
+	s.providerInfo["gemini"] = ProviderInfo{
+		Name:        "gemini",
+		Type:        "image",
+		Models:      []string{"gemini-2.0-flash-exp"},
+		RequiresKey: true,
+		Available:   geminiKey != "",
+	}
+
+	// Provider 5: FAL.ai
+	falKey := keys["fal"]
+	s.providers["fal"] = NewFALProvider(falKey)
+	s.providerInfo["fal"] = ProviderInfo{
+		Name:        "fal",
+		Type:        "image",
+		Models:      []string{"flux/schnell", "flux/dev"},
+		RequiresKey: true,
+		Available:   falKey != "",
+	}
+
+	return s
 }
 
 // GenerateRequest is the JSON body for the generate endpoint.
 type GenerateRequest struct {
-	Prompt string `json:"prompt"`
-	Type   string `json:"type"` // "image", "video", "audio"
-	Model  string `json:"model"`
+	Prompt   string `json:"prompt"`
+	Type     string `json:"type"`     // "image", "video", "audio"
+	Model    string `json:"model"`
+	Provider string `json:"provider"`
 }
 
 // StudioRoutes returns a Chi router with studio routes.
@@ -131,8 +125,34 @@ func (s *StudioAPI) StudioRoutes() http.Handler {
 
 	r.Post("/generate", s.Generate)
 	r.Get("/generations", s.ListGenerations)
+	r.Get("/providers", s.ListProviders)
 
 	return r
+}
+
+// ListProviders handles GET /api/studio/providers
+func (s *StudioAPI) ListProviders(w http.ResponseWriter, r *http.Request) {
+	providers := make([]ProviderInfo, 0, len(s.providerInfo))
+	// Return in a deterministic order
+	for _, name := range []string{"xai", "pollinations", "openrouter", "gemini", "fal"} {
+		if info, ok := s.providerInfo[name]; ok {
+			providers = append(providers, info)
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(providers)
+}
+
+// firstAvailableProvider returns the name of the first available provider.
+func (s *StudioAPI) firstAvailableProvider() string {
+	// Prefer pollinations since it's always available and free
+	for _, name := range []string{"pollinations", "xai", "openrouter", "gemini", "fal"} {
+		if info, ok := s.providerInfo[name]; ok && info.Available {
+			return name
+		}
+	}
+	return ""
 }
 
 // Generate handles POST /api/studio/generate
@@ -153,30 +173,71 @@ func (s *StudioAPI) Generate(w http.ResponseWriter, r *http.Request) {
 		req.Type = "image" // default
 	}
 
+	// Determine which provider to use
+	providerName := req.Provider
+	if providerName == "" {
+		providerName = s.firstAvailableProvider()
+	}
+
+	provider, ok := s.providers[providerName]
+	if !ok {
+		http.Error(w, fmt.Sprintf("unknown provider: %s", providerName), http.StatusBadRequest)
+		return
+	}
+
+	info, infoOk := s.providerInfo[providerName]
+	if infoOk && !info.Available {
+		http.Error(w, fmt.Sprintf("provider %s is not available (missing API key)", providerName), http.StatusBadRequest)
+		return
+	}
+
 	// Call provider
-	resultURL, err := s.provider.Generate(r.Context(), req.Prompt, req.Type, req.Model)
+	resultURL, err := provider.Generate(r.Context(), req.Prompt, req.Type, req.Model)
 	if err != nil {
 		http.Error(w, "generation failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// Download the generated file
-	fileData, err := downloadFile(r.Context(), resultURL)
-	if err != nil {
-		// If download fails, still record the artifact with the remote URL
-		logf("studio: failed to download generated file: %v", err)
-	}
-
 	// Save to disk and create artifact record
 	var relativePath string
-	if fileData != nil {
-		ext := detectExtension(resultURL, req.Type)
-		fileUUID := uuid.New().String()
-		relativePath = filepath.Join("studio", fileUUID+ext)
-		fullPath := filepath.Join(s.artifactsPath, relativePath)
 
-		if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err == nil {
-			os.WriteFile(fullPath, fileData, 0644)
+	if strings.HasPrefix(resultURL, "file://") {
+		// Provider already saved the file locally (e.g., Gemini with base64)
+		relativePath = strings.TrimPrefix(resultURL, "file://")
+	} else if strings.HasPrefix(resultURL, "data:") {
+		// Provider returned base64 data URL (e.g., OpenRouter inline_data)
+		fileData, mime, err := decodeDataURL(resultURL)
+		if err != nil {
+			logf("studio: failed to decode data URL: %v", err)
+		}
+		if fileData != nil {
+			ext := extensionFromMime(mime)
+			if ext == "" {
+				ext = detectExtension(resultURL, req.Type)
+			}
+			fileUUID := uuid.New().String()
+			relativePath = filepath.Join("studio", fileUUID+ext)
+			fullPath := filepath.Join(s.artifactsPath, relativePath)
+			if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err == nil {
+				os.WriteFile(fullPath, fileData, 0644)
+			}
+		}
+	} else {
+		// Download the generated file from the remote URL
+		fileData, err := downloadFile(r.Context(), resultURL)
+		if err != nil {
+			logf("studio: failed to download generated file: %v", err)
+		}
+
+		if fileData != nil {
+			ext := detectExtension(resultURL, req.Type)
+			fileUUID := uuid.New().String()
+			relativePath = filepath.Join("studio", fileUUID+ext)
+			fullPath := filepath.Join(s.artifactsPath, relativePath)
+
+			if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err == nil {
+				os.WriteFile(fullPath, fileData, 0644)
+			}
 		}
 	}
 
@@ -185,8 +246,9 @@ func (s *StudioAPI) Generate(w http.ResponseWriter, r *http.Request) {
 	title := fmt.Sprintf("Generated %s: %s", req.Type, truncate(req.Prompt, 50))
 
 	metadata := map[string]any{
-		"prompt":    req.Prompt,
-		"model":     req.Model,
+		"prompt":     req.Prompt,
+		"model":      req.Model,
+		"provider":   providerName,
 		"source_url": resultURL,
 	}
 	metaBytes, _ := json.Marshal(metadata)
@@ -252,6 +314,8 @@ func (s *StudioAPI) ListGenerations(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(artifacts)
 }
 
+// --- Utility functions ---
+
 // downloadFile downloads a file from a URL and returns its bytes.
 func downloadFile(ctx context.Context, url string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -306,5 +370,60 @@ func typeToMime(genType string) string {
 		return "audio/mpeg"
 	default:
 		return "application/octet-stream"
+	}
+}
+
+// decodeDataURL parses a data URL and returns the decoded bytes and MIME type.
+func decodeDataURL(dataURL string) ([]byte, string, error) {
+	// data:image/png;base64,xxxxx
+	if !strings.HasPrefix(dataURL, "data:") {
+		return nil, "", fmt.Errorf("not a data URL")
+	}
+	rest := dataURL[5:]
+	// Find the comma separating metadata from data
+	commaIdx := strings.Index(rest, ",")
+	if commaIdx < 0 {
+		return nil, "", fmt.Errorf("invalid data URL: no comma")
+	}
+	meta := rest[:commaIdx]
+	data := rest[commaIdx+1:]
+
+	// Parse MIME type from meta (e.g., "image/png;base64")
+	mime := "image/png"
+	if semiIdx := strings.Index(meta, ";"); semiIdx > 0 {
+		mime = meta[:semiIdx]
+	} else if len(meta) > 0 {
+		mime = meta
+	}
+
+	// Decode base64
+	decoded, err := b64.StdEncoding.DecodeString(data)
+	if err != nil {
+		// Try URL-safe base64
+		decoded, err = b64.URLEncoding.DecodeString(data)
+		if err != nil {
+			return nil, mime, fmt.Errorf("base64 decode: %w", err)
+		}
+	}
+	return decoded, mime, nil
+}
+
+// extensionFromMime returns a file extension for a MIME type.
+func extensionFromMime(mime string) string {
+	switch mime {
+	case "image/png":
+		return ".png"
+	case "image/jpeg":
+		return ".jpg"
+	case "image/webp":
+		return ".webp"
+	case "image/gif":
+		return ".gif"
+	case "video/mp4":
+		return ".mp4"
+	case "audio/mpeg":
+		return ".mp3"
+	default:
+		return ""
 	}
 }

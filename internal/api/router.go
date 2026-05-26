@@ -24,14 +24,7 @@ type API struct {
 }
 
 // NewAPI creates a new API instance with the given dependencies.
-func NewAPI(queries *db.Queries, registry *harness.Registry, bus *service.EventBus, feed *service.ActivityFeed, litellmURL string, artifactsPath string, obsidianPath string, xaiAPIKey string, hermesAPIKey string) *API {
-	var provider StudioProvider
-	if xaiAPIKey != "" {
-		provider = NewXAIProvider(xaiAPIKey)
-	} else {
-		provider = NewXAIProvider("") // will return errors on generate
-	}
-
+func NewAPI(queries *db.Queries, registry *harness.Registry, bus *service.EventBus, feed *service.ActivityFeed, litellmURL string, artifactsPath string, obsidianPath string, apiKeys map[string]string, hermesAPIKey string) *API {
 	return &API{
 		queries:      queries,
 		registry:     registry,
@@ -42,7 +35,7 @@ func NewAPI(queries *db.Queries, registry *harness.Registry, bus *service.EventB
 		hermesAPIKey: hermesAPIKey,
 		artifacts:    NewArtifactAPI(queries, artifactsPath),
 		memory:       NewMemoryAPI(queries, obsidianPath, litellmURL),
-		studio:       NewStudioAPI(queries, artifactsPath, provider),
+		studio:       NewStudioAPI(queries, artifactsPath, apiKeys),
 	}
 }
 

@@ -76,7 +76,13 @@ func main() {
 	})
 
 	// Mount API routes
-	a := api.NewAPI(queries, harness.DefaultRegistry, bus, feed, cfg.LiteLLMURL, cfg.ArtifactsPath, cfg.ObsidianPath, cfg.XAIAPIKey, cfg.HermesAPIKey)
+	apiKeys := map[string]string{
+		"xai":        cfg.XAIAPIKey,
+		"openrouter": cfg.OpenRouterAPIKey,
+		"gemini":     cfg.GeminiAPIKey,
+		"fal":        cfg.FALKey,
+	}
+	a := api.NewAPI(queries, harness.DefaultRegistry, bus, feed, cfg.LiteLLMURL, cfg.ArtifactsPath, cfg.ObsidianPath, apiKeys, cfg.HermesAPIKey)
 	r.Mount("/api", a.Router())
 
 	// Start server with graceful shutdown

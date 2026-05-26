@@ -280,14 +280,30 @@ export interface StudioGeneration {
   created_at: string
 }
 
+export interface StudioProvider {
+  name: string
+  type: string
+  models: string[]
+  requires_key: boolean
+  available: boolean
+}
+
+export function getStudioProviders(): Promise<StudioProvider[]> {
+  return request<StudioProvider[]>('/api/studio/providers')
+}
+
 export function studioGenerate(
   prompt: string,
   type: string,
   model?: string,
+  provider?: string,
 ): Promise<StudioGeneration> {
+  const body: Record<string, string> = { prompt, type }
+  if (model) body.model = model
+  if (provider) body.provider = provider
   return request<StudioGeneration>('/api/studio/generate', {
     method: 'POST',
-    body: JSON.stringify({ prompt, type, model }),
+    body: JSON.stringify(body),
   })
 }
 
