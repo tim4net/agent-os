@@ -37,8 +37,15 @@ type ChatChunk struct {
 
 // ModelInfo describes an available model.
 type ModelInfo struct {
-	ID      string `json:"id"`
-	OwnedBy string `json:"owned_by,omitempty"`
+	ID          string `json:"id"`
+	OwnedBy     string `json:"owned_by,omitempty"`
+	DisplayName string `json:"display_name,omitempty"`
+}
+
+// Command describes a slash command exposed by a harness.
+type Command struct {
+	Command     string `json:"command"`
+	Description string `json:"description"`
 }
 
 // Harness is the interface that all agent harnesses must implement.
@@ -47,6 +54,7 @@ type Harness interface {
 	Health(ctx context.Context) (*HealthStatus, error)
 	Chat(ctx context.Context, messages []ChatMessage, opts ChatOptions) (<-chan ChatChunk, error)
 	ListModels(ctx context.Context) ([]ModelInfo, error)
+	Commands() []Command
 	Init(config map[string]any) error
 	Close() error
 }

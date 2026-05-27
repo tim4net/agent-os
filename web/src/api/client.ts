@@ -6,17 +6,22 @@ export interface Agent {
   base_url: string
   status: string
   last_seen: string | null
+  role?: string
+  system_prompt?: string
 }
 
 export interface Model {
   id: string
   owned_by: string
+  display_name?: string
 }
 
 export interface Conversation {
   id: string
   agent_id: string
   title: string
+  created_at?: string
+  updated_at?: string
 }
 
 export interface Message {
@@ -35,6 +40,7 @@ export interface ChatChunk {
   content: string
   done: boolean
   conversation_id?: string
+  context_sources?: string[]
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -61,6 +67,15 @@ export function getAgent(id: string): Promise<Agent> {
 
 export function getAgentModels(id: string): Promise<Model[]> {
   return request<Model[]>(`/api/agents/${id}/models`)
+}
+
+export interface AgentCommand {
+  command: string
+  description: string
+}
+
+export function getAgentCommands(id: string): Promise<AgentCommand[]> {
+  return request<AgentCommand[]>(`/api/agents/${id}/commands`)
 }
 
 export function listConversations(): Promise<Conversation[]> {
@@ -297,10 +312,12 @@ export function studioGenerate(
   type: string,
   model?: string,
   provider?: string,
+  agentId?: string,
 ): Promise<StudioGeneration> {
   const body: Record<string, string> = { prompt, type }
   if (model) body.model = model
   if (provider) body.provider = provider
+  if (agentId) body.agent_id = agentId
   return request<StudioGeneration>('/api/studio/generate', {
     method: 'POST',
     body: JSON.stringify(body),
@@ -392,9 +409,9 @@ export interface Goal {
   title: string
   description: string
   status: 'active' | 'completed' | 'paused'
+  progress: number
   target_date: string | null
-  completed_tasks: number
-  total_tasks: number
+  metadata: Record<string, unknown>
   created_at?: string
   updated_at?: string
 }
@@ -435,6 +452,158 @@ export function breakdownGoal(id: string): Promise<Task[]> {
   return request<Task[]>(`/api/goals/${id}/breakdown`, {
     method: 'POST',
   })
+}
+
+export function breakdownTask(id: string): Promise<Task[]> {
+  return request<Task[]>(`/api/tasks/${id}/breakdown`, {
+    method: 'POST',
+  })
+}
+
+// --- Workflows ---
+
+export interface WorkflowStep {
+  name: string
+  prompt: string
+}
+
+export interface Workflow {
+  id: string
+  name: string
+  description: string
+  steps: WorkflowStep[]
+  agent_id: string | null
+  created_at?: string
+  updated_at?: string
+}
+
+export interface WorkflowRun {
+  id: string
+  workflow_id: string
+  status: string
+  current_step: number
+  result: Record<string, unknown>
+  created_at?: string
+  updated_at?: string
+}
+
+export interface WorkflowCreate {
+  name: string
+  description?: string
+  steps: WorkflowStep[]
+  agent_id?: string | null
+}
+
+export interface WorkflowUpdate {
+  name?: string
+  description?: string
+  steps?: WorkflowStep[]
+  agent_id?: string | null
+}
+
+export function listWorkflows(): Promise<Workflow[]> {
+  return request<Workflow[]>('/api/workflows')
+}
+
+export function getWorkflow(id: string): Promise<Workflow> {
+  return request<Workflow>(`/api/workflows/${id}`)
+}
+
+export function createWorkflow(data: WorkflowCreate): Promise<Workflow> {
+  return request<Workflow>('/api/workflows', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+}
+
+export function updateWorkflow(id: string, data: WorkflowUpdate): Promise<Workflow> {
+  return request<Workflow>(`/api/workflows/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  })
+}
+
+export async function deleteWorkflow(id: string): Promise<void> {
+  const res = await fetch(`/api/workflows/${id}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(`API error ${res.status}: ${res.statusText}`)
+}
+
+export function runWorkflow(id: string): Promise<WorkflowRun> {
+  return request<WorkflowRun>(`/api/workflows/${id}/run`, {
+    method: 'POST',
+  })
+}
+
+// --- Skills ---
+
+export interface Skill {
+  id: string
+  name: string
+  description: string
+  category: string
+  content: string
+  triggers: string[]
+  agent_id: string | null
+  created_at?: string
+  updated_at?: string
+}
+
+export interface SkillCreate {
+  name: string
+  description?: string
+  category?: string
+  content: string
+  triggers?: string[]
+  agent_id?: string | null
+}
+
+export interface SkillUpdate {
+  name?: string
+  description?: string
+  category?: string
+  content?: string
+  triggers?: string[]
+  agent_id?: string | null
+}
+
+export function listSkills(): Promise<Skill[]> {
+  return request<Skill[]>('/api/skills')
+}
+
+export function getSkill(id: string): Promise<Skill> {
+  return request<Skill>(`/api/skills/${id}`)
+}
+
+export function createSkill(data: SkillCreate): Promise<Skill> {
+  return request<Skill>('/api/skills', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+}
+
+export function updateSkill(id: string, data: SkillUpdate): Promise<Skill> {
+  return request<Skill>(`/api/skills/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  })
+}
+
+export async function deleteSkill(id: string): Promise<void> {
+  const res = await fetch(`/api/skills/${id}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(`API error ${res.status}: ${res.statusText}`)
+}
+
+export interface SkillSyncResult {
+  status: string
+  synced: number
+  created: number
+  updated: number
+  total: number
+  errors: string[]
+}
+
+export async function syncSkillsFromHermes(): Promise<SkillSyncResult> {
+  return request<SkillSyncResult>('/api/skills/sync', { method: 'POST' })
 }
 
 // --- Pipeline ---
@@ -503,6 +672,34 @@ export function advancePipeline(id: string): Promise<PipelineItem> {
   })
 }
 
+// --- Timeline ---
+
+export interface TimelineEvent {
+  id: string
+  type: 'conversation' | 'task_completed' | 'artifact_created' | 'workflow_run'
+  title: string
+  description: string
+  timestamp: string
+  agent_id: string
+  agent_name: string
+  metadata?: Record<string, string>
+}
+
+interface TimelineResponse {
+  events: TimelineEvent[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export function getTimeline(limit?: number, offset?: number): Promise<TimelineResponse> {
+  const params = new URLSearchParams()
+  if (limit !== undefined) params.set('limit', String(limit))
+  if (offset !== undefined) params.set('offset', String(offset))
+  const qs = params.toString()
+  return request<TimelineResponse>(`/api/timeline${qs ? `?${qs}` : ''}`)
+}
+
 // --- Activity Feed ---
 
 export interface ActivityEvent {
@@ -552,6 +749,12 @@ export function getArtifactNotes(id: string): Promise<LinkedNote[]> {
   return request<LinkedNote[]>(`/api/artifacts/${id}/notes`)
 }
 
+export function exportArtifact(id: string): Promise<ExportResult> {
+  return request<ExportResult>(`/api/artifacts/${id}/export`, {
+    method: 'POST',
+  })
+}
+
 export function getTaskNotes(id: string): Promise<LinkedNote[]> {
   return request<LinkedNote[]>(`/api/tasks/${id}/notes`)
 }
@@ -565,15 +768,17 @@ export interface DiscoveredAgent {
   harness: string
 }
 
-export function discoverAgents(): Promise<DiscoveredAgent[]> {
-  return request<DiscoveredAgent[]>('/api/agents/discover')
+export async function discoverAgents(): Promise<DiscoveredAgent[]> {
+  const res = await request<{discovered: DiscoveredAgent[], total: number}>('/api/agents/discover')
+  return res.discovered ?? []
 }
 
-export function autoRegisterAgents(agentIds?: string[]): Promise<Agent[]> {
-  return request<Agent[]>('/api/agents/auto-register', {
+export async function autoRegisterAgents(agentIds?: string[]): Promise<Agent[]> {
+  const res = await request<{registered: Agent[], count: number}>('/api/agents/auto-register', {
     method: 'POST',
     body: JSON.stringify(agentIds ? { agent_ids: agentIds } : {}),
   })
+  return res.registered ?? []
 }
 
 // --- Health ---
@@ -596,4 +801,46 @@ export async function checkHealth(): Promise<boolean> {
   } catch {
     return false
   }
+}
+
+// --- Agent Config ---
+
+export interface AgentConfig {
+  id: string
+  role: string
+  system_prompt: string
+  persona: Record<string, unknown>
+}
+
+export function getAgentConfig(id: string): Promise<AgentConfig> {
+  return request<AgentConfig>(`/api/agents/${id}/config`)
+}
+
+export function updateAgentConfig(
+  id: string,
+  data: { role: string; system_prompt: string; persona?: Record<string, unknown> },
+): Promise<Agent> {
+  return request<Agent>(`/api/agents/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  })
+}
+
+// --- Slash Commands ---
+
+export interface SlashCommandResult {
+  type: 'new' | 'clear' | 'compact'
+  message: string
+  data: Record<string, unknown>
+}
+
+export function executeSlashCommand(
+  command: string,
+  agentId: string,
+  conversationId?: string,
+): Promise<SlashCommandResult> {
+  return request<SlashCommandResult>('/api/slash-command', {
+    method: 'POST',
+    body: JSON.stringify({ command, agent_id: agentId, conversation_id: conversationId ?? '' }),
+  })
 }

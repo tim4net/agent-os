@@ -176,7 +176,7 @@ export function GoalList() {
                 )}
               </div>
 
-              <GoalProgress completed={goal.completed_tasks} total={goal.total_tasks} />
+              <GoalProgress progress={goal.progress ?? 0} />
 
               <button
                 onClick={() => handleBreakdown(goal.id)}

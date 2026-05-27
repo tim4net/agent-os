@@ -70,7 +70,7 @@ func (p *GeminiProvider) Generate(ctx context.Context, prompt string, genType st
 	}
 
 	if model == "" {
-		model = "gemini-2.0-flash-exp"
+		model = "gemini-2.5-flash-image"
 	}
 
 	reqBody := geminiRequest{

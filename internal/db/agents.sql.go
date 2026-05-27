@@ -14,7 +14,7 @@ import (
 const createAgent = `-- name: CreateAgent :one
 INSERT INTO agents (name, display_name, harness, base_url, metadata)
 VALUES ($1, $2, $3, $4, $5)
-RETURNING id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at
+RETURNING id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible
 `
 
 type CreateAgentParams struct {
@@ -45,6 +45,10 @@ func (q *Queries) CreateAgent(ctx context.Context, arg CreateAgentParams) (Agent
 		&i.LastSeen,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Role,
+		&i.SystemPrompt,
+		&i.Persona,
+		&i.Visible,
 	)
 	return i, err
 }
@@ -59,7 +63,7 @@ func (q *Queries) DeleteAgent(ctx context.Context, id pgtype.UUID) error {
 }
 
 const getAgent = `-- name: GetAgent :one
-SELECT id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at FROM agents WHERE id = $1
+SELECT id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible FROM agents WHERE id = $1
 `
 
 func (q *Queries) GetAgent(ctx context.Context, id pgtype.UUID) (Agent, error) {
@@ -76,12 +80,16 @@ func (q *Queries) GetAgent(ctx context.Context, id pgtype.UUID) (Agent, error) {
 		&i.LastSeen,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Role,
+		&i.SystemPrompt,
+		&i.Persona,
+		&i.Visible,
 	)
 	return i, err
 }
 
 const getAgentByName = `-- name: GetAgentByName :one
-SELECT id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at FROM agents WHERE name = $1
+SELECT id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible FROM agents WHERE name = $1
 `
 
 func (q *Queries) GetAgentByName(ctx context.Context, name string) (Agent, error) {
@@ -98,12 +106,16 @@ func (q *Queries) GetAgentByName(ctx context.Context, name string) (Agent, error
 		&i.LastSeen,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Role,
+		&i.SystemPrompt,
+		&i.Persona,
+		&i.Visible,
 	)
 	return i, err
 }
 
 const listAgents = `-- name: ListAgents :many
-SELECT id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at FROM agents ORDER BY created_at
+SELECT id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible FROM agents ORDER BY created_at
 `
 
 func (q *Queries) ListAgents(ctx context.Context) ([]Agent, error) {
@@ -126,6 +138,49 @@ func (q *Queries) ListAgents(ctx context.Context) ([]Agent, error) {
 			&i.LastSeen,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Role,
+			&i.SystemPrompt,
+			&i.Persona,
+			&i.Visible,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listVisibleAgents = `-- name: ListVisibleAgents :many
+SELECT id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible FROM agents WHERE visible = true ORDER BY created_at
+`
+
+func (q *Queries) ListVisibleAgents(ctx context.Context) ([]Agent, error) {
+	rows, err := q.db.Query(ctx, listVisibleAgents)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Agent
+	for rows.Next() {
+		var i Agent
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.DisplayName,
+			&i.Harness,
+			&i.BaseUrl,
+			&i.Status,
+			&i.Metadata,
+			&i.LastSeen,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Role,
+			&i.SystemPrompt,
+			&i.Persona,
+			&i.Visible,
 		); err != nil {
 			return nil, err
 		}
@@ -140,7 +195,7 @@ func (q *Queries) ListAgents(ctx context.Context) ([]Agent, error) {
 const updateAgent = `-- name: UpdateAgent :one
 UPDATE agents SET display_name = $2, harness = $3, base_url = $4, metadata = $5, updated_at = NOW()
 WHERE id = $1
-RETURNING id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at
+RETURNING id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible
 `
 
 type UpdateAgentParams struct {
@@ -171,6 +226,50 @@ func (q *Queries) UpdateAgent(ctx context.Context, arg UpdateAgentParams) (Agent
 		&i.LastSeen,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Role,
+		&i.SystemPrompt,
+		&i.Persona,
+		&i.Visible,
+	)
+	return i, err
+}
+
+const updateAgentConfig = `-- name: UpdateAgentConfig :one
+UPDATE agents SET role = $2, system_prompt = $3, persona = $4, updated_at = NOW()
+WHERE id = $1
+RETURNING id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible
+`
+
+type UpdateAgentConfigParams struct {
+	ID           pgtype.UUID `json:"id"`
+	Role         pgtype.Text `json:"role"`
+	SystemPrompt pgtype.Text `json:"system_prompt"`
+	Persona      []byte      `json:"persona"`
+}
+
+func (q *Queries) UpdateAgentConfig(ctx context.Context, arg UpdateAgentConfigParams) (Agent, error) {
+	row := q.db.QueryRow(ctx, updateAgentConfig,
+		arg.ID,
+		arg.Role,
+		arg.SystemPrompt,
+		arg.Persona,
+	)
+	var i Agent
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.DisplayName,
+		&i.Harness,
+		&i.BaseUrl,
+		&i.Status,
+		&i.Metadata,
+		&i.LastSeen,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Role,
+		&i.SystemPrompt,
+		&i.Persona,
+		&i.Visible,
 	)
 	return i, err
 }
@@ -178,7 +277,7 @@ func (q *Queries) UpdateAgent(ctx context.Context, arg UpdateAgentParams) (Agent
 const updateAgentStatus = `-- name: UpdateAgentStatus :one
 UPDATE agents SET status = $2, last_seen = NOW(), updated_at = NOW()
 WHERE id = $1
-RETURNING id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at
+RETURNING id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible
 `
 
 type UpdateAgentStatusParams struct {
@@ -200,6 +299,10 @@ func (q *Queries) UpdateAgentStatus(ctx context.Context, arg UpdateAgentStatusPa
 		&i.LastSeen,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Role,
+		&i.SystemPrompt,
+		&i.Persona,
+		&i.Visible,
 	)
 	return i, err
 }

@@ -64,6 +64,7 @@ export function SearchBar({ onFileSelect }: SearchBarProps) {
         <input
           type="text"
           placeholder="Search memory…"
+          aria-label="Search memory"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onFocus={() => results.length > 0 && setShowResults(true)}

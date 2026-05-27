@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -55,10 +56,9 @@ func (a *API) ExportConversation(w http.ResponseWriter, r *http.Request) {
 
 	date := time.Now().UTC().Format("2006-01-02")
 	slug := strings.ToLower(strings.ReplaceAll(title, " ", "-"))
-	slug = strings.ReplaceAll(slug, "/", "-")
-	if len(slug) > 80 {
-		slug = slug[:80]
-	}
+	slug = regexp.MustCompile(`[^a-z0-9-]`).ReplaceAllString(slug, "")
+	slug = regexp.MustCompile(`-+`).ReplaceAllString(slug, "-")
+	slug = strings.Trim(slug, "-")
 	filename := fmt.Sprintf("%s-%s.md", date, slug)
 
 	// YAML frontmatter
@@ -138,7 +138,7 @@ func (a *API) GetArtifactNotes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	results, err := a.queries.SearchMemory(r.Context(), db.SearchMemoryParams{
-		PlaintoTsquery: searchTerm,
+		WebsearchToTsquery: searchTerm,
 		Limit:          20,
 	})
 	if err != nil {
@@ -179,7 +179,7 @@ func (a *API) GetTaskNotes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	results, err := a.queries.SearchMemory(r.Context(), db.SearchMemoryParams{
-		PlaintoTsquery: searchTerm,
+		WebsearchToTsquery: searchTerm,
 		Limit:          20,
 	})
 	if err != nil {

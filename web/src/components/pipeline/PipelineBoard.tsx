@@ -211,7 +211,26 @@ export function PipelineBoard() {
                 </div>
                 <div className="flex-1 overflow-y-auto p-2 space-y-2 min-h-[100px]">
                   {colItems.length === 0 ? (
-                    <p className="text-xs text-gray-600 text-center py-4">No items</p>
+                    <div className="flex flex-col items-center justify-center py-6 gap-2">
+                      <p className="text-xs text-gray-600">No items</p>
+                      {col.key === 'draft' && (
+                        <button
+                          onClick={() => { setShowAdd(true); }}
+                          className="text-xs px-3 py-1.5 bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 rounded-lg transition-colors border border-blue-600/20"
+                        >
+                          + Create first item
+                        </button>
+                      )}
+                      {col.key === 'ai_review' && (
+                        <p className="text-[10px] text-gray-700">Items advance here from Draft</p>
+                      )}
+                      {col.key === 'human_review' && (
+                        <p className="text-[10px] text-gray-700">AI-reviewed items appear here</p>
+                      )}
+                      {col.key === 'published' && (
+                        <p className="text-[10px] text-gray-700">Approved content lands here</p>
+                      )}
+                    </div>
                   ) : (
                     colItems.map((item) => (
                       <div

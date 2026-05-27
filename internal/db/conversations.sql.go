@@ -69,6 +69,18 @@ func (q *Queries) CreateMessage(ctx context.Context, arg CreateMessageParams) (M
 	return i, err
 }
 
+const deleteMessagesByConversation = `-- name: DeleteMessagesByConversation :execrows
+DELETE FROM messages WHERE conversation_id = $1
+`
+
+func (q *Queries) DeleteMessagesByConversation(ctx context.Context, conversationID pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteMessagesByConversation, conversationID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getConversation = `-- name: GetConversation :one
 SELECT id, agent_id, title, metadata, created_at, updated_at FROM conversations WHERE id = $1
 `
@@ -88,9 +100,11 @@ func (q *Queries) GetConversation(ctx context.Context, id pgtype.UUID) (Conversa
 }
 
 const listConversations = `-- name: ListConversations :many
-SELECT id, agent_id, title, metadata, created_at, updated_at FROM conversations
-WHERE ($1::uuid IS NULL OR agent_id = $1)
-ORDER BY updated_at DESC
+SELECT c.id, c.agent_id, c.title, c.metadata, c.created_at, c.updated_at FROM conversations c
+JOIN agents a ON c.agent_id = a.id
+WHERE a.visible = true
+AND ($1::uuid IS NULL OR c.agent_id = $1)
+ORDER BY c.updated_at DESC
 `
 
 func (q *Queries) ListConversations(ctx context.Context, dollar_1 pgtype.UUID) ([]Conversation, error) {

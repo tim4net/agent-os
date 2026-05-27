@@ -1,6 +1,6 @@
 -- name: ListArtifacts :many
 SELECT * FROM artifacts
-WHERE ($1::text IS NULL OR type = $1)
+WHERE ($1::text IS NULL OR $1::text = '' OR type = $1)
   AND ($2::uuid IS NULL OR agent_id = $2)
 ORDER BY created_at DESC
 LIMIT $3 OFFSET $4;
@@ -20,4 +20,4 @@ DELETE FROM artifacts WHERE id = $1;
 SELECT * FROM artifacts WHERE file_path = $1;
 
 -- name: CountArtifacts :one
-SELECT COUNT(*) FROM artifacts WHERE ($1::text IS NULL OR type = $1);
+SELECT COUNT(*) FROM artifacts WHERE ($1::text IS NULL OR $1::text = '' OR type = $1);

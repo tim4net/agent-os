@@ -71,18 +71,18 @@ func (q *Queries) ListMemoryIndex(ctx context.Context) ([]MemoryIndex, error) {
 
 const searchMemory = `-- name: SearchMemory :many
 SELECT id, file_path, title, content, tags, last_indexed FROM memory_index
-WHERE to_tsvector('english', coalesce(content, '')) @@ plainto_tsquery('english', $1)
-ORDER BY ts_rank(to_tsvector('english', coalesce(content, '')), plainto_tsquery('english', $1)) DESC
+WHERE to_tsvector('english', coalesce(content, '')) @@ websearch_to_tsquery('english', $1)
+ORDER BY ts_rank(to_tsvector('english', coalesce(content, '')), websearch_to_tsquery('english', $1)) DESC
 LIMIT $2
 `
 
 type SearchMemoryParams struct {
-	PlaintoTsquery string `json:"plainto_tsquery"`
-	Limit          int32  `json:"limit"`
+	WebsearchToTsquery string `json:"websearch_to_tsquery"`
+	Limit              int32  `json:"limit"`
 }
 
 func (q *Queries) SearchMemory(ctx context.Context, arg SearchMemoryParams) ([]MemoryIndex, error) {
-	rows, err := q.db.Query(ctx, searchMemory, arg.PlaintoTsquery, arg.Limit)
+	rows, err := q.db.Query(ctx, searchMemory, arg.WebsearchToTsquery, arg.Limit)
 	if err != nil {
 		return nil, err
 	}

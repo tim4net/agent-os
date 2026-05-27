@@ -277,7 +277,7 @@ func (m *MemoryAPI) Search(w http.ResponseWriter, r *http.Request) {
 	}
 
 	results, err := m.queries.SearchMemory(r.Context(), db.SearchMemoryParams{
-		PlaintoTsquery: query,
+		WebsearchToTsquery: query,
 		Limit:          limit,
 	})
 	if err != nil {
@@ -383,7 +383,7 @@ func (m *MemoryAPI) Synthesize(w http.ResponseWriter, r *http.Request) {
 	)
 
 	chatReq := chatRequest{
-		Model: "gpt-4o",
+		Model: "local-qwen",
 		Messages: []chatMessage{
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: allContent.String()},

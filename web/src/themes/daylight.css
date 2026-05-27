@@ -1,0 +1,558 @@
+/* ==========================================================================
+   Agent OS — Daylight Theme
+   A warm light theme inspired by premium stationery, beautiful notebooks,
+   and the quiet clarity of morning light on cream paper.
+
+   Inspired by: Anthropic's Claude, Notion, Linear.
+   Tailwind CSS v4 • CSS custom properties override
+   ========================================================================== */
+
+/* ---------- CSS Custom Properties (color palette) ---------- */
+:root {
+  /* Core backgrounds — warm off-whites, like aged paper */
+  --bg-base:       #faf9f7;
+  --bg-surface:    #f5f3f0;
+  --bg-elevated:   #edeae5;
+  --bg-card:       #ffffff;
+  --bg-hover:      rgba(0, 0, 0, 0.03);
+  --bg-active:     rgba(0, 0, 0, 0.055);
+
+  /* Accent palette — warm amber/terracotta family */
+  --accent-blue:    #e07a2f;
+  --accent-purple:  #c45d3e;
+  --accent-cyan:    #d4956a;
+  --accent-pink:    #b85636;
+
+  /* Gradient stops — warm amber tones (used for gradient-text, borders) */
+  --gradient-start: #e07a2f;
+  --gradient-mid:   #c45d3e;
+  --gradient-end:   #d4956a;
+
+  /* Text — warm grays with excellent contrast on light bg */
+  --text-primary:   #1a1a1a;
+  --text-secondary: #444444;
+  --text-muted:     #888888;
+  --text-inverse:   #faf9f7;
+
+  /* Borders & dividers — warm tinted */
+  --border-subtle:  #e0dbd4;
+  --border-glow:    #d4cfc7;
+
+  /* Glass → replaced by warm opaque surfaces */
+  --glass-bg:       rgba(255, 255, 255, 0.92);
+  --glass-border:   #e0dbd4;
+  --glass-blur:     0px;
+
+  /* Shadows — warm-tinted, like sunlight casting paper shadows */
+  --shadow-glow:    0 2px 12px rgba(180, 160, 130, 0.12);
+  --shadow-soft:    0 1px 3px rgba(180, 160, 130, 0.08),
+                    0 4px 16px rgba(180, 160, 130, 0.06);
+  --shadow-float:   0 2px 4px rgba(180, 160, 130, 0.06),
+                    0 8px 32px rgba(180, 160, 130, 0.10);
+
+  /* Radius — slightly softer for stationery feel */
+  --radius-sm:  6px;
+  --radius-md:  10px;
+  --radius-lg:  14px;
+  --radius-xl:  20px;
+  --radius-pill: 9999px;
+
+  /* Transitions — smooth and unhurried */
+  --ease-out-expo:  cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-out-back:  cubic-bezier(0.34, 1.56, 0.64, 1);
+  --duration-fast:  150ms;
+  --duration-base:  250ms;
+  --duration-slow:  400ms;
+}
+
+/* ---------- Tailwind v4 @theme extensions ---------- */
+@theme {
+  /* Custom colors */
+  --color-dark-base:      var(--bg-base);
+  --color-dark-surface:   var(--bg-surface);
+  --color-dark-elevated:  var(--bg-elevated);
+  --color-dark-card:      var(--bg-card);
+
+  --color-accent-blue:    var(--accent-blue);
+  --color-accent-purple:  var(--accent-purple);
+  --color-accent-cyan:    var(--accent-cyan);
+  --color-accent-pink:    var(--accent-pink);
+
+  --color-text-primary:   var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-muted:     var(--text-muted);
+
+  --color-border-subtle:  var(--border-subtle);
+  --color-border-glow:    var(--border-glow);
+
+  /* Custom shadows */
+  --shadow-glow:    var(--shadow-glow);
+  --shadow-soft:    var(--shadow-soft);
+  --shadow-float:   var(--shadow-float);
+
+  /* Custom radii */
+  --radius-sm:  var(--radius-sm);
+  --radius-md:  var(--radius-md);
+  --radius-lg:  var(--radius-lg);
+  --radius-xl:  var(--radius-xl);
+  --radius-pill: var(--radius-pill);
+
+  /* Animations */
+  --animate-pulse-glow:  pulse-glow 2s ease-in-out infinite;
+  --animate-shimmer:     shimmer 2s linear infinite;
+  --animate-fade-in:     fade-in 0.5s var(--ease-out-expo) both;
+  --animate-slide-up:    slide-up 0.5s var(--ease-out-expo) both;
+  --animate-typing-dots: typing-dots 1.4s ease-in-out infinite;
+
+  /* Custom keyframes — warm-tinted for Daylight */
+  @keyframes pulse-glow {
+    0%, 100% { box-shadow: 0 0 4px rgba(56, 161, 83, 0.20); }
+    50%      { box-shadow: 0 0 10px rgba(56, 161, 83, 0.45); }
+  }
+
+  @keyframes shimmer {
+    0%   { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+  }
+
+  @keyframes fade-in {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
+
+  @keyframes slide-up {
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes typing-dots {
+    0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
+    40%           { opacity: 1;    transform: scale(1); }
+  }
+}
+
+/* ==========================================================================
+   Base layer styles — Daylight overrides
+   ========================================================================== */
+
+@layer base {
+  html {
+    color-scheme: light;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    scroll-behavior: smooth;
+  }
+
+  body {
+    font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+      'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    background-color: var(--bg-base);
+    color: var(--text-primary);
+    line-height: 1.6;
+    min-height: 100dvh;
+    overflow-x: hidden;
+  }
+
+  /* Serif headings — Georgia, elegant and readable */
+  h1, h2, h3, h4, h5, h6 {
+    color: var(--text-primary);
+    font-family: Georgia, 'Times New Roman', 'Noto Serif', ui-serif, serif;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    line-height: 1.25;
+  }
+
+  /* ---------- Selection — warm amber tint ---------- */
+  ::selection {
+    background: rgba(224, 122, 47, 0.22);
+    color: var(--text-primary);
+  }
+
+  /* ---------- Focus ring — warm accent ---------- */
+  :focus-visible {
+    outline: 2px solid var(--accent-blue);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+  }
+
+  /* ---------- Scrollbar — warm, thin, unobtrusive ---------- */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.13);
+    border-radius: var(--radius-pill);
+    transition: background var(--duration-fast) ease;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 0, 0, 0.22);
+  }
+
+  /* Firefox */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 0, 0, 0.13) transparent;
+  }
+
+  /* ---------- Links — warm accent ---------- */
+  a {
+    color: var(--accent-blue);
+    text-decoration: none;
+    transition: color var(--duration-fast) ease;
+  }
+  a:hover {
+    color: var(--accent-purple);
+  }
+
+  /* ---------- Input defaults — warm-toned ---------- */
+  input, textarea, select {
+    font-family: inherit;
+    background-color: #ffffff;
+    color: var(--text-primary);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    transition:
+      border-color var(--duration-fast) ease,
+      box-shadow var(--duration-fast) ease;
+  }
+
+  input:focus, textarea:focus, select:focus {
+    border-color: var(--accent-blue);
+    box-shadow: 0 0 0 3px rgba(224, 122, 47, 0.12);
+    outline: none;
+  }
+
+  input::placeholder, textarea::placeholder {
+    color: var(--text-muted);
+  }
+
+  /* ---------- Code blocks — warm cream ---------- */
+  pre, code {
+    font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+
+  pre {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 1rem;
+    overflow-x: auto;
+    color: var(--text-primary);
+  }
+
+  code {
+    background: var(--bg-surface);
+    padding: 0.125rem 0.375rem;
+    border-radius: 4px;
+    font-size: 0.875em;
+    color: var(--accent-purple);
+  }
+
+  pre code {
+    background: transparent;
+    padding: 0;
+    color: inherit;
+  }
+}
+
+/* ==========================================================================
+   Component classes — Daylight overrides
+   ========================================================================== */
+
+/* ---------- Glass card → warm paper card ---------- */
+.glass-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: var(--shadow-soft);
+  transition:
+    background var(--duration-base) var(--ease-out-expo),
+    box-shadow var(--duration-base) var(--ease-out-expo),
+    border-color var(--duration-base) var(--ease-out-expo);
+}
+
+.glass-card:hover {
+  background: #ffffff;
+  border-color: var(--border-glow);
+  box-shadow: var(--shadow-float);
+}
+
+/* ---------- Glass sidebar → warm cream, no blur ---------- */
+.glass-sidebar {
+  background: var(--bg-surface);
+  border-right: 1px solid var(--border-subtle);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* ---------- Glow border → warm accent border ---------- */
+.glow-border {
+  position: relative;
+  border: 1px solid transparent;
+  background-clip: padding-box;
+}
+
+.glow-border::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(
+    135deg,
+    var(--accent-blue),
+    var(--accent-purple),
+    var(--accent-cyan)
+  );
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  opacity: 0.5;
+  transition: opacity var(--duration-base) ease;
+  pointer-events: none;
+}
+
+.glow-border:hover::before {
+  opacity: 0.85;
+}
+
+/* ---------- Gradient text — warm amber ---------- */
+.gradient-text {
+  background: linear-gradient(
+    135deg,
+    var(--gradient-start),
+    var(--gradient-mid),
+    var(--gradient-end)
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* ---------- Floating input bar — warm, soft ---------- */
+.floating-input {
+  background: #ffffff;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-soft);
+  transition:
+    border-color var(--duration-base) ease,
+    box-shadow var(--duration-base) ease;
+}
+
+.floating-input:focus-within {
+  border-color: var(--accent-blue);
+  box-shadow:
+    var(--shadow-float),
+    0 0 0 3px rgba(224, 122, 47, 0.10);
+}
+
+/* ---------- Shimmer loading skeleton — warm tone ---------- */
+.shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--bg-elevated) 25%,
+    rgba(0, 0, 0, 0.04) 50%,
+    var(--bg-elevated) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 2s linear infinite;
+  border-radius: var(--radius-md);
+}
+
+/* ---------- Pill button ---------- */
+.pill-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+  padding: 0.5rem 1.25rem;
+  border-radius: var(--radius-pill);
+  font-weight: 500;
+  font-size: 0.875rem;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease,
+    transform var(--duration-fast) var(--ease-out-back);
+  border: none;
+  outline: none;
+}
+
+/* Primary — solid warm accent, no glow */
+.pill-btn--primary {
+  background: var(--accent-blue);
+  color: #ffffff;
+}
+.pill-btn--primary:hover {
+  background: #c96a24;
+  box-shadow: 0 2px 8px rgba(224, 122, 47, 0.25);
+  transform: translateY(-1px);
+}
+.pill-btn--primary:active {
+  transform: translateY(0);
+  box-shadow: 0 1px 4px rgba(224, 122, 47, 0.15);
+}
+
+/* Ghost — warm bordered */
+.pill-btn--ghost {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-subtle);
+}
+.pill-btn--ghost:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--border-glow);
+}
+
+/* ---------- Agent status dot — organic, no harsh glow ---------- */
+.agent-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  position: relative;
+}
+
+.agent-dot--online {
+  background: #38a153;
+  box-shadow: 0 0 4px rgba(56, 161, 83, 0.30);
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+.agent-dot--offline {
+  background: #b5b0a8;
+}
+
+.agent-dot--error {
+  background: #d13b3b;
+  box-shadow: 0 0 4px rgba(209, 59, 59, 0.25);
+}
+
+/* Pulsing ring behind online dot — subtle warmth */
+.agent-dot--online::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  border: 1px solid rgba(56, 161, 83, 0.30);
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+/* ---------- Fade-in animation ---------- */
+.fade-in {
+  animation: fade-in 0.5s var(--ease-out-expo) both;
+}
+
+/* ---------- Slide-up animation ---------- */
+.slide-up {
+  animation: slide-up 0.5s var(--ease-out-expo) both;
+}
+
+/* Stagger children for list items */
+.stagger-children > * {
+  animation: slide-up 0.45s var(--ease-out-expo) both;
+}
+.stagger-children > *:nth-child(1)  { animation-delay: 0ms; }
+.stagger-children > *:nth-child(2)  { animation-delay: 60ms; }
+.stagger-children > *:nth-child(3)  { animation-delay: 120ms; }
+.stagger-children > *:nth-child(4)  { animation-delay: 180ms; }
+.stagger-children > *:nth-child(5)  { animation-delay: 240ms; }
+.stagger-children > *:nth-child(6)  { animation-delay: 300ms; }
+.stagger-children > *:nth-child(7)  { animation-delay: 360ms; }
+.stagger-children > *:nth-child(8)  { animation-delay: 420ms; }
+.stagger-children > *:nth-child(9)  { animation-delay: 480ms; }
+.stagger-children > *:nth-child(10) { animation-delay: 540ms; }
+
+/* ---------- Typing indicator dots — warm amber ---------- */
+.typing-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.typing-dots span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-blue);
+  animation: typing-dots 1.4s ease-in-out infinite;
+}
+
+.typing-dots span:nth-child(2) { animation-delay: 0.2s; }
+.typing-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+/* ==========================================================================
+   Utility enhancements — Daylight overrides
+   ========================================================================== */
+
+/* Gradient border (alternative approach) */
+.border-gradient {
+  border-image: linear-gradient(135deg, var(--accent-blue), var(--accent-purple), var(--accent-cyan)) 1;
+}
+
+/* Soft shadows — warm-tinted, no glow */
+.glow-sm { box-shadow: 0 1px 6px rgba(180, 160, 130, 0.10); }
+.glow-md { box-shadow: 0 2px 16px rgba(180, 160, 130, 0.12); }
+.glow-lg { box-shadow: 0 4px 24px rgba(180, 160, 130, 0.15); }
+
+/* Background gradient accents — warm, subtle */
+.bg-gradient-accent {
+  background: linear-gradient(135deg, var(--gradient-start), var(--gradient-mid), var(--gradient-end));
+}
+
+.bg-gradient-accent-subtle {
+  background: linear-gradient(
+    135deg,
+    rgba(224, 122, 47, 0.08),
+    rgba(196, 93, 62, 0.06),
+    rgba(212, 149, 106, 0.08)
+  );
+}
+
+/* Noise texture overlay — subtle paper grain */
+.noise-overlay::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  opacity: 0.018;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+  background-size: 128px 128px;
+  mix-blend-mode: multiply;
+}
+
+/* Page transition wrapper */
+.page-transition {
+  animation: fade-in 0.35s var(--ease-out-expo) both;
+}
+
+/* -------------------------------------------------------------------------- 
+   Responsive / mobile adjustments
+   -------------------------------------------------------------------------- */
+@media (max-width: 768px) {
+  .glass-sidebar {
+    background: var(--bg-surface);
+  }
+}

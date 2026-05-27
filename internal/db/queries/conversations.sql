@@ -1,7 +1,9 @@
 -- name: ListConversations :many
-SELECT * FROM conversations
-WHERE ($1::uuid IS NULL OR agent_id = $1)
-ORDER BY updated_at DESC;
+SELECT c.* FROM conversations c
+JOIN agents a ON c.agent_id = a.id
+WHERE a.visible = true
+AND ($1::uuid IS NULL OR c.agent_id = $1)
+ORDER BY c.updated_at DESC;
 
 -- name: GetConversation :one
 SELECT * FROM conversations WHERE id = $1;
@@ -25,3 +27,6 @@ ORDER BY created_at ASC;
 INSERT INTO messages (conversation_id, role, content, metadata)
 VALUES ($1, $2, $3, $4)
 RETURNING *;
+
+-- name: DeleteMessagesByConversation :execrows
+DELETE FROM messages WHERE conversation_id = $1;

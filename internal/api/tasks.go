@@ -1,9 +1,15 @@
 package api
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -21,6 +27,7 @@ func (a *API) TaskRoutes() http.Handler {
 		r.Get("/", a.GetTask)
 		r.Put("/", a.UpdateTask)
 		r.Delete("/", a.DeleteTask)
+		r.Post("/breakdown", a.BreakdownTask)
 	})
 
 	return r
@@ -330,4 +337,145 @@ func (a *API) ReorderTasks(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(updated)
+}
+
+// BreakdownTask handles POST /api/tasks/{id}/breakdown
+// Sends the task to LiteLLM to break it into 3-8 subtasks.
+func (a *API) BreakdownTask(w http.ResponseWriter, r *http.Request) {
+	// Use a detached context with generous timeout — the local LLM can be slow
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+
+	idStr := chi.URLParam(r, "id")
+
+	var id pgtype.UUID
+	if err := id.Scan(idStr); err != nil {
+		http.Error(w, "invalid task ID", http.StatusBadRequest)
+		return
+	}
+
+	task, err := a.queries.GetTask(ctx, id)
+	if err != nil {
+		http.Error(w, "task not found", http.StatusNotFound)
+		return
+	}
+
+	// Build prompt from task
+	taskText := task.Title
+	if task.Description.Valid && task.Description.String != "" {
+		taskText += " - " + task.Description.String
+	}
+
+	// Call LiteLLM for task breakdown
+	type chatMessage struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	}
+	type chatRequest struct {
+		Model    string        `json:"model"`
+		Messages []chatMessage `json:"messages"`
+	}
+	type chatChoice struct {
+		Message chatMessage `json:"message"`
+	}
+	type chatResponse struct {
+		Choices []chatChoice `json:"choices"`
+	}
+
+	chatReq := chatRequest{
+		Model: "local-qwen",
+		Messages: []chatMessage{
+			{Role: "system", Content: "You are a project planner. Break this task into 3-8 concrete subtasks. Return ONLY a JSON array of objects with 'title', 'description', 'priority' (1-5). No other text."},
+			{Role: "user", Content: fmt.Sprintf("Task: %s", taskText)},
+		},
+	}
+
+	body, _ := json.Marshal(chatReq)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.litellmURL+"/v1/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		http.Error(w, "LLM request create failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		http.Error(w, "LLM request failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		http.Error(w, "failed to read LLM response", http.StatusInternalServerError)
+		return
+	}
+
+	var chatResp chatResponse
+	if err := json.Unmarshal(respBody, &chatResp); err != nil {
+		http.Error(w, "failed to parse LLM response", http.StatusInternalServerError)
+		return
+	}
+
+	if len(chatResp.Choices) == 0 {
+		http.Error(w, "no response from LLM", http.StatusInternalServerError)
+		return
+	}
+
+	content := chatResp.Choices[0].Message.Content
+
+	// Extract JSON array from response (may be wrapped in markdown code block)
+	jsonStr := content
+	if idx := strings.Index(jsonStr, "["); idx >= 0 {
+		jsonStr = jsonStr[idx:]
+		if endIdx := strings.LastIndex(jsonStr, "]"); endIdx >= 0 {
+			jsonStr = jsonStr[:endIdx+1]
+		}
+	}
+
+	type breakdownItem struct {
+		Title       string `json:"title"`
+		Description string `json:"description"`
+		Priority    int    `json:"priority"`
+	}
+
+	var items []breakdownItem
+	if err := json.Unmarshal([]byte(jsonStr), &items); err != nil {
+		http.Error(w, "failed to parse task breakdown: "+err.Error()+". Raw: "+content, http.StatusInternalServerError)
+		return
+	}
+
+	// Create subtask rows with parent_task_id set
+	var created []db.Task
+	for _, item := range items {
+		priority := item.Priority
+		if priority < 1 {
+			priority = 1
+		}
+		if priority > 5 {
+			priority = 5
+		}
+
+		subtask, err := a.queries.CreateSubtask(ctx, db.CreateSubtaskParams{
+			AgentID:      task.AgentID,
+			Title:        item.Title,
+			Description:  pgtypeText(item.Description),
+			Status:       "backlog",
+			Priority:     pgtype.Int4{Int32: int32(priority), Valid: true},
+			Metadata:     []byte(fmt.Sprintf(`{"parent_task_id":"%s"}`, idStr)),
+			ParentTaskID: pgtype.UUID{Bytes: id.Bytes, Valid: true},
+		})
+		if err != nil {
+			http.Error(w, "failed to create subtask: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		created = append(created, subtask)
+	}
+
+	if created == nil {
+		created = []db.Task{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(created)
 }

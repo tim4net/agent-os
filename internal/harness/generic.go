@@ -72,6 +72,8 @@ func (g *GenericHarness) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	return nil, ErrNotSupported
 }
 
+func (g *GenericHarness) Commands() []Command { return nil }
+
 func (g *GenericHarness) Close() error {
 	g.httpClient.CloseIdleConnections()
 	return nil

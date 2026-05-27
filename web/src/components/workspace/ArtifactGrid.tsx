@@ -14,7 +14,7 @@ const TYPE_TABS = [
 
 interface ArtifactGridProps {
   agents: Agent[]
-  selectedAgent: Agent | null
+  selectedAgent: Agent | null // kept for potential future use but not auto-applied as filter
   onUploadClick: () => void
 }
 
@@ -100,7 +100,7 @@ function ArtifactCard({
   )
 }
 
-export function ArtifactGrid({ agents, selectedAgent, onUploadClick }: ArtifactGridProps) {
+export function ArtifactGrid({ agents, onUploadClick }: ArtifactGridProps) {
   const [artifacts, setArtifacts] = useState<Artifact[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -130,12 +130,7 @@ export function ArtifactGrid({ agents, selectedAgent, onUploadClick }: ArtifactG
     fetchArtifacts()
   }, [fetchArtifacts])
 
-  // When selectedAgent changes from sidebar, update agentFilter
-  useEffect(() => {
-    if (selectedAgent) {
-      setAgentFilter(selectedAgent.id)
-    }
-  }, [selectedAgent])
+  // Don't auto-set agentFilter from sidebar — Workspace should show all agents by default
 
   function handleDeleted() {
     setPreviewArtifact(null)

@@ -1,10 +1,14 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -74,6 +78,10 @@ func (a *API) ListConversations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if convs == nil {
+		convs = []db.Conversation{}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(convs)
 }
@@ -92,6 +100,10 @@ func (a *API) GetConversationMessages(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, "failed to list messages", http.StatusInternalServerError)
 		return
+	}
+
+	if messages == nil {
+		messages = []db.Message{}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -124,6 +136,12 @@ func (a *API) ChatWithAgent(w http.ResponseWriter, r *http.Request) {
 
 	if req.Message == "" {
 		http.Error(w, "message is required", http.StatusBadRequest)
+		return
+	}
+
+	// Detect slash commands at start of message
+	if strings.HasPrefix(strings.TrimSpace(req.Message), "/") {
+		http.Error(w, "slash commands should be sent to /api/slash-command endpoint", http.StatusBadRequest)
 		return
 	}
 
@@ -160,7 +178,7 @@ func (a *API) ChatWithAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Store the user message
-	_, err = a.queries.CreateMessage(r.Context(), db.CreateMessageParams{
+	userMsg, err := a.queries.CreateMessage(r.Context(), db.CreateMessageParams{
 		ConversationID: convID,
 		Role:           "user",
 		Content:        req.Message,
@@ -171,6 +189,26 @@ func (a *API) ChatWithAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Send user message ID as first SSE event
+	userIDData, _ := json.Marshal(map[string]string{"user_message_id": userMsg.ID.String()})
+	fmt.Fprintf(w, "event: info\ndata: %s\n\n", userIDData)
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+
+	// RAG: search memory_index for relevant context using the user's message
+	systemPrompt := req.SystemPrompt
+	var ragSources []string
+	if ragCtx := a.searchMemoryForContext(req.Message); ragCtx != nil {
+		if systemPrompt == "" {
+			systemPrompt = ragCtx.SystemBlock
+		} else {
+			systemPrompt = systemPrompt + "\n\n" + ragCtx.SystemBlock
+		}
+		ragSources = ragCtx.Sources
+		slog.Debug("RAG: injected memory context into system prompt", "query_length", len(req.Message), "sources", len(ragSources))
+	}
+
 	// Get conversation history for context
 	history, err := a.queries.ListMessages(r.Context(), convID)
 	if err != nil {
@@ -179,7 +217,16 @@ func (a *API) ChatWithAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Build messages for the harness
-	messages := make([]harness.ChatMessage, 0, len(history))
+	messages := make([]harness.ChatMessage, 0, len(history)+1)
+
+	// If the agent has a system_prompt, prepend it as a system message
+	if agent.SystemPrompt.Valid && agent.SystemPrompt.String != "" {
+		messages = append(messages, harness.ChatMessage{
+			Role:    "system",
+			Content: agent.SystemPrompt.String,
+		})
+	}
+
 	for _, m := range history {
 		messages = append(messages, harness.ChatMessage{
 			Role:    m.Role,
@@ -204,7 +251,7 @@ func (a *API) ChatWithAgent(w http.ResponseWriter, r *http.Request) {
 	// Start the chat stream
 	opts := harness.ChatOptions{
 		Model:        req.Model,
-		SystemPrompt: req.SystemPrompt,
+		SystemPrompt: systemPrompt,
 	}
 
 	chunkCh, err := h.Chat(r.Context(), messages, opts)
@@ -250,16 +297,27 @@ func (a *API) ChatWithAgent(w http.ResponseWriter, r *http.Request) {
 
 		if chunk.Done {
 			// Store assistant response
-			a.queries.CreateMessage(r.Context(), db.CreateMessageParams{
+			assistantMsg, storeErr := a.queries.CreateMessage(r.Context(), db.CreateMessageParams{
 				ConversationID: convID,
 				Role:           "assistant",
 				Content:        fullContent,
 				Metadata:       []byte("{}"),
 			})
+			if storeErr != nil {
+				slog.Warn("failed to store assistant message", "error", storeErr)
+			}
 
 			doneData, _ := json.Marshal(map[string]any{
-				"done":            true,
-				"conversation_id": convID.String(),
+				"done":                true,
+				"conversation_id":     convID.String(),
+				"context_sources":     ragSources,
+				"user_message_id":     userMsg.ID.String(),
+				"assistant_message_id": func() string {
+					if storeErr == nil {
+						return assistantMsg.ID.String()
+					}
+					return ""
+				}(),
 			})
 			fmt.Fprintf(w, "event: done\ndata: %s\n\n", doneData)
 			if canFlush {
@@ -281,3 +339,59 @@ func (a *API) ChatWithAgent(w http.ResponseWriter, r *http.Request) {
 
 // ensure Done is recognized by compiler
 var _ = io.EOF
+
+// RAGContext holds the result of a memory search for RAG injection.
+type RAGContext struct {
+	SystemBlock string   // formatted block for injection into system prompt
+	Sources     []string // list of file paths/titles used
+}
+
+// searchMemoryForContext searches the memory_index for notes relevant to the
+// given query and returns a formatted context block suitable for injection
+// into the system prompt. Returns nil if no results are found.
+// Uses a separate context with a 10s timeout to avoid Chi timeout pitfalls.
+func (a *API) searchMemoryForContext(query string) *RAGContext {
+	if query == "" {
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	results, err := a.queries.SearchMemory(ctx, db.SearchMemoryParams{
+		WebsearchToTsquery: query,
+		Limit:              3,
+	})
+	if err != nil {
+		slog.Warn("RAG: memory search failed", "error", err)
+		return nil
+	}
+
+	if len(results) == 0 {
+		return nil
+	}
+
+	var sources []string
+	var sb strings.Builder
+	sb.WriteString("Relevant context from knowledge base:\n---\n")
+	for i, r := range results {
+		title := r.FilePath
+		if r.Title.Valid && r.Title.String != "" {
+			title = r.Title.String
+		}
+		sources = append(sources, title)
+		content := ""
+		if r.Content.Valid {
+			content = r.Content.String
+		}
+		if len(content) > 500 {
+			content = content[:500] + "..."
+		}
+		sb.WriteString(fmt.Sprintf("[%d] %s (%s):\n%s\n---\n", i+1, title, r.FilePath, content))
+	}
+
+	return &RAGContext{
+		SystemBlock: sb.String(),
+		Sources:     sources,
+	}
+}

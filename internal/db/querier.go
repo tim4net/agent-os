@@ -12,28 +12,40 @@ import (
 
 type Querier interface {
 	CountArtifacts(ctx context.Context, dollar_1 string) (int64, error)
+	CountSubtasks(ctx context.Context, parentTaskID pgtype.UUID) (int64, error)
 	CreateAgent(ctx context.Context, arg CreateAgentParams) (Agent, error)
 	CreateArtifact(ctx context.Context, arg CreateArtifactParams) (Artifact, error)
 	CreateConversation(ctx context.Context, arg CreateConversationParams) (Conversation, error)
 	CreateGoal(ctx context.Context, arg CreateGoalParams) (Goal, error)
 	CreateMessage(ctx context.Context, arg CreateMessageParams) (Message, error)
 	CreatePipelineItem(ctx context.Context, arg CreatePipelineItemParams) (PipelineItem, error)
+	CreateSkill(ctx context.Context, arg CreateSkillParams) (Skill, error)
+	CreateSubtask(ctx context.Context, arg CreateSubtaskParams) (Task, error)
 	CreateTask(ctx context.Context, arg CreateTaskParams) (Task, error)
+	CreateWorkflow(ctx context.Context, arg CreateWorkflowParams) (Workflow, error)
+	CreateWorkflowRun(ctx context.Context, arg CreateWorkflowRunParams) (WorkflowRun, error)
 	DeleteAgent(ctx context.Context, id pgtype.UUID) error
 	DeleteArtifact(ctx context.Context, id pgtype.UUID) error
 	DeleteGoal(ctx context.Context, id pgtype.UUID) error
 	DeleteMemory(ctx context.Context, filePath string) error
+	DeleteMessagesByConversation(ctx context.Context, conversationID pgtype.UUID) (int64, error)
 	DeletePipelineItem(ctx context.Context, id pgtype.UUID) error
+	DeleteSkill(ctx context.Context, id pgtype.UUID) error
 	DeleteTask(ctx context.Context, id pgtype.UUID) error
+	DeleteWorkflow(ctx context.Context, id pgtype.UUID) error
 	GetAgent(ctx context.Context, id pgtype.UUID) (Agent, error)
 	GetAgentByName(ctx context.Context, name string) (Agent, error)
 	GetArtifact(ctx context.Context, id pgtype.UUID) (Artifact, error)
 	GetArtifactByPath(ctx context.Context, filePath pgtype.Text) (Artifact, error)
 	GetConversation(ctx context.Context, id pgtype.UUID) (Conversation, error)
 	GetGoal(ctx context.Context, id pgtype.UUID) (Goal, error)
+	GetLatestWorkflowRun(ctx context.Context, workflowID pgtype.UUID) (WorkflowRun, error)
 	GetMemoryByPath(ctx context.Context, filePath string) (MemoryIndex, error)
 	GetPipelineItem(ctx context.Context, id pgtype.UUID) (PipelineItem, error)
+	GetSkill(ctx context.Context, id pgtype.UUID) (Skill, error)
 	GetTask(ctx context.Context, id pgtype.UUID) (Task, error)
+	GetWorkflow(ctx context.Context, id pgtype.UUID) (Workflow, error)
+	GetWorkflowRun(ctx context.Context, id pgtype.UUID) (WorkflowRun, error)
 	ListAgents(ctx context.Context) ([]Agent, error)
 	ListArtifacts(ctx context.Context, arg ListArtifactsParams) ([]Artifact, error)
 	ListConversations(ctx context.Context, dollar_1 pgtype.UUID) ([]Conversation, error)
@@ -41,15 +53,26 @@ type Querier interface {
 	ListMemoryIndex(ctx context.Context) ([]MemoryIndex, error)
 	ListMessages(ctx context.Context, conversationID pgtype.UUID) ([]Message, error)
 	ListPipelineItems(ctx context.Context, arg ListPipelineItemsParams) ([]PipelineItem, error)
+	ListSkills(ctx context.Context) ([]Skill, error)
+	ListSkillsByAgent(ctx context.Context, agentID pgtype.UUID) ([]Skill, error)
+	ListSubtasks(ctx context.Context, parentTaskID pgtype.UUID) ([]Task, error)
 	ListTasks(ctx context.Context, arg ListTasksParams) ([]Task, error)
+	ListVisibleAgents(ctx context.Context) ([]Agent, error)
+	ListWorkflowRuns(ctx context.Context, workflowID pgtype.UUID) ([]WorkflowRun, error)
+	ListWorkflows(ctx context.Context) ([]Workflow, error)
 	SearchMemory(ctx context.Context, arg SearchMemoryParams) ([]MemoryIndex, error)
 	UpdateAgent(ctx context.Context, arg UpdateAgentParams) (Agent, error)
+	UpdateAgentConfig(ctx context.Context, arg UpdateAgentConfigParams) (Agent, error)
 	UpdateAgentStatus(ctx context.Context, arg UpdateAgentStatusParams) (Agent, error)
 	UpdateConversation(ctx context.Context, arg UpdateConversationParams) (Conversation, error)
 	UpdateGoal(ctx context.Context, arg UpdateGoalParams) (Goal, error)
 	UpdatePipelineItem(ctx context.Context, arg UpdatePipelineItemParams) (PipelineItem, error)
+	UpdateSkill(ctx context.Context, arg UpdateSkillParams) (Skill, error)
 	UpdateTask(ctx context.Context, arg UpdateTaskParams) (Task, error)
+	UpdateWorkflow(ctx context.Context, arg UpdateWorkflowParams) (Workflow, error)
+	UpdateWorkflowRun(ctx context.Context, arg UpdateWorkflowRunParams) (WorkflowRun, error)
 	UpsertMemory(ctx context.Context, arg UpsertMemoryParams) (MemoryIndex, error)
+	UpsertSkill(ctx context.Context, arg UpsertSkillParams) (Skill, error)
 }
 
 var _ Querier = (*Queries)(nil)

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import type { Artifact, LinkedNote } from '../../api/client'
-import { deleteArtifact, getArtifactNotes } from '../../api/client'
+import { deleteArtifact, getArtifactNotes, exportArtifact } from '../../api/client'
+import { showToast } from '../Toast'
 
 interface ArtifactPreviewProps {
   artifact: Artifact
@@ -10,8 +11,11 @@ interface ArtifactPreviewProps {
 
 export function ArtifactPreview({ artifact, onClose, onDeleted }: ArtifactPreviewProps) {
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [exporting, setExporting] = useState(false)
   const [notes, setNotes] = useState<LinkedNote[]>([])
   const [loadingNotes, setLoadingNotes] = useState(true)
+  const [textContent, setTextContent] = useState<string | null>(null)
+  const [loadingText, setLoadingText] = useState(false)
 
   useEffect(() => {
     getArtifactNotes(artifact.id)
@@ -19,6 +23,21 @@ export function ArtifactPreview({ artifact, onClose, onDeleted }: ArtifactPrevie
       .catch(() => setNotes([]))
       .finally(() => setLoadingNotes(false))
   }, [artifact.id])
+
+  // Fetch actual content for code/text artifacts
+  useEffect(() => {
+    if (artifact.artifact_type === 'code' || artifact.artifact_type === 'text') {
+      setLoadingText(true)
+      fetch(`/api/artifacts/${artifact.id}/file`)
+        .then((res) => {
+          if (!res.ok) throw new Error('Failed to fetch')
+          return res.text()
+        })
+        .then((text) => setTextContent(text))
+        .catch(() => setTextContent(artifact.metadata?.['preview'] ?? null))
+        .finally(() => setLoadingText(false))
+    }
+  }, [artifact.id, artifact.artifact_type, artifact.metadata])
 
   function handleDelete() {
     if (!confirmDelete) {
@@ -28,6 +47,18 @@ export function ArtifactPreview({ artifact, onClose, onDeleted }: ArtifactPrevie
     deleteArtifact(artifact.id)
       .then(onDeleted)
       .catch((err) => console.error('Delete failed:', err))
+  }
+
+  async function handleExport() {
+    setExporting(true)
+    try {
+      const result = await exportArtifact(artifact.id)
+      showToast(`Exported to Obsidian: ${result.path}`, 'success')
+    } catch {
+      showToast('Failed to export artifact', 'error')
+    } finally {
+      setExporting(false)
+    }
   }
 
   const fileUrl = `/api/artifacts/${artifact.id}/file`
@@ -61,22 +92,28 @@ export function ArtifactPreview({ artifact, onClose, onDeleted }: ArtifactPrevie
       case 'code':
         return (
           <pre className="bg-gray-950 rounded p-4 overflow-auto max-h-[70vh] text-sm text-gray-200 border border-gray-800">
-            <code>{artifact.metadata?.['preview'] ?? artifact.filename}</code>
+            <code>{loadingText ? 'Loading...' : (textContent ?? artifact.metadata?.['preview'] ?? artifact.filename)}</code>
           </pre>
         )
       case 'text':
       default:
         return (
           <div className="bg-gray-950 rounded p-4 overflow-auto max-h-[70vh] text-sm text-gray-200 border border-gray-800 whitespace-pre-wrap">
-            {artifact.metadata?.['preview'] ?? `Text artifact: ${artifact.filename}`}
+            {loadingText ? 'Loading...' : (textContent ?? artifact.metadata?.['preview'] ?? `Text artifact: ${artifact.filename}`)}
           </div>
         )
     }
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-      <div className="bg-gray-900 rounded-lg border border-gray-700 w-full max-w-4xl mx-4 max-h-[90vh] flex flex-col shadow-2xl">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Preview ${artifact.filename}`}
+        className="bg-gray-900 rounded-lg border border-gray-700 w-full max-w-4xl mx-4 max-h-[90vh] flex flex-col shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-gray-800">
           <div className="min-w-0">
@@ -131,6 +168,14 @@ export function ArtifactPreview({ artifact, onClose, onDeleted }: ArtifactPrevie
 
         {/* Footer actions */}
         <div className="flex items-center justify-end gap-3 p-4 border-t border-gray-800">
+          <button
+            onClick={handleExport}
+            disabled={exporting}
+            className="px-4 py-2 text-sm font-medium rounded bg-gray-800 text-gray-200 hover:bg-gray-700 transition-colors disabled:opacity-50"
+            aria-label="Export to Obsidian"
+          >
+            {exporting ? 'Exporting...' : '📄 Export to Obsidian'}
+          </button>
           <a
             href={fileUrl}
             download={artifact.filename}

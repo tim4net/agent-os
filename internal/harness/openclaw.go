@@ -62,6 +62,8 @@ func (o *OpenClawHarness) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	return nil, ErrNotSupported
 }
 
+func (o *OpenClawHarness) Commands() []Command { return nil }
+
 func (o *OpenClawHarness) Close() error {
 	o.httpClient.CloseIdleConnections()
 	return nil

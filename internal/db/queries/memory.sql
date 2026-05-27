@@ -16,8 +16,8 @@ RETURNING *;
 
 -- name: SearchMemory :many
 SELECT * FROM memory_index
-WHERE to_tsvector('english', coalesce(content, '')) @@ plainto_tsquery('english', $1)
-ORDER BY ts_rank(to_tsvector('english', coalesce(content, '')), plainto_tsquery('english', $1)) DESC
+WHERE to_tsvector('english', coalesce(content, '')) @@ websearch_to_tsquery('english', $1)
+ORDER BY ts_rank(to_tsvector('english', coalesce(content, '')), websearch_to_tsquery('english', $1)) DESC
 LIMIT $2;
 
 -- name: DeleteMemory :exec

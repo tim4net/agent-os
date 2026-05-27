@@ -92,7 +92,7 @@ func NewStudioAPI(queries *db.Queries, artifactsPath string, keys map[string]str
 	s.providerInfo["gemini"] = ProviderInfo{
 		Name:        "gemini",
 		Type:        "image",
-		Models:      []string{"gemini-2.0-flash-exp"},
+		Models:      []string{"gemini-2.5-flash-image", "gemini-3.1-flash-image-preview", "gemini-3-pro-image-preview"},
 		RequiresKey: true,
 		Available:   geminiKey != "",
 	}
@@ -103,7 +103,7 @@ func NewStudioAPI(queries *db.Queries, artifactsPath string, keys map[string]str
 	s.providerInfo["fal"] = ProviderInfo{
 		Name:        "fal",
 		Type:        "image",
-		Models:      []string{"flux/schnell", "flux/dev"},
+		Models:      []string{"flux/schnell", "flux/dev", "flux-2-klein"},
 		RequiresKey: true,
 		Available:   falKey != "",
 	}
@@ -117,6 +117,7 @@ type GenerateRequest struct {
 	Type     string `json:"type"`     // "image", "video", "audio"
 	Model    string `json:"model"`
 	Provider string `json:"provider"`
+	AgentID  string `json:"agent_id"` // optional: associate artifact with an agent
 }
 
 // StudioRoutes returns a Chi router with studio routes.
@@ -253,8 +254,16 @@ func (s *StudioAPI) Generate(w http.ResponseWriter, r *http.Request) {
 	}
 	metaBytes, _ := json.Marshal(metadata)
 
+	// Parse optional agent_id
+	var agentID pgtype.UUID
+	if req.AgentID != "" {
+		if err := agentID.Scan(req.AgentID); err != nil {
+			agentID = pgtype.UUID{Valid: false}
+		}
+	}
+
 	artifact, err := s.queries.CreateArtifact(r.Context(), db.CreateArtifactParams{
-		AgentID:     pgtype.UUID{Valid: false},
+		AgentID:     agentID,
 		Type:        req.Type,
 		Title:       pgtype.Text{String: title, Valid: true},
 		Description: pgtype.Text{String: req.Prompt, Valid: true},

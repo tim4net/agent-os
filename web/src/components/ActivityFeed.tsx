@@ -10,18 +10,18 @@ export interface ActivityEvent {
   target?: string
 }
 
-function eventIcon(type: string): string {
+function eventColor(type: string): string {
   switch (type) {
     case 'agent_status':
-      return '🟢'
+      return 'bg-emerald-400/80'
     case 'chat':
-      return '💬'
+      return 'bg-blue-400/80'
     case 'artifact':
-      return '📎'
+      return 'bg-amber-400/80'
     case 'task':
-      return '✅'
+      return 'bg-purple-400/80'
     default:
-      return '•'
+      return 'bg-gray-400/60'
   }
 }
 
@@ -37,8 +37,16 @@ function relativeTime(dateStr: string): string {
   return `${days}d ago`
 }
 
-function mapSSEToActivity(event: SSEEvent): ActivityEvent {
+function mapSSEToActivity(event: SSEEvent): ActivityEvent | null {
+  // Filter out noisy background events
+  const ignoredTypes = ['memory_indexed', 'keepalive', 'connected']
+  if (ignoredTypes.includes(event.type)) return null
+
+  // Filter litellm status events — it's infrastructure, not an agent
   const data = event.data as Record<string, unknown>
+  const summary = (data['summary'] as string) ?? (data['message'] as string) ?? ''
+  if (summary.toLowerCase().includes('litellm')) return null
+
   const typeMap: Record<string, ActivityEvent['type']> = {
     agent_status_changed: 'agent_status',
     chat_message: 'chat',
@@ -48,7 +56,7 @@ function mapSSEToActivity(event: SSEEvent): ActivityEvent {
   return {
     id: crypto.randomUUID(),
     type: typeMap[event.type] ?? 'other',
-    summary: (data['summary'] as string) ?? (data['message'] as string) ?? event.type,
+    summary: summary || event.type,
     timestamp: new Date().toISOString(),
     target: (data['target'] as string) ?? (data['tab'] as string),
   }
@@ -65,7 +73,15 @@ export function ActivityFeed({ onNavigate }: ActivityFeedProps) {
   const loadEvents = useCallback(async () => {
     try {
       const data = await getActivity(50, 0)
-      setEvents(Array.isArray(data) ? data : [])
+      // Filter out noisy background events from initial load
+      const filtered = (Array.isArray(data) ? data : []).filter(
+        (e) => {
+          if (e.type === 'other' && e.summary?.toLowerCase().includes('memory indexed')) return false
+          if (e.summary?.toLowerCase().includes('litellm')) return false
+          return true
+        }
+      )
+      setEvents(filtered)
     } catch {
       // backend may not return events yet, use empty
       setEvents([])
@@ -85,6 +101,7 @@ export function ActivityFeed({ onNavigate }: ActivityFeedProps) {
       try {
         const parsed = JSON.parse(e.data) as SSEEvent
         const activity = mapSSEToActivity(parsed)
+        if (!activity) return // skip filtered events
         setEvents((prev) => [activity, ...prev].slice(0, 200))
       } catch {
         // ignore malformed
@@ -113,13 +130,13 @@ export function ActivityFeed({ onNavigate }: ActivityFeedProps) {
 
   if (loading) {
     return (
-      <div className="space-y-3">
+      <div className="space-y-3 stagger-children">
         {Array.from({ length: 5 }).map((_, i) => (
-          <div key={i} className="flex items-start gap-3 animate-pulse">
-            <div className="w-6 h-6 bg-gray-800 rounded-full shrink-0" />
+          <div key={i} className="flex items-start gap-3 animate-pulse pl-4">
+            <div className="w-5 h-5 bg-[var(--bg-elevated)] rounded-full shrink-0" />
             <div className="flex-1">
-              <div className="h-4 bg-gray-800 rounded w-3/4 mb-1" />
-              <div className="h-3 bg-gray-800 rounded w-1/4" />
+              <div className="h-4 bg-[var(--bg-elevated)] rounded w-3/4 mb-1" />
+              <div className="h-3 bg-[var(--bg-elevated)] rounded w-1/4" />
             </div>
           </div>
         ))}
@@ -129,25 +146,39 @@ export function ActivityFeed({ onNavigate }: ActivityFeedProps) {
 
   if (events.length === 0) {
     return (
-      <p className="text-gray-500 text-sm py-8 text-center">No activity yet. Events will appear here as they occur.</p>
+      <p className="text-[var(--color-text-muted)] text-sm py-8 text-center">No activity yet. Events will appear here as they occur.</p>
     )
   }
 
   return (
-    <div className="space-y-1 max-h-[70vh] overflow-y-auto pr-1">
-      {events.map((event) => (
-        <button
-          key={event.id}
-          onClick={() => handleClick(event)}
-          className="w-full flex items-start gap-3 px-3 py-2.5 rounded-lg hover:bg-gray-800/50 transition-colors text-left group"
-        >
-          <span className="text-base shrink-0 mt-0.5">{eventIcon(event.type)}</span>
-          <div className="flex-1 min-w-0">
-            <p className="text-sm text-gray-200 group-hover:text-white transition-colors truncate">{event.summary}</p>
-            <p className="text-xs text-gray-500 mt-0.5">{relativeTime(event.timestamp)}</p>
-          </div>
-        </button>
-      ))}
+    <div className="relative max-h-[70vh] overflow-y-auto pr-1">
+      {/* Timeline left border line */}
+      <div className="absolute left-[7px] top-2 bottom-2 w-px bg-[var(--color-border-subtle)]/40" />
+
+      <div className="space-y-1 stagger-children">
+        {events.map((event) => (
+          <button
+            key={event.id}
+            onClick={() => handleClick(event)}
+            className="fade-in w-full flex items-center gap-3 pl-4 pr-2 py-2 rounded-lg hover:bg-[var(--bg-elevated)]/30 transition-colors text-left group"
+          >
+            {/* Colored circle icon */}
+            <span className={`relative z-10 inline-block w-3.5 h-3.5 rounded-full shrink-0 ${eventColor(event.type)} ring-2 ring-[var(--bg-base)]`} />
+
+            {/* Summary */}
+            <div className="flex-1 min-w-0">
+              <p className="text-sm text-[var(--color-text-secondary)] group-hover:text-[var(--color-text-primary)] transition-colors truncate">
+                {event.summary}
+              </p>
+            </div>
+
+            {/* Timestamp on the right */}
+            <span className="text-[10px] text-[var(--color-text-muted)]/50 shrink-0 ml-2 tabular-nums">
+              {relativeTime(event.timestamp)}
+            </span>
+          </button>
+        ))}
+      </div>
     </div>
   )
 }

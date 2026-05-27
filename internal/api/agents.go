@@ -10,9 +10,9 @@ import (
 	"github.com/tim4net/agent-os/internal/harness"
 )
 
-// ListAgents returns all registered agents.
+// ListAgents returns all visible agents (filtered by backend visibility).
 func (a *API) ListAgents(w http.ResponseWriter, r *http.Request) {
-	agents, err := a.queries.ListAgents(r.Context())
+	agents, err := a.queries.ListVisibleAgents(r.Context())
 	if err != nil {
 		http.Error(w, "failed to list agents", http.StatusInternalServerError)
 		return
@@ -80,7 +80,76 @@ func (a *API) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(agent)
 }
 
+// UpdateAgentConfigRequest is the request body for updating agent config.
+type UpdateAgentConfigRequest struct {
+	Role         string          `json:"role"`
+	SystemPrompt string          `json:"system_prompt"`
+	Persona      json.RawMessage `json:"persona"`
+}
+
+// UpdateAgentConfig handles PATCH /api/agents/{id} to update role, system_prompt, persona.
+func (a *API) UpdateAgentConfig(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+
+	var id pgtype.UUID
+	if err := id.Scan(idStr); err != nil {
+		http.Error(w, "invalid agent ID", http.StatusBadRequest)
+		return
+	}
+
+	var req UpdateAgentConfigRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	persona := []byte("{}")
+	if len(req.Persona) > 0 {
+		persona = req.Persona
+	}
+
+	agent, err := a.queries.UpdateAgentConfig(r.Context(), db.UpdateAgentConfigParams{
+		ID:           id,
+		Role:         pgtype.Text{String: req.Role, Valid: true},
+		SystemPrompt: pgtype.Text{String: req.SystemPrompt, Valid: true},
+		Persona:      persona,
+	})
+	if err != nil {
+		http.Error(w, "failed to update agent config: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(agent)
+}
+
+// GetAgentConfig handles GET /api/agents/{id}/config and returns role, system_prompt, persona.
+func (a *API) GetAgentConfig(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+
+	var id pgtype.UUID
+	if err := id.Scan(idStr); err != nil {
+		http.Error(w, "invalid agent ID", http.StatusBadRequest)
+		return
+	}
+
+	agent, err := a.queries.GetAgent(r.Context(), id)
+	if err != nil {
+		http.Error(w, "agent not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"id":            agent.ID,
+		"role":          agent.Role,
+		"system_prompt": agent.SystemPrompt,
+		"persona":       agent.Persona,
+	})
+}
+
 // GetAgentModels proxies the model list request to the agent's harness.
+// It enriches model info with display names from a server-side mapping.
 func (a *API) GetAgentModels(w http.ResponseWriter, r *http.Request) {
 	idStr := chi.URLParam(r, "id")
 
@@ -119,6 +188,69 @@ func (a *API) GetAgentModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Enrich with server-side display names
+	for i := range models {
+		models[i].DisplayName = modelDisplayName(models[i].ID)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(models)
+}
+
+// modelDisplayName returns a human-friendly name for a model ID.
+// This mapping lives server-side so the frontend doesn't need a label map.
+func modelDisplayName(id string) string {
+	names := map[string]string{
+		"local-qwen":  "Qwen (Local)",
+		"local-chat":  "Chat (Local)",
+		"free-chat":   "Chat (Free)",
+		"free-fast":   "Fast (Free)",
+		"free-deep":   "Deep Think (Free)",
+		"free-gpt":    "GPT (Free)",
+		"clovis":      "Clovis",
+	}
+	if name, ok := names[id]; ok {
+		return name
+	}
+	return id
+}
+
+// GetAgentCommands returns the slash commands available for an agent's harness.
+func (a *API) GetAgentCommands(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+
+	var id pgtype.UUID
+	if err := id.Scan(idStr); err != nil {
+		http.Error(w, "invalid agent ID", http.StatusBadRequest)
+		return
+	}
+
+	agent, err := a.queries.GetAgent(r.Context(), id)
+	if err != nil {
+		http.Error(w, "agent not found", http.StatusNotFound)
+		return
+	}
+
+	h, err := a.registry.Get(agent.Harness)
+	if err != nil {
+		http.Error(w, "unknown harness: "+agent.Harness, http.StatusBadRequest)
+		return
+	}
+
+	config := a.buildHarnessConfig(agent)
+	if err := h.Init(config); err != nil {
+		// Return empty commands if harness can't init (e.g., offline agent)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode([]harness.Command{})
+		return
+	}
+	defer h.Close()
+
+	commands := h.Commands()
+	if commands == nil {
+		commands = []harness.Command{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(commands)
 }

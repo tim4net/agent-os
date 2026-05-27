@@ -4,18 +4,6 @@ interface AgentCardProps {
   agent: Agent
 }
 
-function statusBadge(status: string): { bg: string; text: string } {
-  switch (status) {
-    case 'online':
-      return { bg: 'bg-green-900/50', text: 'text-green-400' }
-    case 'offline':
-    case 'error':
-      return { bg: 'bg-red-900/50', text: 'text-red-400' }
-    default:
-      return { bg: 'bg-gray-800', text: 'text-gray-400' }
-  }
-}
-
 function relativeTime(dateStr: string | null): string {
   if (!dateStr) return 'Never'
   const diff = Date.now() - new Date(dateStr).getTime()
@@ -29,22 +17,55 @@ function relativeTime(dateStr: string | null): string {
   return `${days}d ago`
 }
 
+function dotColor(status: string): string {
+  switch (status) {
+    case 'online':
+      return 'bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.5)]'
+    case 'offline':
+    case 'error':
+      return 'bg-red-400 shadow-[0_0_6px_rgba(248,113,113,0.4)]'
+    default:
+      return 'bg-gray-500'
+  }
+}
+
 export function AgentCard({ agent }: AgentCardProps) {
-  const badge = statusBadge(agent.status)
+  const isOnline = agent.status === 'online'
 
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 hover:border-gray-700 transition-colors">
-      <div className="flex items-center justify-between mb-2">
-        <h3 className="text-sm font-semibold text-white truncate">
+    <div
+      className={`
+        glass-card p-4 rounded-xl
+        transition-all duration-300 ease-out
+        hover:translate-y-[-2px]
+        ${isOnline ? 'hover:shadow-[0_4px_20px_rgba(91,141,239,0.08)]' : 'hover:shadow-[0_4px_16px_rgba(0,0,0,0.2)]'}
+      `}
+    >
+      <div className="flex items-center justify-between mb-2.5">
+        <h3
+          className={`text-sm font-semibold truncate ${
+            isOnline ? 'gradient-text' : 'text-[var(--color-text-primary)]'
+          }`}
+        >
           {agent.display_name || agent.name}
         </h3>
-        <span className={`text-xs px-2 py-0.5 rounded-full ${badge.bg} ${badge.text}`}>
-          {agent.status}
-        </span>
+        {/* Glowing status dot */}
+        <span className={`inline-block w-2 h-2 rounded-full shrink-0 ml-2 ${dotColor(agent.status)}`} />
       </div>
-      <div className="flex items-center justify-between text-xs text-gray-500">
-        <span>{agent.harness}</span>
-        <span>{relativeTime(agent.last_seen)}</span>
+      {agent.role && (
+        <p className="text-[11px] text-[var(--color-text-muted)] mb-2 line-clamp-2 leading-relaxed">
+          {agent.role}
+        </p>
+      )}
+      <div className="flex items-center justify-between">
+        {/* Harness type as subtle monospace tag */}
+        <span className="text-[10px] font-mono text-[var(--color-text-muted)]/70 bg-[var(--bg-elevated)]/50 px-1.5 py-0.5 rounded">
+          {agent.harness}
+        </span>
+        {/* Last seen timestamp */}
+        <span className="text-[10px] text-[var(--color-text-muted)]/50">
+          {relativeTime(agent.last_seen)}
+        </span>
       </div>
     </div>
   )

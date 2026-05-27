@@ -1,12 +1,14 @@
 import { useState, useEffect } from 'react'
 import type { Task, Agent, LinkedNote } from '../../api/client'
-import { getTaskNotes } from '../../api/client'
+import { getTaskNotes, breakdownTask } from '../../api/client'
 
 interface CardProps {
   task: Task
   agents: Agent[]
+  subtaskCount?: number
   onDelete: (id: string) => void
   onUpdate: (id: string, data: Record<string, unknown>) => void
+  onBreakdown?: (id: string) => void
 }
 
 const priorityColors: Record<number, string> = {
@@ -25,7 +27,7 @@ const priorityLabels: Record<number, string> = {
   5: 'Minimal',
 }
 
-export function Card({ task, agents, onDelete, onUpdate }: CardProps) {
+export function Card({ task, agents, subtaskCount = 0, onDelete, onUpdate, onBreakdown }: CardProps) {
   const [expanded, setExpanded] = useState(false)
   const [editing, setEditing] = useState(false)
   const [editTitle, setEditTitle] = useState(task.title)
@@ -33,6 +35,8 @@ export function Card({ task, agents, onDelete, onUpdate }: CardProps) {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [notes, setNotes] = useState<LinkedNote[]>([])
   const [loadingNotes, setLoadingNotes] = useState(false)
+  const [breakingDown, setBreakingDown] = useState(false)
+  const [breakdownError, setBreakdownError] = useState<string | null>(null)
 
   const agent = agents.find((a) => a.id === task.agent_id)
 
@@ -65,6 +69,21 @@ export function Card({ task, agents, onDelete, onUpdate }: CardProps) {
     onDelete(task.id)
   }
 
+  async function handleBreakdown(e: React.MouseEvent) {
+    e.stopPropagation()
+    if (breakingDown) return
+    setBreakingDown(true)
+    setBreakdownError(null)
+    try {
+      await breakdownTask(task.id)
+      onBreakdown?.(task.id)
+    } catch (err) {
+      setBreakdownError(err instanceof Error ? err.message : 'Breakdown failed')
+    } finally {
+      setBreakingDown(false)
+    }
+  }
+
   return (
     <div
       draggable={!expanded}
@@ -72,19 +91,72 @@ export function Card({ task, agents, onDelete, onUpdate }: CardProps) {
         e.dataTransfer.setData('text/plain', task.id)
         e.dataTransfer.effectAllowed = 'move'
       }}
-      className="bg-gray-800 border border-gray-700 rounded-lg p-3 cursor-pointer hover:border-gray-600 transition-colors"
+      role="listitem"
+      aria-label={`${task.title} - Priority ${task.priority}`}
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          setExpanded(!expanded)
+        }
+      }}
+      className="bg-gray-800 border border-gray-700 rounded-lg p-3 cursor-grab active:cursor-grabbing hover:border-gray-600 transition-colors group"
       onClick={() => { if (!editing) setExpanded(!expanded) }}
     >
+      {/* Drag handle + Title row */}
       <div className="flex items-start justify-between gap-2">
-        <h4 className="text-sm font-medium text-white flex-1 min-w-0 truncate">
-          {task.title}
-        </h4>
-        <span
-          className={`${priorityColors[task.priority] ?? 'bg-gray-500'} text-white text-xs px-2 py-0.5 rounded-full shrink-0`}
-          title={priorityLabels[task.priority] ?? ''}
-        >
-          P{task.priority}
-        </span>
+        <div className="flex items-center gap-2 flex-1 min-w-0">
+          {/* Grab handle icon */}
+          <span
+            className="text-gray-600 group-hover:text-gray-400 transition-colors cursor-grab active:cursor-grabbing select-none flex-shrink-0"
+            aria-hidden="true"
+            title="Drag to reorder"
+          >
+            <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="currentColor">
+              <circle cx="5" cy="3" r="1.5" />
+              <circle cx="11" cy="3" r="1.5" />
+              <circle cx="5" cy="8" r="1.5" />
+              <circle cx="11" cy="8" r="1.5" />
+              <circle cx="5" cy="13" r="1.5" />
+              <circle cx="11" cy="13" r="1.5" />
+            </svg>
+          </span>
+          <h4 className="text-sm font-medium text-white truncate">
+            {task.title}
+          </h4>
+          {subtaskCount > 0 && (
+            <span
+              className="text-xs bg-purple-600/30 text-purple-300 px-1.5 py-0.5 rounded-full shrink-0"
+              title={`${subtaskCount} subtask${subtaskCount !== 1 ? 's' : ''}`}
+            >
+              {subtaskCount}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <button
+            onClick={handleBreakdown}
+            disabled={breakingDown}
+            aria-label="Break down with AI"
+            className="text-gray-400 hover:text-yellow-400 disabled:text-gray-600 transition-colors"
+            title="AI Breakdown"
+          >
+            {breakingDown ? (
+              <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+              </svg>
+            ) : (
+              <span className="text-sm">✨</span>
+            )}
+          </button>
+          <span
+            className={`${priorityColors[task.priority] ?? 'bg-gray-500'} text-white text-xs px-2 py-0.5 rounded-full`}
+            title={priorityLabels[task.priority] ?? ''}
+          >
+            P{task.priority}
+          </span>
+        </div>
       </div>
 
       <div className="flex items-center gap-2 mt-2 text-xs text-gray-400">
@@ -97,6 +169,10 @@ export function Card({ task, agents, onDelete, onUpdate }: CardProps) {
           <span>Due {new Date(task.due_date).toLocaleDateString()}</span>
         )}
       </div>
+
+      {breakdownError && (
+        <p className="text-xs text-red-400 mt-2">{breakdownError}</p>
+      )}
 
       {expanded && !editing && (
         <div className="mt-3 pt-3 border-t border-gray-700">
@@ -137,6 +213,14 @@ export function Card({ task, agents, onDelete, onUpdate }: CardProps) {
               className="text-xs px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded transition-colors"
             >
               Edit
+            </button>
+            <button
+              onClick={handleBreakdown}
+              disabled={breakingDown}
+              aria-label="Break down with AI"
+              className="text-xs px-3 py-1 bg-purple-700 hover:bg-purple-600 disabled:bg-gray-700 disabled:text-gray-500 rounded transition-colors"
+            >
+              {breakingDown ? 'Breaking down...' : '✨ AI Breakdown'}
             </button>
             <button
               onClick={(e) => { e.stopPropagation(); handleDelete() }}

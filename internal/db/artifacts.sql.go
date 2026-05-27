@@ -12,7 +12,7 @@ import (
 )
 
 const countArtifacts = `-- name: CountArtifacts :one
-SELECT COUNT(*) FROM artifacts WHERE ($1::text IS NULL OR type = $1)
+SELECT COUNT(*) FROM artifacts WHERE ($1::text IS NULL OR $1::text = '' OR type = $1)
 `
 
 func (q *Queries) CountArtifacts(ctx context.Context, dollar_1 string) (int64, error) {
@@ -116,7 +116,7 @@ func (q *Queries) GetArtifactByPath(ctx context.Context, filePath pgtype.Text) (
 
 const listArtifacts = `-- name: ListArtifacts :many
 SELECT id, agent_id, type, title, description, file_path, mime_type, metadata, created_at FROM artifacts
-WHERE ($1::text IS NULL OR type = $1)
+WHERE ($1::text IS NULL OR $1::text = '' OR type = $1)
   AND ($2::uuid IS NULL OR agent_id = $2)
 ORDER BY created_at DESC
 LIMIT $3 OFFSET $4

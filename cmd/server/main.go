@@ -82,7 +82,7 @@ func main() {
 		"gemini":     cfg.GeminiAPIKey,
 		"fal":        cfg.FALKey,
 	}
-	a := api.NewAPI(queries, harness.DefaultRegistry, bus, feed, cfg.LiteLLMURL, cfg.ArtifactsPath, cfg.ObsidianPath, apiKeys, cfg.HermesAPIKey)
+	a := api.NewAPI(queries, harness.DefaultRegistry, bus, feed, cfg.LiteLLMURL, cfg.ArtifactsPath, cfg.ObsidianPath, cfg.HermesSkillsPath, apiKeys, cfg.HermesAPIKey)
 	r.Mount("/api", a.Router())
 
 	// Start server with graceful shutdown

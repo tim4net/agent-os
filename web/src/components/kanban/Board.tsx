@@ -21,6 +21,7 @@ export function Board({ agents }: BoardProps) {
   const [agentFilter, setAgentFilter] = useState<string>('')
   const [showModal, setShowModal] = useState(false)
   const [modalStatus, setModalStatus] = useState<string>('backlog')
+  const [dragOverColumn, setDragOverColumn] = useState<string | null>(null)
 
   const loadTasks = useCallback(async () => {
     setLoading(true)
@@ -86,6 +87,7 @@ export function Board({ agents }: BoardProps) {
 
   async function handleDrop(e: React.DragEvent, newStatus: string) {
     e.preventDefault()
+    setDragOverColumn(null)
     const taskId = e.dataTransfer.getData('text/plain')
     if (!taskId) return
 
@@ -116,6 +118,10 @@ export function Board({ agents }: BoardProps) {
   function handleDragOver(e: React.DragEvent) {
     e.preventDefault()
     e.dataTransfer.dropEffect = 'move'
+  }
+
+  function handleDragLeave() {
+    setDragOverColumn(null)
   }
 
   return (
@@ -155,9 +161,16 @@ export function Board({ agents }: BoardProps) {
             return (
               <div
                 key={col.key}
-                className="flex-shrink-0 w-72 bg-gray-900/50 rounded-lg border border-gray-800 flex flex-col"
-                onDragOver={handleDragOver}
-                onDrop={(e) => handleDrop(e, col.key)}
+                role="list"
+                aria-label={`${col.label} column`}
+                className={`flex-shrink-0 w-72 bg-gray-900/50 rounded-lg border flex flex-col transition-colors ${
+                  dragOverColumn === col.key
+                    ? 'border-blue-500/60 bg-blue-950/20 ring-1 ring-blue-500/30'
+                    : 'border-gray-800'
+                }`}
+                onDragOver={(e) => { handleDragOver(e); setDragOverColumn(col.key) }}
+                onDragLeave={handleDragLeave}
+                onDrop={(e) => { handleDrop(e, col.key) }}
               >
                 {/* Column header */}
                 <div className="flex items-center justify-between px-3 py-2 border-b border-gray-800">
@@ -188,6 +201,7 @@ export function Board({ agents }: BoardProps) {
                         agents={agents}
                         onDelete={handleDeleteTask}
                         onUpdate={handleUpdateTask}
+                        onBreakdown={() => loadTasks()}
                       />
                     ))
                   )}

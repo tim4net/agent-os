@@ -19,3 +19,15 @@ RETURNING *;
 
 -- name: DeleteTask :exec
 DELETE FROM tasks WHERE id = $1;
+
+-- name: CreateSubtask :one
+INSERT INTO tasks (agent_id, title, description, status, priority, metadata, parent_task_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING *;
+
+-- name: ListSubtasks :many
+SELECT * FROM tasks WHERE parent_task_id = $1
+ORDER BY priority DESC, created_at ASC;
+
+-- name: CountSubtasks :one
+SELECT COUNT(*) FROM tasks WHERE parent_task_id = $1;

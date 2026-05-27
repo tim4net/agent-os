@@ -9,16 +9,20 @@ import (
 )
 
 type Agent struct {
-	ID          pgtype.UUID        `json:"id"`
-	Name        string             `json:"name"`
-	DisplayName string             `json:"display_name"`
-	Harness     string             `json:"harness"`
-	BaseUrl     string             `json:"base_url"`
-	Status      string             `json:"status"`
-	Metadata    []byte             `json:"metadata"`
-	LastSeen    pgtype.Timestamptz `json:"last_seen"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	ID           pgtype.UUID        `json:"id"`
+	Name         string             `json:"name"`
+	DisplayName  string             `json:"display_name"`
+	Harness      string             `json:"harness"`
+	BaseUrl      string             `json:"base_url"`
+	Status       string             `json:"status"`
+	Metadata     []byte             `json:"metadata"`
+	LastSeen     pgtype.Timestamptz `json:"last_seen"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+	Role         pgtype.Text        `json:"role"`
+	SystemPrompt pgtype.Text        `json:"system_prompt"`
+	Persona      []byte             `json:"persona"`
+	Visible      bool               `json:"visible"`
 }
 
 type Artifact struct {
@@ -84,14 +88,47 @@ type PipelineItem struct {
 	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
 }
 
-type Task struct {
+type Skill struct {
 	ID          pgtype.UUID        `json:"id"`
+	Name        string             `json:"name"`
+	Description string             `json:"description"`
+	Category    string             `json:"category"`
+	Content     string             `json:"content"`
+	Triggers    []string           `json:"triggers"`
 	AgentID     pgtype.UUID        `json:"agent_id"`
-	Title       string             `json:"title"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type Task struct {
+	ID           pgtype.UUID        `json:"id"`
+	AgentID      pgtype.UUID        `json:"agent_id"`
+	Title        string             `json:"title"`
+	Description  pgtype.Text        `json:"description"`
+	Status       string             `json:"status"`
+	Priority     pgtype.Int4        `json:"priority"`
+	Metadata     []byte             `json:"metadata"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+	ParentTaskID pgtype.UUID        `json:"parent_task_id"`
+}
+
+type Workflow struct {
+	ID          pgtype.UUID        `json:"id"`
+	Name        string             `json:"name"`
 	Description pgtype.Text        `json:"description"`
-	Status      string             `json:"status"`
-	Priority    pgtype.Int4        `json:"priority"`
-	Metadata    []byte             `json:"metadata"`
+	Steps       []byte             `json:"steps"`
+	AgentID     pgtype.UUID        `json:"agent_id"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type WorkflowRun struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkflowID  pgtype.UUID        `json:"workflow_id"`
+	Status      pgtype.Text        `json:"status"`
+	CurrentStep pgtype.Int4        `json:"current_step"`
+	Result      []byte             `json:"result"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }

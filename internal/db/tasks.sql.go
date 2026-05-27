@@ -11,10 +11,63 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countSubtasks = `-- name: CountSubtasks :one
+SELECT COUNT(*) FROM tasks WHERE parent_task_id = $1
+`
+
+func (q *Queries) CountSubtasks(ctx context.Context, parentTaskID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countSubtasks, parentTaskID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const createSubtask = `-- name: CreateSubtask :one
+INSERT INTO tasks (agent_id, title, description, status, priority, metadata, parent_task_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id, agent_id, title, description, status, priority, metadata, created_at, updated_at, parent_task_id
+`
+
+type CreateSubtaskParams struct {
+	AgentID      pgtype.UUID `json:"agent_id"`
+	Title        string      `json:"title"`
+	Description  pgtype.Text `json:"description"`
+	Status       string      `json:"status"`
+	Priority     pgtype.Int4 `json:"priority"`
+	Metadata     []byte      `json:"metadata"`
+	ParentTaskID pgtype.UUID `json:"parent_task_id"`
+}
+
+func (q *Queries) CreateSubtask(ctx context.Context, arg CreateSubtaskParams) (Task, error) {
+	row := q.db.QueryRow(ctx, createSubtask,
+		arg.AgentID,
+		arg.Title,
+		arg.Description,
+		arg.Status,
+		arg.Priority,
+		arg.Metadata,
+		arg.ParentTaskID,
+	)
+	var i Task
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.Title,
+		&i.Description,
+		&i.Status,
+		&i.Priority,
+		&i.Metadata,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ParentTaskID,
+	)
+	return i, err
+}
+
 const createTask = `-- name: CreateTask :one
 INSERT INTO tasks (agent_id, title, description, status, priority, metadata)
 VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, agent_id, title, description, status, priority, metadata, created_at, updated_at
+RETURNING id, agent_id, title, description, status, priority, metadata, created_at, updated_at, parent_task_id
 `
 
 type CreateTaskParams struct {
@@ -46,6 +99,7 @@ func (q *Queries) CreateTask(ctx context.Context, arg CreateTaskParams) (Task, e
 		&i.Metadata,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ParentTaskID,
 	)
 	return i, err
 }
@@ -60,7 +114,7 @@ func (q *Queries) DeleteTask(ctx context.Context, id pgtype.UUID) error {
 }
 
 const getTask = `-- name: GetTask :one
-SELECT id, agent_id, title, description, status, priority, metadata, created_at, updated_at FROM tasks WHERE id = $1
+SELECT id, agent_id, title, description, status, priority, metadata, created_at, updated_at, parent_task_id FROM tasks WHERE id = $1
 `
 
 func (q *Queries) GetTask(ctx context.Context, id pgtype.UUID) (Task, error) {
@@ -76,12 +130,49 @@ func (q *Queries) GetTask(ctx context.Context, id pgtype.UUID) (Task, error) {
 		&i.Metadata,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ParentTaskID,
 	)
 	return i, err
 }
 
+const listSubtasks = `-- name: ListSubtasks :many
+SELECT id, agent_id, title, description, status, priority, metadata, created_at, updated_at, parent_task_id FROM tasks WHERE parent_task_id = $1
+ORDER BY priority DESC, created_at ASC
+`
+
+func (q *Queries) ListSubtasks(ctx context.Context, parentTaskID pgtype.UUID) ([]Task, error) {
+	rows, err := q.db.Query(ctx, listSubtasks, parentTaskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Task
+	for rows.Next() {
+		var i Task
+		if err := rows.Scan(
+			&i.ID,
+			&i.AgentID,
+			&i.Title,
+			&i.Description,
+			&i.Status,
+			&i.Priority,
+			&i.Metadata,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ParentTaskID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTasks = `-- name: ListTasks :many
-SELECT id, agent_id, title, description, status, priority, metadata, created_at, updated_at FROM tasks
+SELECT id, agent_id, title, description, status, priority, metadata, created_at, updated_at, parent_task_id FROM tasks
 WHERE ($1::text = '' OR status = $1)
   AND ($2::uuid IS NULL OR agent_id = $2)
 ORDER BY priority DESC, created_at ASC
@@ -111,6 +202,7 @@ func (q *Queries) ListTasks(ctx context.Context, arg ListTasksParams) ([]Task, e
 			&i.Metadata,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ParentTaskID,
 		); err != nil {
 			return nil, err
 		}
@@ -125,7 +217,7 @@ func (q *Queries) ListTasks(ctx context.Context, arg ListTasksParams) ([]Task, e
 const updateTask = `-- name: UpdateTask :one
 UPDATE tasks SET title = $2, description = $3, status = $4, priority = $5, metadata = $6, updated_at = NOW()
 WHERE id = $1
-RETURNING id, agent_id, title, description, status, priority, metadata, created_at, updated_at
+RETURNING id, agent_id, title, description, status, priority, metadata, created_at, updated_at, parent_task_id
 `
 
 type UpdateTaskParams struct {
@@ -157,6 +249,7 @@ func (q *Queries) UpdateTask(ctx context.Context, arg UpdateTaskParams) (Task, e
 		&i.Metadata,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ParentTaskID,
 	)
 	return i, err
 }

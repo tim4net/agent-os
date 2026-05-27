@@ -1,6 +1,9 @@
 -- name: ListAgents :many
 SELECT * FROM agents ORDER BY created_at;
 
+-- name: ListVisibleAgents :many
+SELECT * FROM agents WHERE visible = true ORDER BY created_at;
+
 -- name: GetAgent :one
 SELECT * FROM agents WHERE id = $1;
 
@@ -19,6 +22,11 @@ RETURNING *;
 
 -- name: UpdateAgent :one
 UPDATE agents SET display_name = $2, harness = $3, base_url = $4, metadata = $5, updated_at = NOW()
+WHERE id = $1
+RETURNING *;
+
+-- name: UpdateAgentConfig :one
+UPDATE agents SET role = $2, system_prompt = $3, persona = $4, updated_at = NOW()
 WHERE id = $1
 RETURNING *;
 

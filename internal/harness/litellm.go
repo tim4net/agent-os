@@ -185,6 +185,8 @@ func (l *LiteLLMHarness) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	return result.Data, nil
 }
 
+func (l *LiteLLMHarness) Commands() []Command { return nil }
+
 func (l *LiteLLMHarness) Close() error {
 	l.httpClient.CloseIdleConnections()
 	return nil

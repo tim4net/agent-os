@@ -4,9 +4,10 @@ import { getStudioProviders, studioGenerate } from '../../api/client'
 
 interface GeneratorFormProps {
   onGenerated?: (generation: StudioGeneration) => void
+  agentId?: string
 }
 
-export function GeneratorForm({ onGenerated }: GeneratorFormProps) {
+export function GeneratorForm({ onGenerated, agentId }: GeneratorFormProps) {
   const [prompt, setPrompt] = useState('')
   const [type, setType] = useState<'image' | 'video' | 'audio'>('image')
   const [model, setModel] = useState('')
@@ -54,7 +55,7 @@ export function GeneratorForm({ onGenerated }: GeneratorFormProps) {
     setError(null)
     setResult(null)
     try {
-      const gen = await studioGenerate(prompt, type, model || undefined, provider)
+      const gen = await studioGenerate(prompt, type, model || undefined, provider, agentId)
       setResult(gen)
       onGenerated?.(gen)
     } catch (err: unknown) {
@@ -111,40 +112,47 @@ export function GeneratorForm({ onGenerated }: GeneratorFormProps) {
       <div>
         <label className="block text-xs font-medium text-gray-400 mb-2">Provider</label>
         <div className="flex flex-wrap gap-2">
-          {providers.map((p) => {
+          {/* Show available providers first */}
+          {providers.filter(p => p.available).map((p) => {
             const isSelected = provider === p.name
-            const isDisabled = !p.available
             return (
               <button
                 key={p.name}
-                onClick={() => !isDisabled && handleProviderChange(p.name)}
-                disabled={isDisabled}
-                title={isDisabled ? 'API key not configured' : undefined}
-                className={`group relative px-3 py-1.5 text-sm rounded-lg transition-colors border ${
+                onClick={() => handleProviderChange(p.name)}
+                className={`px-3 py-1.5 text-sm rounded-lg transition-colors border ${
                   isSelected
                     ? 'bg-blue-600 text-white border-blue-500'
-                    : isDisabled
-                      ? 'bg-gray-800/50 text-gray-600 border-gray-800 cursor-not-allowed'
-                      : 'bg-gray-800 text-gray-300 border-gray-700 hover:bg-gray-700 hover:text-white hover:border-gray-600'
+                    : 'bg-gray-800 text-gray-300 border-gray-700 hover:bg-gray-700 hover:text-white hover:border-gray-600'
                 }`}
               >
-                <span className="flex items-center gap-1.5">
-                  {p.name}
-                  {isDisabled && (
-                    <span className="text-gray-600 text-xs" title="API key not configured">
-                      🔒
-                    </span>
-                  )}
-                </span>
-                {/* Tooltip for disabled providers */}
-                {isDisabled && (
-                  <span className="pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 px-2 py-0.5 bg-gray-700 text-gray-300 text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
-                    API key not configured
-                  </span>
-                )}
+                {p.name}
               </button>
             )
           })}
+          {/* Show unavailable providers with lock, only if any exist */}
+          {providers.filter(p => !p.available).length > 0 && (
+            <details className="group/details">
+              <summary className="inline-flex items-center gap-1 px-3 py-1.5 text-sm rounded-lg border border-gray-800 bg-gray-800/50 text-gray-600 cursor-pointer hover:text-gray-400 transition-colors list-none">
+                <span>🔒 {providers.filter(p => !p.available).length} locked</span>
+                <svg className="w-3 h-3 transition-transform group-open/details:rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </summary>
+              <div className="flex flex-wrap gap-2 mt-2">
+                {providers.filter(p => !p.available).map((p) => (
+                  <button
+                    key={p.name}
+                    disabled
+                    title="API key not configured"
+                    className="px-3 py-1.5 text-sm rounded-lg transition-colors border bg-gray-800/50 text-gray-600 border-gray-800 cursor-not-allowed flex items-center gap-1.5"
+                  >
+                    {p.name}
+                    <span className="text-gray-600 text-xs">🔒</span>
+                  </button>
+                ))}
+              </div>
+            </details>
+          )}
         </div>
       </div>
 

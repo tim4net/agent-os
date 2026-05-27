@@ -223,6 +223,17 @@ func (h *HermesHarness) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	return result.Data, nil
 }
 
+// hermesCommands defines the slash commands supported by the Hermes agent.
+var hermesCommands = []Command{
+	{Command: "/new", Description: "Start a new conversation"},
+	{Command: "/compact", Description: "Summarize and compact conversation history"},
+	{Command: "/clear", Description: "Clear all messages in current conversation"},
+}
+
+func (h *HermesHarness) Commands() []Command {
+	return hermesCommands
+}
+
 func (h *HermesHarness) Close() error {
 	h.httpClient.CloseIdleConnections()
 	return nil

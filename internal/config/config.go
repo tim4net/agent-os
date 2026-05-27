@@ -4,31 +4,33 @@ import "os"
 
 // Config holds application configuration loaded from environment variables.
 type Config struct {
-	DatabaseURL      string
-	LiteLLMURL       string
-	ObsidianPath     string
-	ArtifactsPath    string
-	XAIAPIKey        string
-	OpenRouterAPIKey string
-	GeminiAPIKey     string
-	FALKey           string
-	HermesAPIKey     string
-	Port             string
+	DatabaseURL       string
+	LiteLLMURL        string
+	ObsidianPath      string
+	ArtifactsPath     string
+	HermesSkillsPath  string
+	XAIAPIKey         string
+	OpenRouterAPIKey  string
+	GeminiAPIKey      string
+	FALKey            string
+	HermesAPIKey      string
+	Port              string
 }
 
 // Load reads configuration from environment variables with sensible defaults.
 func Load() *Config {
 	return &Config{
-		DatabaseURL:      getEnv("DATABASE_URL", "postgres://localhost:5432/agentos?sslmode=disable"),
-		LiteLLMURL:       getEnv("LITELLM_URL", "http://localhost:4000"),
-		ObsidianPath:     getEnv("OBSIDIAN_PATH", "./obsidian"),
-		ArtifactsPath:    getEnv("ARTIFACTS_PATH", "/data/artifacts"),
-		XAIAPIKey:        getEnv("XAI_API_KEY", ""),
-		OpenRouterAPIKey: getEnv("OPENROUTER_API_KEY", ""),
-		GeminiAPIKey:     getEnv("GEMINI_API_KEY", getEnv("GOOGLE_API_KEY", "")),
-		FALKey:           getEnv("FAL_KEY", ""),
-		HermesAPIKey:     getEnv("HERMES_API_KEY", ""),
-		Port:             getEnv("PORT", "8080"),
+		DatabaseURL:       getEnv("DATABASE_URL", "postgres://localhost:5432/agentos?sslmode=disable"),
+		LiteLLMURL:        getEnv("LITELLM_URL", "http://localhost:4000"),
+		ObsidianPath:      getEnv("OBSIDIAN_PATH", "./obsidian"),
+		ArtifactsPath:     getEnv("ARTIFACTS_PATH", "/data/artifacts"),
+		HermesSkillsPath:  getEnv("HERMES_SKILLS_PATH", "/data/hermes-skills"),
+		XAIAPIKey:         getEnv("XAI_API_KEY", ""),
+		OpenRouterAPIKey:  getEnv("OPENROUTER_API_KEY", ""),
+		GeminiAPIKey:      getEnv("GEMINI_API_KEY", getEnv("GOOGLE_API_KEY", "")),
+		FALKey:            getEnv("FAL_KEY", ""),
+		HermesAPIKey:      getEnv("HERMES_API_KEY", ""),
+		Port:              getEnv("PORT", "8080"),
 	}
 }
 

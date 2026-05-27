@@ -45,7 +45,20 @@ func NewActivityFeed(bus *EventBus, size int) *ActivityFeed {
 }
 
 func (af *ActivityFeed) consume(sub <-chan Event) {
+	// Events to skip — noisy background processes that aren't user-visible
+	skipTypes := map[string]bool{
+		"memory_indexed": true,
+	}
 	for event := range sub {
+		if skipTypes[event.Type] {
+			continue
+		}
+		// Skip litellm agent status changes — it's infrastructure, not a user-visible agent
+		if event.Type == EventAgentStatusChanged {
+			if name, ok := event.Payload["agent_name"].(string); ok && name == "litellm" {
+				continue
+			}
+		}
 		entry := af.toEntry(event)
 		af.add(entry)
 	}

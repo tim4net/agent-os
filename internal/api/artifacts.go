@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -297,6 +298,165 @@ func (aa *ArtifactAPI) ArtifactRoutes() http.Handler {
 	})
 
 	return r
+}
+
+// ExportArtifact handles POST /api/artifacts/:id/export — exports artifact as a markdown note to the Obsidian vault.
+func (a *API) ExportArtifact(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+
+	var id pgtype.UUID
+	if err := id.Scan(idStr); err != nil {
+		http.Error(w, "invalid artifact ID", http.StatusBadRequest)
+		return
+	}
+
+	artifact, err := a.artifacts.queries.GetArtifact(r.Context(), id)
+	if err != nil {
+		http.Error(w, "artifact not found", http.StatusNotFound)
+		return
+	}
+
+	// Derive filename from file_path
+	filename := "unknown"
+	var fileSize int64
+	var absFilePath string
+	if artifact.FilePath.Valid && artifact.FilePath.String != "" {
+		filename = filepath.Base(artifact.FilePath.String)
+		absFilePath = filepath.Join(a.artifacts.artifactsPath, artifact.FilePath.String)
+		if stat, err := os.Stat(absFilePath); err == nil {
+			fileSize = stat.Size()
+		}
+	}
+
+	// Build title
+	title := "Artifact Export"
+	if artifact.Title.Valid && artifact.Title.String != "" {
+		title = artifact.Title.String
+	} else {
+		title = filename
+	}
+
+	// Read file content for code/text artifacts
+	var fileContent string
+	if (artifact.Type == "code" || artifact.Type == "text") && absFilePath != "" {
+		absPath, err := filepath.Abs(absFilePath)
+		if err == nil {
+			absBase, _ := filepath.Abs(a.artifacts.artifactsPath)
+			if strings.HasPrefix(absPath, absBase) {
+				data, err := os.ReadFile(absPath)
+				if err == nil {
+					fileContent = string(data)
+				}
+			}
+		}
+	}
+
+	// Build markdown note
+	var body strings.Builder
+
+	// YAML frontmatter
+	artifactType := artifact.Type
+	created := ""
+	if artifact.CreatedAt.Valid {
+		created = artifact.CreatedAt.Time.Format("2006-01-02T15:04:05Z07:00")
+	}
+	mimeType := ""
+	if artifact.MimeType.Valid {
+		mimeType = artifact.MimeType.String
+	}
+	body.WriteString(fmt.Sprintf("---\nartifact_id: %s\ntype: %s\nmime_type: %q\nfilename: %q\nsize: %d\ncreated: %s\nsource: agent-os\n---\n\n",
+		id.String(), artifactType, mimeType, filename, fileSize, created))
+
+	body.WriteString(fmt.Sprintf("# %s\n\n", title))
+
+	// Metadata section
+	body.WriteString("**Type:** " + artifactType + "  \n")
+	if mimeType != "" {
+		body.WriteString(fmt.Sprintf("**MIME:** %s  \n", mimeType))
+	}
+	if fileSize > 0 {
+		body.WriteString(fmt.Sprintf("**Size:** %s  \n", formatFileSize(fileSize)))
+	}
+	body.WriteString(fmt.Sprintf("**Created:** %s  \n", created))
+	body.WriteString("\n> Exported from Agent OS Workspace.\n\n")
+
+	// Content
+	if fileContent != "" {
+		// Detect language for code block
+		lang := ""
+		ext := strings.ToLower(filepath.Ext(filename))
+		ext = strings.TrimPrefix(ext, ".")
+		langMap := map[string]string{
+			"py": "python", "js": "javascript", "ts": "typescript",
+			"go": "go", "rs": "rust", "java": "java",
+			"html": "html", "css": "css", "json": "json",
+			"yaml": "yaml", "yml": "yaml", "toml": "toml",
+			"md": "markdown", "txt": "",
+		}
+		if l, ok := langMap[ext]; ok {
+			lang = l
+		} else if artifactType == "code" {
+			lang = ext
+		}
+
+		if artifactType == "code" {
+			body.WriteString(fmt.Sprintf("```%s\n%s\n```\n", lang, fileContent))
+		} else {
+			body.WriteString(fileContent + "\n")
+		}
+	} else if artifactType == "image" {
+		body.WriteString("*Image file. View in Agent OS Studio or Workspace.*\n")
+	} else if artifactType == "video" {
+		body.WriteString("*Video file. View in Agent OS Workspace.*\n")
+	} else if artifactType == "audio" {
+		body.WriteString("*Audio file. View in Agent OS Workspace.*\n")
+	}
+
+	content := body.String()
+
+	// Write to vault
+	vaultDir := filepath.Join(a.obsidianPath, "projects", "agent-os", "artifacts")
+	if err := os.MkdirAll(vaultDir, 0755); err != nil {
+		http.Error(w, "failed to create vault directory", http.StatusInternalServerError)
+		return
+	}
+
+	slug := strings.ToLower(strings.ReplaceAll(title, " ", "-"))
+	slug = regexp.MustCompile(`[^a-z0-9-]`).ReplaceAllString(slug, "")
+	slug = regexp.MustCompile(`-+`).ReplaceAllString(slug, "-")
+	slug = strings.Trim(slug, "-")
+	date := ""
+	if artifact.CreatedAt.Valid {
+		date = artifact.CreatedAt.Time.Format("2006-01-02")
+	} else {
+		date = "unknown-date"
+	}
+	exportFilename := fmt.Sprintf("%s-%s.md", date, slug)
+	fullPath := filepath.Join(vaultDir, exportFilename)
+
+	if err := os.WriteFile(fullPath, []byte(content), 0644); err != nil {
+		http.Error(w, "failed to write export file", http.StatusInternalServerError)
+		return
+	}
+
+	relPath := filepath.Join("projects", "agent-os", "artifacts", exportFilename)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"status":   "exported",
+		"path":     relPath,
+		"filename": exportFilename,
+	})
+}
+
+// formatFileSize returns a human-readable file size string.
+func formatFileSize(bytes int64) string {
+	if bytes < 1024 {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	if bytes < 1024*1024 {
+		return fmt.Sprintf("%.1f KB", float64(bytes)/1024)
+	}
+	return fmt.Sprintf("%.1f MB", float64(bytes)/(1024*1024))
 }
 
 // detectTypeFromExt returns artifact type based on file extension.
