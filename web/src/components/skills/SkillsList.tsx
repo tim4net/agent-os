@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import type { Skill } from '../../api/client'
-import { listSkills, deleteSkill, syncSkillsFromHermes } from '../../api/client'
+import { listSkills, getSkill, deleteSkill, syncSkillsFromHermes } from '../../api/client'
 import { SkillEditor } from './SkillEditor'
 
 const CATEGORIES = ['general', 'coding', 'research', 'writing', 'automation', 'creative', 'devops', 'gaming', 'media', 'productivity', 'software-development', 'mlops', 'apple', 'email', 'github', 'mcp', 'smart-home', 'social-media', 'red-teaming', 'note-taking', 'data-science', 'diagramming', 'dogfood', 'domain', 'inference-sh', 'multi-tier-llm-routing', 'autonomous-ai-agents', 'yuanbao'] as const
@@ -68,6 +68,18 @@ export function SkillsList() {
       await loadSkills()
     } catch (err) {
       console.error('Failed to delete skill:', err)
+    }
+  }
+
+  async function handleEdit(skill: Skill) {
+    try {
+      // List returns summaries without content; fetch full skill for editing
+      const fullSkill = await getSkill(skill.id)
+      setEditingSkill(fullSkill)
+    } catch (err) {
+      console.error('Failed to load skill for editing:', err)
+      // Fallback: open editor with whatever we have
+      setEditingSkill(skill)
     }
   }
 
@@ -238,7 +250,7 @@ export function SkillsList() {
 
               <div className="flex gap-2 mt-auto pt-2 border-t border-gray-800">
                 <button
-                  onClick={() => setEditingSkill(skill)}
+                  onClick={() => handleEdit(skill)}
                   className="text-xs px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded transition-colors"
                 >
                   Edit

@@ -2,6 +2,11 @@
 SELECT * FROM skills
 ORDER BY created_at DESC;
 
+-- name: ListSkillSummaries :many
+SELECT id, name, description, category, triggers, agent_id, created_at, updated_at
+FROM skills
+ORDER BY created_at DESC;
+
 -- name: GetSkill :one
 SELECT * FROM skills WHERE id = $1;
 

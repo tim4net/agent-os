@@ -541,7 +541,7 @@ export interface Skill {
   name: string
   description: string
   category: string
-  content: string
+  content?: string  // not included in list summaries, only in GET /api/skills/{id}
   triggers: string[]
   agent_id: string | null
   created_at?: string

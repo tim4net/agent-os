@@ -53,6 +53,7 @@ type Querier interface {
 	ListMemoryIndex(ctx context.Context) ([]MemoryIndex, error)
 	ListMessages(ctx context.Context, conversationID pgtype.UUID) ([]Message, error)
 	ListPipelineItems(ctx context.Context, arg ListPipelineItemsParams) ([]PipelineItem, error)
+	ListSkillSummaries(ctx context.Context) ([]ListSkillSummariesRow, error)
 	ListSkills(ctx context.Context) ([]Skill, error)
 	ListSkillsByAgent(ctx context.Context, agentID pgtype.UUID) ([]Skill, error)
 	ListSubtasks(ctx context.Context, parentTaskID pgtype.UUID) ([]Task, error)

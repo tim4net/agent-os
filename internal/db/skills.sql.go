@@ -80,6 +80,52 @@ func (q *Queries) GetSkill(ctx context.Context, id pgtype.UUID) (Skill, error) {
 	return i, err
 }
 
+const listSkillSummaries = `-- name: ListSkillSummaries :many
+SELECT id, name, description, category, triggers, agent_id, created_at, updated_at
+FROM skills
+ORDER BY created_at DESC
+`
+
+type ListSkillSummariesRow struct {
+	ID          pgtype.UUID        `json:"id"`
+	Name        string             `json:"name"`
+	Description string             `json:"description"`
+	Category    string             `json:"category"`
+	Triggers    []string           `json:"triggers"`
+	AgentID     pgtype.UUID        `json:"agent_id"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) ListSkillSummaries(ctx context.Context) ([]ListSkillSummariesRow, error) {
+	rows, err := q.db.Query(ctx, listSkillSummaries)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSkillSummariesRow
+	for rows.Next() {
+		var i ListSkillSummariesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Description,
+			&i.Category,
+			&i.Triggers,
+			&i.AgentID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSkills = `-- name: ListSkills :many
 SELECT id, name, description, category, content, triggers, agent_id, created_at, updated_at FROM skills
 ORDER BY created_at DESC

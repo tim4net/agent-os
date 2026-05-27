@@ -33,19 +33,20 @@ func (a *API) SkillRoutes() http.Handler {
 }
 
 // ListSkills handles GET /api/skills
+// Returns summaries (no content) for fast listing. Content fetched on demand via GET /api/skills/{id}.
 func (a *API) ListSkills(w http.ResponseWriter, r *http.Request) {
-	skills, err := a.queries.ListSkills(r.Context())
+	summaries, err := a.queries.ListSkillSummaries(r.Context())
 	if err != nil {
 		http.Error(w, "failed to list skills: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	if skills == nil {
-		skills = []db.Skill{}
+	if summaries == nil {
+		summaries = []db.ListSkillSummariesRow{}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(skills)
+	json.NewEncoder(w).Encode(summaries)
 }
 
 // GetSkill handles GET /api/skills/{id}
