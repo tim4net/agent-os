@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -92,7 +93,7 @@ func (m *MemoryAPI) MemoryRoutes() http.Handler {
 	return r
 }
 
-// Tree handles GET /api/memory/tree?path=
+// Tree handles GET /api/memory/tree?path=&depth=
 func (m *MemoryAPI) Tree(w http.ResponseWriter, r *http.Request) {
 	subPath := r.URL.Query().Get("path")
 	root := filepath.Join(m.obsidianPath, subPath)
@@ -109,7 +110,15 @@ func (m *MemoryAPI) Tree(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tree, err := m.buildTree(absRoot, absBase)
+	// Default depth=1 for lazy loading (only immediate children)
+	depth := 1
+	if d := r.URL.Query().Get("depth"); d != "" {
+		if parsed, err := strconv.Atoi(d); err == nil && parsed >= 0 {
+			depth = parsed
+		}
+	}
+
+	tree, err := m.buildTree(absRoot, absBase, depth)
 	if err != nil {
 		http.Error(w, "failed to read tree: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -119,7 +128,7 @@ func (m *MemoryAPI) Tree(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(tree)
 }
 
-func (m *MemoryAPI) buildTree(root, base string) ([]TreeNode, error) {
+func (m *MemoryAPI) buildTree(root, base string, maxDepth int) ([]TreeNode, error) {
 	var nodes []TreeNode
 
 	entries, err := os.ReadDir(root)
@@ -148,11 +157,17 @@ func (m *MemoryAPI) buildTree(root, base string) ([]TreeNode, error) {
 
 		if entry.IsDir() {
 			node.Type = "dir"
-			children, err := m.buildTree(fullPath, base)
-			if err != nil {
-				children = []TreeNode{}
+			// Only recurse if we have depth budget remaining
+			if maxDepth > 0 {
+				children, err := m.buildTree(fullPath, base, maxDepth-1)
+				if err != nil {
+					children = []TreeNode{}
+				}
+				node.Children = children
+			} else {
+				// Mark that this folder has unloaded children
+				node.Children = nil
 			}
-			node.Children = children
 		} else {
 			node.Type = "file"
 			node.Size = info.Size()

@@ -230,8 +230,8 @@ export async function uploadArtifact(
 export interface MemoryTreeNode {
   name: string
   path: string
-  type: 'file' | 'folder'
-  children?: MemoryTreeNode[]
+  type: 'file' | 'dir' | 'folder'
+  children?: MemoryTreeNode[] | null
 }
 
 export interface MemoryFile {
@@ -245,9 +245,10 @@ export interface MemorySearchResult {
   snippet: string
 }
 
-export function getMemoryTree(path?: string): Promise<MemoryTreeNode[]> {
+export function getMemoryTree(path?: string, depth?: number): Promise<MemoryTreeNode[]> {
   const params = new URLSearchParams()
   if (path) params.set('path', path)
+  if (depth !== undefined) params.set('depth', String(depth))
   const qs = params.toString()
   return request<MemoryTreeNode[]>(`/api/memory/tree${qs ? `?${qs}` : ''}`)
 }

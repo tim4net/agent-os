@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import type { MemoryTreeNode } from '../../api/client'
 import { getMemoryTree } from '../../api/client'
 import { SynthesisModal } from './SynthesisModal'
@@ -49,6 +49,10 @@ function collectFilePaths(node: MemoryTreeNode): string[] {
   return results
 }
 
+function isFolder(node: MemoryTreeNode): boolean {
+  return node.type === 'dir' || node.type === 'folder'
+}
+
 function TreeNode({
   node,
   onFileSelect,
@@ -64,10 +68,34 @@ function TreeNode({
   selectedPaths: Set<string>
   onToggleSelect: (path: string, isFolder: boolean) => void
 }) {
-  const [expanded, setExpanded] = useState(depth < 1)
+  const [expanded, setExpanded] = useState(false)
+  const [children, setChildren] = useState<MemoryTreeNode[] | null>(node.children ?? null)
+  const [loading, setLoading] = useState(false)
   const isSelected = selectedPaths.has(node.path)
 
-  if (node.type === 'folder') {
+  const loadChildren = useCallback(async () => {
+    if (children !== null) return // already loaded
+    setLoading(true)
+    try {
+      const loaded = await getMemoryTree(node.path, 0)
+      const filtered = loaded.filter((n) => n.name !== '.obsidian')
+      setChildren(filtered)
+    } catch {
+      setChildren([])
+    } finally {
+      setLoading(false)
+    }
+  }, [node.path, children])
+
+  function handleToggle() {
+    const next = !expanded
+    setExpanded(next)
+    if (next && children === null) {
+      loadChildren()
+    }
+  }
+
+  if (isFolder(node)) {
     return (
       <div>
         <div
@@ -86,31 +114,31 @@ function TreeNode({
             className="h-3.5 w-3.5 rounded border-gray-600 bg-gray-800 text-blue-500 focus:ring-blue-500 focus:ring-offset-0 cursor-pointer accent-blue-500"
           />
           <button
-            onClick={() => setExpanded(!expanded)}
+            onClick={handleToggle}
             className="flex items-center gap-1.5 flex-1 min-w-0"
+            aria-expanded={expanded}
           >
             <span className="text-xs">{expanded ? '📂' : '📁'}</span>
             <span className="truncate">{node.name}</span>
+            {loading && <span className="text-xs text-gray-500 ml-1">…</span>}
             <span className="text-gray-600 text-xs ml-auto">
               {expanded ? '▾' : '▸'}
             </span>
           </button>
         </div>
-        {expanded && node.children && (
+        {expanded && children && (
           <div>
-            {node.children
-              .filter((child) => child.name !== '.obsidian')
-              .map((child) => (
-                <TreeNode
-                  key={child.path}
-                  node={child}
-                  onFileSelect={onFileSelect}
-                  selectedPath={selectedPath}
-                  depth={depth + 1}
-                  selectedPaths={selectedPaths}
-                  onToggleSelect={onToggleSelect}
-                />
-              ))}
+            {children.map((child) => (
+              <TreeNode
+                key={child.path}
+                node={child}
+                onFileSelect={onFileSelect}
+                selectedPath={selectedPath}
+                depth={depth + 1}
+                selectedPaths={selectedPaths}
+                onToggleSelect={onToggleSelect}
+              />
+            ))}
           </div>
         )}
       </div>
@@ -155,7 +183,8 @@ export function FileTree({ onFileSelect, selectedPath }: FileTreeProps) {
   useEffect(() => {
     setLoading(true)
     setError(null)
-    getMemoryTree()
+    // Load root with depth=0 (lazy loading — only top-level items, no children)
+    getMemoryTree(undefined, 0)
       .then((nodes) => setTree(nodes.filter((n) => n.name !== '.obsidian')))
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false))
