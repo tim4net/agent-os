@@ -153,6 +153,7 @@ func (a *API) UpdateDelegationStatus(w http.ResponseWriter, r *http.Request) {
 		"id":               deg.ID.String(),
 		"parent_agent_id":  deg.ParentAgentID.String(),
 		"child_agent_name": deg.ChildAgentName,
+		"task_goal":        deg.TaskGoal,
 		"status":           deg.Status,
 	})
 

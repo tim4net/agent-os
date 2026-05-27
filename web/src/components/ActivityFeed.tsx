@@ -52,11 +52,28 @@ function mapSSEToActivity(event: SSEEvent): ActivityEvent | null {
     chat_message: 'chat',
     artifact_created: 'artifact',
     task_updated: 'task',
+    delegation_created: 'task',
+    delegation_updated: 'task',
   }
+
+  // Build a readable summary for delegation events
+  let displaySummary = summary || ''
+  if (!displaySummary && (event.type === 'delegation_created' || event.type === 'delegation_updated')) {
+    const child = (data['child_agent_name'] as string) ?? 'sub-agent'
+    const goal = (data['task_goal'] as string) ?? ''
+    const status = (data['status'] as string) ?? ''
+    if (event.type === 'delegation_created') {
+      displaySummary = `Delegated to ${child}: ${goal}`
+    } else {
+      displaySummary = `Delegation to ${child} ${status}: ${goal}`
+    }
+  }
+  if (!displaySummary) displaySummary = event.type
+
   return {
     id: crypto.randomUUID(),
     type: typeMap[event.type] ?? 'other',
-    summary: summary || event.type,
+    summary: displaySummary,
     timestamp: new Date().toISOString(),
     target: (data['target'] as string) ?? (data['tab'] as string),
   }
