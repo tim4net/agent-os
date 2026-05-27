@@ -46,6 +46,18 @@ type Conversation struct {
 	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
 }
 
+type Delegation struct {
+	ID             pgtype.UUID        `json:"id"`
+	ParentAgentID  pgtype.UUID        `json:"parent_agent_id"`
+	ChildAgentName string             `json:"child_agent_name"`
+	TaskGoal       string             `json:"task_goal"`
+	Status         string             `json:"status"`
+	ResultSummary  pgtype.Text        `json:"result_summary"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	CompletedAt    pgtype.Timestamptz `json:"completed_at"`
+	Metadata       []byte             `json:"metadata"`
+}
+
 type Goal struct {
 	ID          pgtype.UUID        `json:"id"`
 	Title       string             `json:"title"`

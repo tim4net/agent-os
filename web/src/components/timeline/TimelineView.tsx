@@ -71,6 +71,13 @@ const eventTypeConfig: Record<string, EventTypeConfig> = {
     borderColor: 'border-orange-500/30',
     label: 'Workflow Run',
   },
+  delegation: {
+    icon: '🔄',
+    color: 'text-cyan-400',
+    bgColor: 'bg-cyan-500/10',
+    borderColor: 'border-cyan-500/30',
+    label: 'Delegation',
+  },
 }
 
 function getEventConfig(type: string): EventTypeConfig {
@@ -258,6 +265,9 @@ export function TimelineView({ onNavigate }: { onNavigate?: (tab: string, data?:
         break
       case 'workflow_run':
         onNavigate('Workflows')
+        break
+      case 'delegation':
+        onNavigate('Chat', { agentId: event.agent_id })
         break
     }
   }

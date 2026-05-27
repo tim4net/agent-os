@@ -178,6 +178,48 @@ func (a *API) GetTimeline(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// 5. Delegations
+	delegations, _ := a.queries.ListDelegations(ctx, db.ListDelegationsParams{
+		Column1: pgtype.UUID{},
+		Column2: "",
+		Limit:   1000,
+		Offset:  0,
+	})
+	for _, d := range delegations {
+		title := "Delegated to " + d.ChildAgentName
+		desc := d.TaskGoal
+		if d.ResultSummary.Valid && d.ResultSummary.String != "" {
+			desc = d.ResultSummary.String
+		}
+		statusLabel := d.Status
+		if d.Status == "running" {
+			statusLabel = "🔄 Running"
+		} else if d.Status == "completed" {
+			statusLabel = "✅ Completed"
+		} else if d.Status == "failed" {
+			statusLabel = "❌ Failed"
+		}
+		meta, _ := json.Marshal(map[string]string{
+			"delegation_id":    d.ID.String(),
+			"child_agent_name": d.ChildAgentName,
+			"status":           d.Status,
+		})
+		ts := d.CreatedAt.Time
+		if d.CompletedAt.Valid && d.Status != "running" && d.Status != "pending" {
+			ts = d.CompletedAt.Time
+		}
+		events = append(events, TimelineEvent{
+			ID:          d.ID.String(),
+			Type:        "delegation",
+			Title:       title,
+			Description: statusLabel + " — " + desc,
+			Timestamp:   ts.UTC().Format(time.RFC3339),
+			AgentID:     d.ParentAgentID.String(),
+			AgentName:   agentNames[d.ParentAgentID.String()],
+			Metadata:    meta,
+		})
+	}
+
 	// Sort by timestamp descending
 	sort.Slice(events, func(i, j int) bool {
 		return events[i].Timestamp > events[j].Timestamp

@@ -677,7 +677,7 @@ export function advancePipeline(id: string): Promise<PipelineItem> {
 
 export interface TimelineEvent {
   id: string
-  type: 'conversation' | 'task_completed' | 'artifact_created' | 'workflow_run'
+  type: 'conversation' | 'task_completed' | 'artifact_created' | 'workflow_run' | 'delegation'
   title: string
   description: string
   timestamp: string

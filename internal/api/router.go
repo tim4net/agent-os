@@ -128,6 +128,9 @@ func (a *API) Router() http.Handler {
 	// Skills routes
 	r.Mount("/skills", a.SkillRoutes())
 
+	// Delegation routes (webhook from Hermes)
+	r.Mount("/delegations", a.DelegationRoutes())
+
 	// Timeline routes
 	r.Mount("/timeline", a.TimelineRoutes())
 

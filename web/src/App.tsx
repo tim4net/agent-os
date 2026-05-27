@@ -80,12 +80,7 @@ function App() {
   const uploadInputRef = useRef<HTMLInputElement>(null)
   const tablistRef = useRef<HTMLDivElement>(null)
 
-  // Auto-scroll active tab into view when it changes
-  useEffect(() => {
-    if (!tablistRef.current) return
-    const activeBtn = tablistRef.current.querySelector('[role="tab"][aria-selected="true"]') as HTMLElement
-    activeBtn?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' })
-  }, [activeTab])
+  // Tabs use flex-wrap — all always visible, no scrollIntoView needed
 
   // Detect mobile viewport
   useEffect(() => {
@@ -352,7 +347,7 @@ function App() {
               ref={tablistRef}
               role="tablist"
               aria-label="Main navigation"
-              className="flex items-center gap-1 px-3 md:px-6 py-2 overflow-x-auto"
+              className="flex items-center gap-1 px-3 md:px-6 py-2 flex-wrap"
               onKeyDown={(e) => {
                 const currentIdx = tabs.indexOf(activeTab)
                 if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
