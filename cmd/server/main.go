@@ -33,6 +33,10 @@ func main() {
 
 	queries := db.New(pool)
 
+	// Ensure infrastructure agents are hidden (prevent visible flag regression)
+	// NOTE: LiteLLM agent is now user-visible as "Models" for direct model access.
+	// Only hide true infrastructure-only agents here if needed.
+
 	// Create event bus
 	bus := service.NewEventBus()
 
@@ -67,7 +71,25 @@ func main() {
 	r.Use(middleware.Recoverer)
 	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if strings.HasPrefix(r.URL.Path, "/api/events") {
+			// Skip timeout for SSE streams and endpoints that call the LLM
+			// (goals breakdown, pipeline generate, workflows can take 60s+)
+			switch {
+		case strings.HasPrefix(r.URL.Path, "/api/events"):
+			next.ServeHTTP(w, r)
+			return
+		case strings.HasSuffix(r.URL.Path, "/chat"):
+			next.ServeHTTP(w, r)
+			return
+		case strings.HasSuffix(r.URL.Path, "/breakdown"):
+				next.ServeHTTP(w, r)
+				return
+			case strings.HasSuffix(r.URL.Path, "/generate"):
+				next.ServeHTTP(w, r)
+				return
+			case strings.HasSuffix(r.URL.Path, "/advance"):
+				next.ServeHTTP(w, r)
+				return
+			case strings.HasSuffix(r.URL.Path, "/synthesize"):
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -82,7 +104,7 @@ func main() {
 		"gemini":     cfg.GeminiAPIKey,
 		"fal":        cfg.FALKey,
 	}
-	a := api.NewAPI(queries, harness.DefaultRegistry, bus, feed, cfg.LiteLLMURL, cfg.ArtifactsPath, cfg.ObsidianPath, cfg.HermesSkillsPath, apiKeys, cfg.HermesAPIKey)
+	a := api.NewAPI(queries, harness.DefaultRegistry, bus, feed, cfg.LiteLLMURL, cfg.ArtifactsPath, cfg.ObsidianPath, cfg.HermesSkillsPath, apiKeys, cfg.HermesAPIKey, cfg.ZAIAPIKey)
 	r.Mount("/api", a.Router())
 
 	// Start server with graceful shutdown

@@ -13,6 +13,7 @@ type Config struct {
 	OpenRouterAPIKey  string
 	GeminiAPIKey      string
 	FALKey            string
+	ZAIAPIKey         string
 	HermesAPIKey      string
 	Port              string
 }
@@ -29,6 +30,7 @@ func Load() *Config {
 		OpenRouterAPIKey:  getEnv("OPENROUTER_API_KEY", ""),
 		GeminiAPIKey:      getEnv("GEMINI_API_KEY", getEnv("GOOGLE_API_KEY", "")),
 		FALKey:            getEnv("FAL_KEY", ""),
+		ZAIAPIKey:         getEnv("ZAI_API_KEY", ""),
 		HermesAPIKey:      getEnv("HERMES_API_KEY", ""),
 		Port:              getEnv("PORT", "8080"),
 	}

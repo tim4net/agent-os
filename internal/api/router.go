@@ -19,13 +19,14 @@ type API struct {
 	obsidianPath     string
 	hermesSkillsPath string
 	hermesAPIKey     string
+	zaiAPIKey        string
 	artifacts        *ArtifactAPI
 	memory           *MemoryAPI
 	studio           *StudioAPI
 }
 
 // NewAPI creates a new API instance with the given dependencies.
-func NewAPI(queries *db.Queries, registry *harness.Registry, bus *service.EventBus, feed *service.ActivityFeed, litellmURL string, artifactsPath string, obsidianPath string, hermesSkillsPath string, apiKeys map[string]string, hermesAPIKey string) *API {
+func NewAPI(queries *db.Queries, registry *harness.Registry, bus *service.EventBus, feed *service.ActivityFeed, litellmURL string, artifactsPath string, obsidianPath string, hermesSkillsPath string, apiKeys map[string]string, hermesAPIKey string, zaiAPIKey string) *API {
 	return &API{
 		queries:          queries,
 		registry:         registry,
@@ -35,6 +36,7 @@ func NewAPI(queries *db.Queries, registry *harness.Registry, bus *service.EventB
 		obsidianPath:     obsidianPath,
 		hermesSkillsPath: hermesSkillsPath,
 		hermesAPIKey:     hermesAPIKey,
+		zaiAPIKey:        zaiAPIKey,
 		artifacts:        NewArtifactAPI(queries, artifactsPath),
 		memory:           NewMemoryAPI(queries, obsidianPath, litellmURL),
 		studio:           NewStudioAPI(queries, artifactsPath, apiKeys),
@@ -137,6 +139,9 @@ func (a *API) Router() http.Handler {
 	// Voice routes
 	r.Post("/voice/transcribe", a.Transcribe)
 	r.Post("/voice/synthesize", a.Synthesize)
+
+	// Vision routes
+	r.Post("/vision/analyze", a.AnalyzeVision)
 
 	// Events SSE endpoint
 	r.Get("/events", a.StreamEvents)
