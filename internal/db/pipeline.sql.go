@@ -82,8 +82,8 @@ func (q *Queries) GetPipelineItem(ctx context.Context, id pgtype.UUID) (Pipeline
 
 const listPipelineItems = `-- name: ListPipelineItems :many
 SELECT id, type, title, status, content, metadata, agent_id, created_at, updated_at FROM pipeline_items
-WHERE ($1::text IS NULL OR status = $1)
-  AND ($2::text IS NULL OR type = $2)
+WHERE ($1::text = '' OR status = $1)
+  AND ($2::text = '' OR type = $2)
 ORDER BY created_at DESC
 `
 

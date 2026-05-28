@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"time"
 
@@ -404,8 +406,22 @@ func (a *API) RunWorkflow(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// Check for non-200 status from LiteLLM
+		if resp.StatusCode != http.StatusOK {
+			log.Printf("workflow run: LiteLLM returned status %d: %s", resp.StatusCode, string(respBody[:min(len(respBody), 200)]))
+			a.queries.UpdateWorkflowRun(ctx, db.UpdateWorkflowRunParams{
+				ID:          run.ID,
+				Status:      pgtype.Text{String: "failed", Valid: true},
+				CurrentStep: pgtype.Int4{Int32: int32(i), Valid: true},
+				Result:      []byte(fmt.Sprintf(`{"error":"LiteLLM returned status %d: %s"}`, resp.StatusCode, string(respBody[:min(len(respBody), 100)]))),
+			})
+			http.Error(w, fmt.Sprintf("LiteLLM returned status %d", resp.StatusCode), http.StatusInternalServerError)
+			return
+		}
+
 		var chatResp chatResponse
 		if err := json.Unmarshal(respBody, &chatResp); err != nil || len(chatResp.Choices) == 0 {
+			log.Printf("workflow run: failed to parse LLM response (err=%v, body=%s)", err, string(respBody[:min(len(respBody), 300)]))
 			a.queries.UpdateWorkflowRun(ctx, db.UpdateWorkflowRunParams{
 				ID:          run.ID,
 				Status:      pgtype.Text{String: "failed", Valid: true},

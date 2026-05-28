@@ -1,7 +1,7 @@
 -- name: ListPipelineItems :many
 SELECT * FROM pipeline_items
-WHERE ($1::text IS NULL OR status = $1)
-  AND ($2::text IS NULL OR type = $2)
+WHERE ($1::text = '' OR status = $1)
+  AND ($2::text = '' OR type = $2)
 ORDER BY created_at DESC;
 
 -- name: GetPipelineItem :one
