@@ -117,6 +117,10 @@ export function sendChat(
           const body = await res.text()
           if (body) errMsg = body
         } catch { /* ignore */ }
+        // Friendly message for unsupported agents
+        if (res.status === 501 || errMsg.includes('not supported')) {
+          errMsg = 'This agent does not support chat. Try selecting a different agent.'
+        }
         controller.error(new Error(errMsg))
         return
       }

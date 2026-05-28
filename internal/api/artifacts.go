@@ -205,7 +205,8 @@ func (aa *ArtifactAPI) GetArtifactFile(w http.ResponseWriter, r *http.Request) {
 	filePath := artifact.FilePath.String
 
 	// Security: ensure the path is within artifactsPath
-	absPath, err := filepath.Abs(filePath)
+	// Join with artifactsPath first since filePath is relative (e.g. "studio/xxx.png")
+	absPath, err := filepath.Abs(filepath.Join(aa.artifactsPath, filePath))
 	if err != nil {
 		http.Error(w, "invalid file path", http.StatusInternalServerError)
 		return

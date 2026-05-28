@@ -5,7 +5,8 @@ import { useAgents } from './hooks/useAgents'
 import { useSSE } from './hooks/useSSE'
 import SettingsPanel from './components/SettingsPanel'
 import { Sidebar } from './components/layout/Sidebar'
-import { AgentCard } from './components/agents/AgentCard'
+
+import MissionControl from './components/MissionControl'
 import { ChatPanel } from './components/chat/ChatPanel'
 import { ArtifactGrid } from './components/workspace/ArtifactGrid'
 import { FileTree } from './components/memory/FileTree'
@@ -19,7 +20,7 @@ import { PipelineBoard } from './components/pipeline/PipelineBoard'
 import { WorkflowList } from './components/workflows/WorkflowList'
 import { SkillsList } from './components/skills/SkillsList'
 import { TimelineView } from './components/timeline/TimelineView'
-import { ActivityFeed } from './components/ActivityFeed'
+
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { StatusFooter } from './components/StatusFooter'
 import { ToastContainer } from './components/Toast'
@@ -75,7 +76,7 @@ function App() {
   const [mediaPreviewKey, setMediaPreviewKey] = useState(0)
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null)
   const [conversationVersion, setConversationVersion] = useState(0)
-  const { agents, loading, refresh: refreshAgents } = useAgents()
+  const { agents, loading: _loading, refresh: refreshAgents } = useAgents()
   const { sseConnected } = useSSE()
   const uploadInputRef = useRef<HTMLInputElement>(null)
   const tablistRef = useRef<HTMLDivElement>(null)
@@ -155,40 +156,9 @@ function App() {
     switch (activeTab) {
       case 'Overview':
         return (
-          <div className="p-6">
-            <h2 className="text-2xl font-bold mb-6 text-[var(--color-text-primary)]">Overview</h2>
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {/* Agent Status */}
-              <div>
-                <h3 className="text-lg font-semibold mb-3 text-[var(--color-text-secondary)]">Agents</h3>
-                {loading ? (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 stagger-children">
-                    {Array.from({ length: 3 }).map((_, i) => (
-                      <div key={i} className="glass-card p-4 animate-pulse">
-                        <div className="h-4 bg-[var(--bg-elevated)] rounded w-3/4 mb-3" />
-                        <div className="h-3 bg-[var(--bg-elevated)] rounded w-1/2" />
-                      </div>
-                    ))}
-                  </div>
-                ) : agents.length === 0 ? (
-                  <p className="text-[var(--color-text-muted)]">No agents registered.</p>
-                ) : (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 stagger-children">
-                    {agents.map((agent) => (
-                      <AgentCard key={agent.id} agent={agent} />
-                    ))}
-                  </div>
-                )}
-              </div>
-              {/* Activity Feed */}
-              <div>
-                <h3 className="text-lg font-semibold mb-3 text-[var(--color-text-secondary)]">Recent Activity</h3>
-                <ErrorBoundary name="Activity Feed">
-                  <ActivityFeed onNavigate={(tab) => setActiveTab(tab as Tab)} />
-                </ErrorBoundary>
-              </div>
-            </div>
-          </div>
+          <ErrorBoundary name="Mission Control">
+            <MissionControl agents={agents} />
+          </ErrorBoundary>
         )
       case 'Chat':
         if (!selectedAgent) {

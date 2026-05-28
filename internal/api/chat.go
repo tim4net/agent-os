@@ -205,10 +205,6 @@ func (a *API) ChatWithAgent(w http.ResponseWriter, r *http.Request) {
 
 	// Send user message ID as first SSE event
 	userIDData, _ := json.Marshal(map[string]string{"user_message_id": userMsg.ID.String()})
-	fmt.Fprintf(w, "event: info\ndata: %s\n\n", userIDData)
-	if flusher, ok := w.(http.Flusher); ok {
-		flusher.Flush()
-	}
 
 	// RAG: search memory_index for relevant context using the user's message
 	systemPrompt := req.SystemPrompt
@@ -264,12 +260,20 @@ func (a *API) ChatWithAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Stream SSE response
+	// Now that chat is confirmed supported, start the SSE stream
+	// Set SSE headers before first write
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
 
+	// Send user message ID as first SSE event
+	fmt.Fprintf(w, "event: info\ndata: %s\n\n", userIDData)
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+
+	// Stream SSE response
 	flusher, canFlush := w.(http.Flusher)
 
 	// Collect full response for storage

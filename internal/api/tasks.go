@@ -383,7 +383,7 @@ func (a *API) BreakdownTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	chatReq := chatRequest{
-		Model: "local-qwen",
+		Model: "free-fast",
 		Messages: []chatMessage{
 			{Role: "system", Content: "You are a project planner. Break this task into 3-8 concrete subtasks. Return ONLY a JSON array of objects with 'title', 'description', 'priority' (1-5). No other text."},
 			{Role: "user", Content: fmt.Sprintf("Task: %s", taskText)},
