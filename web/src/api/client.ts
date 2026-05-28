@@ -112,7 +112,12 @@ export function sendChat(
       })
 
       if (!res.ok) {
-        controller.error(new Error(`Chat API error ${res.status}`))
+        let errMsg = `Chat failed (${res.status})`
+        try {
+          const body = await res.text()
+          if (body) errMsg = body
+        } catch { /* ignore */ }
+        controller.error(new Error(errMsg))
         return
       }
 

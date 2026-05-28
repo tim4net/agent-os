@@ -39,13 +39,11 @@ function relativeTime(dateStr: string): string {
 
 function mapSSEToActivity(event: SSEEvent): ActivityEvent | null {
   // Filter out noisy background events
-  const ignoredTypes = ['memory_indexed', 'keepalive', 'connected']
+  const ignoredTypes = ['memory_indexed', 'keepalive', 'connected', 'agent_status_changed']
   if (ignoredTypes.includes(event.type)) return null
 
-  // Filter litellm status events — it's infrastructure, not an agent
   const data = event.data as Record<string, unknown>
   const summary = (data['summary'] as string) ?? (data['message'] as string) ?? ''
-  if (summary.toLowerCase().includes('litellm')) return null
 
   const typeMap: Record<string, ActivityEvent['type']> = {
     agent_status_changed: 'agent_status',
@@ -93,8 +91,11 @@ export function ActivityFeed({ onNavigate }: ActivityFeedProps) {
       // Filter out noisy background events from initial load
       const filtered = (Array.isArray(data) ? data : []).filter(
         (e) => {
-          if (e.type === 'other' && e.summary?.toLowerCase().includes('memory indexed')) return false
-          if (e.summary?.toLowerCase().includes('litellm')) return false
+          const s = (e.summary ?? '').toLowerCase()
+          if (s.includes('memory indexed')) return false
+          if (s.includes('litellm')) return false
+          // Filter agent status changes — shown via live dots, not activity feed
+          if (s.includes('status changed')) return false
           return true
         }
       )

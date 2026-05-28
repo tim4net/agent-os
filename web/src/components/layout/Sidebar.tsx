@@ -49,6 +49,7 @@ function getDateGroup(dateStr: string): string {
 }
 
 const GROUP_ORDER = ['Today', 'Yesterday', 'This Week', 'Older']
+const MAX_VISIBLE_PER_GROUP = 5
 
 export function Sidebar({
   agents,
@@ -69,7 +70,8 @@ export function Sidebar({
   const [discovered, setDiscovered] = useState<DiscoveredAgent[]>([])
   const [discovering, setDiscovering] = useState(false)
   const [configAgent, setConfigAgent] = useState<Agent | null>(null)
-  const [showAgents, setShowAgents] = useState(false)
+  const [showAgents, setShowAgents] = useState(true)
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
 
   const onlineCount = agents.filter((a) => a.status === 'online').length
 
@@ -248,13 +250,17 @@ export function Sidebar({
             </div>
           ) : (
             /* Expanded: date-grouped conversation list */
-            groupedConversations.map((group) => (
+            groupedConversations.map((group) => {
+              const isExpanded = expandedGroups.has(group.label)
+              const visible = isExpanded ? group.conversations : group.conversations.slice(0, MAX_VISIBLE_PER_GROUP)
+              const hidden = group.conversations.length - visible.length
+              return (
               <div key={group.label} className="mb-3">
                 <p className="text-[10px] uppercase tracking-[0.15em] font-semibold text-[var(--text-muted)] px-2 mb-1 opacity-60">
                   {group.label}
                 </p>
                 <div className="space-y-0.5">
-                  {group.conversations.map((conv) => {
+                  {visible.map((conv) => {
                     const isActive = activeConversationId === conv.id
                     const agentName = getAgentName(conv.agent_id)
                     return (
@@ -282,9 +288,30 @@ export function Sidebar({
                       </button>
                     )
                   })}
+                  {hidden > 0 && (
+                    <button
+                      onClick={() => setExpandedGroups((prev) => new Set(prev).add(group.label))}
+                      className="w-full text-left px-3 py-1.5 text-[10px] text-[var(--accent-blue)] hover:text-[var(--accent-cyan)] transition-colors"
+                    >
+                      ... {hidden} more
+                    </button>
+                  )}
+                  {isExpanded && group.conversations.length > MAX_VISIBLE_PER_GROUP && (
+                    <button
+                      onClick={() => setExpandedGroups((prev) => {
+                        const next = new Set(prev)
+                        next.delete(group.label)
+                        return next
+                      })}
+                      className="w-full text-left px-3 py-1.5 text-[10px] text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors"
+                    >
+                      Show less
+                    </button>
+                  )}
                 </div>
               </div>
-            ))
+              )
+            })
           )}
 
           {/* Empty state */}

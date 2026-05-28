@@ -152,6 +152,20 @@ func (a *API) ChatWithAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Get the harness
+	h, err := a.registry.Get(agent.Harness)
+	if err != nil {
+		http.Error(w, "unknown harness: "+agent.Harness, http.StatusBadRequest)
+		return
+	}
+
+	config := a.buildHarnessConfig(agent)
+	if err := h.Init(config); err != nil {
+		http.Error(w, "harness init failed", http.StatusInternalServerError)
+		return
+	}
+	defer h.Close()
+
 	// Create or resolve conversation
 	var convID pgtype.UUID
 	if req.ConversationID != "" {
@@ -234,21 +248,7 @@ func (a *API) ChatWithAgent(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// Get the harness
-	h, err := a.registry.Get(agent.Harness)
-	if err != nil {
-		http.Error(w, "unknown harness: "+agent.Harness, http.StatusBadRequest)
-		return
-	}
-
-	config := a.buildHarnessConfig(agent)
-	if err := h.Init(config); err != nil {
-		http.Error(w, "harness init failed", http.StatusInternalServerError)
-		return
-	}
-	defer h.Close()
-
-	// Start the chat stream
+	// Start the chat stream with the actual messages
 	opts := harness.ChatOptions{
 		Model:        req.Model,
 		SystemPrompt: systemPrompt,

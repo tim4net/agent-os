@@ -17,6 +17,65 @@ import (
 	"github.com/tim4net/agent-os/internal/db"
 )
 
+// artifactResponse is the DTO for artifact API responses, matching frontend expectations.
+type artifactResponse struct {
+	ID           string            `json:"id"`
+	AgentID      string            `json:"agent_id"`
+	Filename     string            `json:"filename"`
+	ContentType  string            `json:"content_type"`
+	ArtifactType string            `json:"artifact_type"`
+	Size         int64             `json:"size"`
+	CreatedAt    string            `json:"created_at"`
+	Metadata     map[string]string `json:"metadata,omitempty"`
+}
+
+// listArtifactsResponse wraps a list of artifacts with a total count.
+type listArtifactsResponse struct {
+	Artifacts []artifactResponse `json:"artifacts"`
+	Total     int                `json:"total"`
+}
+
+// artifactToResponse converts a db.Artifact to a frontend-friendly response DTO.
+func artifactToResponse(a db.Artifact) artifactResponse {
+	filename := ""
+	if a.FilePath.Valid {
+		filename = filepath.Base(a.FilePath.String)
+	}
+	if filename == "" && a.Title.Valid {
+		filename = a.Title.String
+	}
+
+	contentType := ""
+	if a.MimeType.Valid {
+		contentType = a.MimeType.String
+	}
+
+	createdAt := ""
+	if a.CreatedAt.Valid {
+		createdAt = a.CreatedAt.Time.Format("2006-01-02T15:04:05Z07:00")
+	}
+
+	// Decode metadata from JSONB []byte to map
+	var metadata map[string]string
+	if len(a.Metadata) > 0 && string(a.Metadata) != "{}" {
+		_ = json.Unmarshal(a.Metadata, &metadata)
+	}
+	if metadata == nil {
+		metadata = make(map[string]string)
+	}
+
+	return artifactResponse{
+		ID:           a.ID.String(),
+		AgentID:      a.AgentID.String(),
+		Filename:     filename,
+		ContentType:  contentType,
+		ArtifactType: a.Type,
+		Size:         0, // populated separately if needed
+		CreatedAt:    createdAt,
+		Metadata:     metadata,
+	}
+}
+
 // ArtifactAPI holds dependencies for artifact CRUD handlers.
 type ArtifactAPI struct {
 	queries       *db.Queries
@@ -79,8 +138,17 @@ func (aa *ArtifactAPI) ListArtifacts(w http.ResponseWriter, r *http.Request) {
 		artifacts = []db.Artifact{}
 	}
 
+	// Convert to response DTOs
+	responses := make([]artifactResponse, len(artifacts))
+	for i, a := range artifacts {
+		responses[i] = artifactToResponse(a)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(artifacts)
+	json.NewEncoder(w).Encode(listArtifactsResponse{
+		Artifacts: responses,
+		Total:     len(responses),
+	})
 }
 
 // GetArtifact handles GET /api/artifacts/:id
@@ -99,8 +167,18 @@ func (aa *ArtifactAPI) GetArtifact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	resp := artifactToResponse(artifact)
+
+	// Try to get file size from disk
+	if artifact.FilePath.Valid && artifact.FilePath.String != "" {
+		absPath := filepath.Join(aa.artifactsPath, artifact.FilePath.String)
+		if stat, err := os.Stat(absPath); err == nil {
+			resp.Size = stat.Size()
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(artifact)
+	json.NewEncoder(w).Encode(resp)
 }
 
 // GetArtifactFile handles GET /api/artifacts/:id/file — serves the actual file from disk.
@@ -249,7 +327,7 @@ func (aa *ArtifactAPI) UploadArtifact(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(artifact)
+	json.NewEncoder(w).Encode(artifactToResponse(artifact))
 }
 
 // DeleteArtifact handles DELETE /api/artifacts/:id

@@ -278,7 +278,7 @@ func (s *StudioAPI) Generate(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(artifact)
+	json.NewEncoder(w).Encode(artifactToStudioGeneration(artifact))
 }
 
 // ListGenerations handles GET /api/studio/generations?type=image&limit=20&offset=0
@@ -319,8 +319,56 @@ func (s *StudioAPI) ListGenerations(w http.ResponseWriter, r *http.Request) {
 		artifacts = []db.Artifact{}
 	}
 
+	// Convert to StudioGeneration DTOs for the frontend
+	generations := make([]studioGenerationResponse, len(artifacts))
+	for i, a := range artifacts {
+		generations[i] = artifactToStudioGeneration(a)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(artifacts)
+	json.NewEncoder(w).Encode(generations)
+}
+
+// studioGenerationResponse matches the frontend's StudioGeneration interface.
+type studioGenerationResponse struct {
+	ID        string `json:"id"`
+	Prompt    string `json:"prompt"`
+	Type      string `json:"type"`
+	Model     string `json:"model"`
+	URL       string `json:"url"`
+	CreatedAt string `json:"created_at"`
+}
+
+// artifactToStudioGeneration converts a db.Artifact to a StudioGeneration DTO.
+func artifactToStudioGeneration(a db.Artifact) studioGenerationResponse {
+	prompt := ""
+	if a.Description.Valid {
+		prompt = a.Description.String
+	} else if a.Title.Valid {
+		prompt = a.Title.String
+	}
+
+	// Extract model from metadata
+	model := ""
+	var meta map[string]string
+	if len(a.Metadata) > 0 {
+		_ = json.Unmarshal(a.Metadata, &meta)
+		model = meta["model"]
+	}
+
+	createdAt := ""
+	if a.CreatedAt.Valid {
+		createdAt = a.CreatedAt.Time.Format("2006-01-02T15:04:05Z07:00")
+	}
+
+	return studioGenerationResponse{
+		ID:        a.ID.String(),
+		Prompt:    prompt,
+		Type:      a.Type,
+		Model:     model,
+		URL:       fmt.Sprintf("/api/artifacts/%s/file", a.ID.String()),
+		CreatedAt: createdAt,
+	}
 }
 
 // --- Utility functions ---

@@ -221,7 +221,7 @@ func (a *API) callLiteLLMForSummary(ctx context.Context, prompt string) (string,
 
 	// Build OpenAI-compatible request
 	reqBody := map[string]any{
-		"model": "gpt-4o-mini",
+		"model": "local-qwen",
 		"messages": []map[string]string{
 			{"role": "user", "content": prompt},
 		},

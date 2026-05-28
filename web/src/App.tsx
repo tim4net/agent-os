@@ -115,6 +115,7 @@ function App() {
   }, [agents, isMobile])
 
   const handleNewChat = useCallback(() => {
+    setSelectedAgent(null)
     setActiveConversationId(null)
     setActiveTab('Chat')
     if (isMobile) setSidebarOpen(false)
@@ -192,15 +193,41 @@ function App() {
       case 'Chat':
         if (!selectedAgent) {
           return (
-            <div className="flex flex-col items-center justify-center h-full fade-in">
-              <h2 className="text-2xl font-bold text-[var(--text-primary)] mb-2">Chat</h2>
-              <p className="text-[var(--text-muted)]">Select an agent or conversation from the sidebar to start chatting.</p>
+            <div className="flex flex-col items-center justify-center h-full fade-in px-4">
+              <h2 className="text-2xl font-bold text-[var(--text-primary)] mb-2">Start a Chat</h2>
+              <p className="text-[var(--text-muted)] mb-6">Pick an agent to talk to.</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-md w-full">
+                {agents.map((agent) => (
+                  <button
+                    key={agent.id}
+                    onClick={() => handleSelectAgent(agent)}
+                    className="glass-card p-4 text-left hover:border-[var(--accent-blue)] transition-all duration-200 group"
+                  >
+                    <div className="flex items-center gap-3">
+                      <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${
+                        agent.status === 'online'
+                          ? 'bg-emerald-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]'
+                          : 'bg-gray-500'
+                      }`} />
+                      <div className="min-w-0">
+                        <p className="font-semibold text-sm text-[var(--text-primary)] group-hover:text-[var(--accent-blue)] transition-colors">
+                          {agent.display_name || agent.name}
+                        </p>
+                        <p className="text-xs text-[var(--text-muted)] truncate">
+                          Chat with {agent.display_name || agent.name}
+                        </p>
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
             </div>
           )
         }
         return (
           <ErrorBoundary name="Chat">
             <ChatPanel
+              key={selectedAgent.id}
               agent={selectedAgent}
               activeConversationId={activeConversationId}
               onConversationLoaded={() => {}}

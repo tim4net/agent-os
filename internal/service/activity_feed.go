@@ -53,11 +53,10 @@ func (af *ActivityFeed) consume(sub <-chan Event) {
 		if skipTypes[event.Type] {
 			continue
 		}
-		// Skip litellm agent status changes — it's infrastructure, not a user-visible agent
+		// Skip ALL agent status changes — they're shown via live status dots on agent cards,
+		// not meaningful activity. Crawbot flips every 30s flooding the feed.
 		if event.Type == EventAgentStatusChanged {
-			if name, ok := event.Payload["agent_name"].(string); ok && name == "litellm" {
-				continue
-			}
+			continue
 		}
 		entry := af.toEntry(event)
 		af.add(entry)
