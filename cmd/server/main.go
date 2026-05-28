@@ -113,7 +113,7 @@ func main() {
 		Addr:         addr,
 		Handler:      r,
 		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 120 * time.Second, // Long timeout for SSE streams
+		WriteTimeout: 300 * time.Second, // Long timeout for SSE streams and slow LLM responses
 		IdleTimeout:  120 * time.Second,
 	}
 

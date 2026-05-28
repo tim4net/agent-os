@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 )
 
 // LiteLLMHarness implements the Harness interface for the LiteLLM model router.
@@ -20,7 +19,9 @@ type LiteLLMHarness struct {
 
 func NewLiteLLMHarness() Harness {
 	return &LiteLLMHarness{
-		httpClient: &http.Client{Timeout: 120 * time.Second},
+		// No global Timeout — SSE streams from LLM can take minutes.
+		// Per-request context deadlines handle non-streaming calls.
+		httpClient: &http.Client{},
 	}
 }
 

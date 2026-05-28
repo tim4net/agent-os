@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 )
 
 // HermesHarness implements the Harness interface for Hermes/Roux agents.
@@ -22,7 +21,9 @@ type HermesHarness struct {
 
 func NewHermesHarness() Harness {
 	return &HermesHarness{
-		httpClient: &http.Client{Timeout: 120 * time.Second},
+		// No global Timeout — SSE streams from LLM can take minutes.
+		// Per-request context deadlines handle non-streaming calls.
+		httpClient: &http.Client{},
 	}
 }
 
