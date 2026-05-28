@@ -1,5 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Agent, Message, Model, AgentCommand } from '../../api/client'
+
+// crypto.randomUUID() requires a secure context (HTTPS).
+// Provide a fallback for HTTP / non-secure environments (Tailscale LAN, etc.).
+function uuid(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0
+    return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16)
+  })
+}
 import { getAgentModels, getAgentCommands, getMessages, sendChat, exportConversation, executeSlashCommand } from '../../api/client'
 import { MessageBubble } from './MessageBubble'
 import { VoiceButton } from './VoiceButton'
@@ -152,7 +164,7 @@ export function ChatPanel({ agent, activeConversationId, onConversationLoaded, o
     }
 
     const userMsg: Message = {
-      id: crypto.randomUUID(),
+      id: uuid(),
       role: 'user',
       content: text,
       created_at: new Date().toISOString(),
@@ -178,7 +190,7 @@ export function ChatPanel({ agent, activeConversationId, onConversationLoaded, o
 
         if (value.done) {
           const assistantMsg: Message = {
-            id: crypto.randomUUID(),
+            id: uuid(),
             role: 'assistant',
             content: accumulated,
             created_at: new Date().toISOString(),
@@ -205,7 +217,7 @@ export function ChatPanel({ agent, activeConversationId, onConversationLoaded, o
       setMessages((prev) => [
         ...prev,
         {
-          id: crypto.randomUUID(),
+          id: uuid(),
           role: 'assistant',
           content: `⚠️ **Failed to get response.**\n\n\`${errMsg}\`\n\nTry sending your message again.`,
           created_at: new Date().toISOString(),

@@ -8,7 +8,7 @@ Image=agent-os-web:latest
 Network=agent-os.network
 ContainerName=agent-os-web
 
-PublishPort=3000:80
+PublishPort=8080:80
 
 HealthCmd=curl -sf http://localhost:80/ || exit 1
 HealthInterval=15s

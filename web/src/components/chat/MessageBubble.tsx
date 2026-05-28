@@ -180,7 +180,21 @@ export function MessageBubble({ message }: MessageBubbleProps) {
               </button>
             )}
             <button
-              onClick={() => navigator.clipboard.writeText(message.content)}
+              onClick={() => {
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                  navigator.clipboard.writeText(message.content)
+                } else {
+                  // Fallback for non-secure contexts (HTTP)
+                  const ta = document.createElement('textarea')
+                  ta.value = message.content
+                  ta.style.position = 'fixed'
+                  ta.style.opacity = '0'
+                  document.body.appendChild(ta)
+                  ta.select()
+                  document.execCommand('copy')
+                  document.body.removeChild(ta)
+                }
+              }}
               className="p-1 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-all"
               title="Copy"
             >

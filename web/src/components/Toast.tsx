@@ -17,7 +17,9 @@ export function ToastContainer() {
 
   // Register global toast function
   addToastFn = (toast) => {
-    const id = crypto.randomUUID()
+    const id = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
+      ? crypto.randomUUID()
+      : Math.random().toString(36).slice(2) + Date.now().toString(36)
     setToasts((prev) => [...prev, { ...toast, id }])
     setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id))
