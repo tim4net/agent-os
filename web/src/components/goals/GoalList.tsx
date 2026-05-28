@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import type { Goal } from '../../api/client'
-import { listGoals, createGoal, updateGoal, breakdownGoal } from '../../api/client'
+import { listGoals, createGoal, updateGoal, breakdownGoal, deleteGoal } from '../../api/client'
 import { GoalProgress } from './GoalProgress'
 
 const statusColors: Record<string, string> = {
@@ -71,6 +71,16 @@ export function GoalList() {
       await loadGoals()
     } catch (err) {
       console.error('Failed to update goal:', err)
+    }
+  }
+
+  async function handleDelete(id: string) {
+    if (!window.confirm('Delete this goal?')) return
+    try {
+      await deleteGoal(id)
+      await loadGoals()
+    } catch (err) {
+      console.error('Failed to delete goal:', err)
     }
   }
 
@@ -150,15 +160,24 @@ export function GoalList() {
             >
               <div className="flex items-start justify-between">
                 <h3 className="font-medium text-white">{goal.title}</h3>
-                <select
-                  value={goal.status}
-                  onChange={(e) => handleStatusChange(goal.id, e.target.value)}
-                  className="text-xs bg-gray-800 border border-gray-700 rounded px-2 py-1 focus:outline-none"
-                >
-                  <option value="active">Active</option>
-                  <option value="completed">Completed</option>
-                  <option value="paused">Paused</option>
-                </select>
+                <div className="flex items-center gap-2 shrink-0">
+                  <select
+                    value={goal.status}
+                    onChange={(e) => handleStatusChange(goal.id, e.target.value)}
+                    className="text-xs bg-gray-800 border border-gray-700 rounded px-2 py-1 focus:outline-none"
+                  >
+                    <option value="active">Active</option>
+                    <option value="completed">Completed</option>
+                    <option value="paused">Paused</option>
+                  </select>
+                  <button
+                    onClick={() => handleDelete(goal.id)}
+                    className="text-xs text-gray-500 hover:text-red-400 transition-colors"
+                    title="Delete goal"
+                  >
+                    ✕
+                  </button>
+                </div>
               </div>
 
               {goal.description && (

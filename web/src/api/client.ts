@@ -464,6 +464,12 @@ export function breakdownGoal(id: string): Promise<Task[]> {
   })
 }
 
+export function deleteGoal(id: string): Promise<void> {
+  return request<void>(`/api/goals/${id}`, {
+    method: 'DELETE',
+  })
+}
+
 export function breakdownTask(id: string): Promise<Task[]> {
   return request<Task[]>(`/api/tasks/${id}/breakdown`, {
     method: 'POST',
