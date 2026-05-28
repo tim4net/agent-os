@@ -103,13 +103,39 @@ export function sendChat(
   if (model) body.model = model
   if (conversationId) body.conversation_id = conversationId
 
+  // Use AbortController to enforce a connect timeout (10s) and a
+  // stream-level idle timeout (5 min).  This prevents the send button
+  // from getting stuck in "streaming" state when the backend is down
+  // or the SSE stream stalls.
+  const abortController = new AbortController()
+  const connectTimeout = setTimeout(() => abortController.abort(), 10_000)
+  let idleTimer: ReturnType<typeof setTimeout> | null = null
+  const IDLE_MS = 5 * 60 * 1000 // 5 min — backend WriteTimeout is 300 s
+
+  function resetIdleTimeout() {
+    if (idleTimer) clearTimeout(idleTimer)
+    idleTimer = setTimeout(() => {
+      console.warn('sendChat: stream idle timeout, aborting')
+      abortController.abort()
+    }, IDLE_MS)
+  }
+
   const stream = new ReadableStream<ChatChunk>({
     async start(controller) {
-      const res = await fetch(`/api/agents/${agentId}/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      })
+      let res: Response
+      try {
+        res = await fetch(`/api/agents/${agentId}/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+          signal: abortController.signal,
+        })
+      } catch (err) {
+        clearTimeout(connectTimeout)
+        controller.error(err instanceof Error ? err : new Error(String(err)))
+        return
+      }
+      clearTimeout(connectTimeout)
 
       if (!res.ok) {
         let errMsg = `Chat failed (${res.status})`
@@ -133,11 +159,14 @@ export function sendChat(
 
       const decoder = new TextDecoder()
       let buffer = ''
+      resetIdleTimeout()
 
       try {
         while (true) {
           const { done, value } = await reader.read()
           if (done) break
+
+          resetIdleTimeout()
 
           buffer += decoder.decode(value, { stream: true })
           const lines = buffer.split('\n')
@@ -157,10 +186,19 @@ export function sendChat(
           }
         }
       } catch (err) {
-        controller.error(err)
+        if (abortController.signal.aborted) {
+          controller.error(new Error('Connection timed out. Please try again.'))
+        } else {
+          controller.error(err)
+        }
       } finally {
+        if (idleTimer) clearTimeout(idleTimer)
         controller.close()
       }
+    },
+    cancel() {
+      abortController.abort()
+      if (idleTimer) clearTimeout(idleTimer)
     },
   })
 
