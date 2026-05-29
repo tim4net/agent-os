@@ -363,27 +363,7 @@ func (a *API) ChatWithAgent(w http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 	}
 
-	// Stream SSE response
 	flusher, canFlush := w.(http.Flusher)
-
-	// Heartbeat goroutine — sends ping every 30s to prevent frontend idle timeout
-	heartbeatCtx, heartbeatCancel := context.WithCancel(r.Context())
-	defer heartbeatCancel()
-	go func() {
-		ticker := time.NewTicker(30 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				fmt.Fprintf(w, "event: ping\ndata: {}\n\n")
-				if canFlush {
-					flusher.Flush()
-				}
-			case <-heartbeatCtx.Done():
-				return
-			}
-		}
-	}()
 
 	// Collect full response for storage
 	var fullContent string

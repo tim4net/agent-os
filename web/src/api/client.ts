@@ -113,22 +113,11 @@ export function sendChat(
   if (model) body.model = model
   if (conversationId) body.conversation_id = conversationId
 
-  // Use AbortController to enforce a connect timeout (10s) and a
-  // stream-level idle timeout (5 min).  This prevents the send button
-  // from getting stuck in "streaming" state when the backend is down
-  // or the SSE stream stalls.
+  // Use AbortController only for connect timeout (10s).
+  // No idle timeout — like Telegram, the connection stays open until
+  // the server finishes or the user aborts.
   const abortController = new AbortController()
   const connectTimeout = setTimeout(() => abortController.abort(), 10_000)
-  let idleTimer: ReturnType<typeof setTimeout> | null = null
-  const IDLE_MS = 15 * 60 * 1000 // 15 min — Hermes agents can run long tasks
-
-  function resetIdleTimeout() {
-    if (idleTimer) clearTimeout(idleTimer)
-    idleTimer = setTimeout(() => {
-      console.warn('sendChat: stream idle timeout, aborting')
-      abortController.abort()
-    }, IDLE_MS)
-  }
 
   const stream = new ReadableStream<ChatChunk>({
     async start(controller) {
@@ -170,14 +159,11 @@ export function sendChat(
       const decoder = new TextDecoder()
       let buffer = ''
       let currentEvent = ''
-      resetIdleTimeout()
 
       try {
         while (true) {
           const { done, value } = await reader.read()
           if (done) break
-
-          resetIdleTimeout()
 
           buffer += decoder.decode(value, { stream: true })
           const lines = buffer.split('\n')
@@ -191,11 +177,6 @@ export function sendChat(
             }
             // Empty line = event separator, reset event type
             if (line === '') {
-              currentEvent = ''
-              continue
-            }
-            // Skip heartbeat ping events
-            if (currentEvent === 'ping') {
               currentEvent = ''
               continue
             }
@@ -229,13 +210,11 @@ export function sendChat(
           controller.error(err)
         }
       } finally {
-        if (idleTimer) clearTimeout(idleTimer)
         controller.close()
       }
     },
     cancel() {
       abortController.abort()
-      if (idleTimer) clearTimeout(idleTimer)
     },
   })
 
