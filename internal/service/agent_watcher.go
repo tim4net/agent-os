@@ -76,6 +76,16 @@ func (aw *AgentWatcher) checkAll(ctx context.Context) {
 	for _, agent := range agents {
 		aw.checkAgent(ctx, agent)
 	}
+
+	// Clean up stale delegations (running > 30 min)
+	aw.cleanStaleDelegations(ctx)
+}
+
+func (aw *AgentWatcher) cleanStaleDelegations(ctx context.Context) {
+	err := aw.queries.CleanStaleDelegations(ctx)
+	if err != nil {
+		slog.Error("agent watcher: clean stale delegations", "error", err)
+	}
 }
 
 func (aw *AgentWatcher) checkAgent(ctx context.Context, agent db.Agent) {

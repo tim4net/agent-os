@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -188,13 +189,31 @@ func (a *API) GetAgentModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Filter out non-chat models (TTS, embedding, image gen, etc.)
+	chatModels := make([]harness.ModelInfo, 0, len(models))
+	for _, m := range models {
+		if strings.HasPrefix(m.ID, "tts-") || m.ID == "tts-1" || m.ID == "tts-1-hd" {
+			continue // skip text-to-speech models
+		}
+		if strings.HasPrefix(m.ID, "embed-") {
+			continue // skip embedding models
+		}
+		if strings.HasPrefix(m.ID, "whisper") {
+			continue // skip transcription models
+		}
+		if strings.HasPrefix(m.ID, "dall-") {
+			continue // skip image generation models
+		}
+		chatModels = append(chatModels, m)
+	}
+
 	// Enrich with server-side display names
-	for i := range models {
-		models[i].DisplayName = modelDisplayName(models[i].ID)
+	for i := range chatModels {
+		chatModels[i].DisplayName = modelDisplayName(chatModels[i].ID)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(models)
+	json.NewEncoder(w).Encode(chatModels)
 }
 
 // modelDisplayName returns a human-friendly name for a model ID.

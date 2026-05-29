@@ -22,3 +22,7 @@ LIMIT $3 OFFSET $4;
 SELECT COUNT(*) FROM delegations
 WHERE ($1::uuid IS NULL OR parent_agent_id = $1)
   AND ($2::text = '' OR status = $2);
+
+-- name: CleanStaleDelegations :exec
+UPDATE delegations SET status = 'interrupted', completed_at = now(), result_summary = 'Stale delegation — auto-cleaned (no completion webhook received within timeout).'
+WHERE status = 'running' AND created_at < now() - INTERVAL '30 minutes';

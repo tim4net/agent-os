@@ -11,6 +11,7 @@ import (
 )
 
 type Querier interface {
+	CleanStaleDelegations(ctx context.Context) error
 	CountArtifacts(ctx context.Context, dollar_1 string) (int64, error)
 	CountDelegations(ctx context.Context, arg CountDelegationsParams) (int64, error)
 	CountSubtasks(ctx context.Context, parentTaskID pgtype.UUID) (int64, error)

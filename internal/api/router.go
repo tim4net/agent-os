@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -55,6 +56,15 @@ func (a *API) buildHarnessConfig(agent db.Agent) map[string]any {
 		}
 		if a.hermesAPIKey != "" {
 			config["api_key"] = a.hermesAPIKey
+		}
+	}
+	// Pass auth_token for openclaw from metadata
+	if agent.Harness == "openclaw" {
+		var meta map[string]any
+		if err := json.Unmarshal(agent.Metadata, &meta); err == nil {
+			if token, ok := meta["auth_token"].(string); ok && token != "" {
+				config["auth_token"] = token
+			}
 		}
 	}
 	return config
