@@ -20,6 +20,7 @@ export interface Conversation {
   id: string
   agent_id: string
   title: string
+  summary: string | null
   created_at?: string
   updated_at?: string
 }
@@ -41,6 +42,8 @@ export interface ChatChunk {
   done: boolean
   conversation_id?: string
   context_sources?: string[]
+  tool_name?: string
+  tool_status?: string
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -82,6 +85,13 @@ export function listConversations(): Promise<Conversation[]> {
   return request<Conversation[]>('/api/conversations')
 }
 
+export function summarizeConversations(conversationIds: string[]): Promise<Record<string, string>> {
+  return request<{ summaries: Record<string, string> }>('/api/conversations/summarize', {
+    method: 'POST',
+    body: JSON.stringify({ conversation_ids: conversationIds }),
+  }).then((r) => r.summaries)
+}
+
 export function getMessages(convId: string): Promise<Message[]> {
   return request<Message[]>(`/api/conversations/${convId}/messages`)
 }
@@ -110,7 +120,7 @@ export function sendChat(
   const abortController = new AbortController()
   const connectTimeout = setTimeout(() => abortController.abort(), 10_000)
   let idleTimer: ReturnType<typeof setTimeout> | null = null
-  const IDLE_MS = 5 * 60 * 1000 // 5 min — backend WriteTimeout is 300 s
+  const IDLE_MS = 15 * 60 * 1000 // 15 min — Hermes agents can run long tasks
 
   function resetIdleTimeout() {
     if (idleTimer) clearTimeout(idleTimer)
@@ -159,6 +169,7 @@ export function sendChat(
 
       const decoder = new TextDecoder()
       let buffer = ''
+      let currentEvent = ''
       resetIdleTimeout()
 
       try {
@@ -173,15 +184,41 @@ export function sendChat(
           buffer = lines.pop() ?? ''
 
           for (const line of lines) {
+            // Track SSE event type
+            if (line.startsWith('event: ')) {
+              currentEvent = line.slice(7).trim()
+              continue
+            }
+            // Empty line = event separator, reset event type
+            if (line === '') {
+              currentEvent = ''
+              continue
+            }
+            // Skip heartbeat ping events
+            if (currentEvent === 'ping') {
+              currentEvent = ''
+              continue
+            }
             if (line.startsWith('data: ')) {
               const payload = line.slice(6).trim()
               if (payload === '') continue
               try {
-                const chunk = JSON.parse(payload) as ChatChunk
+                const parsed = JSON.parse(payload)
+                const chunk = parsed as ChatChunk
+
+                // For tool events, embed the event info into the chunk
+                if (currentEvent === 'tool' && parsed.tool_name) {
+                  chunk.tool_name = parsed.tool_name
+                  chunk.tool_status = parsed.tool_status
+                  chunk.content = ''
+                  chunk.done = false
+                }
+
                 controller.enqueue(chunk)
               } catch {
                 // skip malformed JSON lines
               }
+              currentEvent = ''
             }
           }
         }
@@ -883,7 +920,7 @@ export function updateAgentConfig(
 // --- Slash Commands ---
 
 export interface SlashCommandResult {
-  type: 'new' | 'clear' | 'compact'
+  type: 'new' | 'clear' | 'compact' | 'retry' | 'undo' | 'history' | 'title' | 'stop' | 'save' | 'compress' | 'forward'
   message: string
   data: Record<string, unknown>
 }

@@ -74,9 +74,10 @@ func (a *API) GetTimeline(w http.ResponseWriter, r *http.Request) {
 	// 1. Conversations
 	convs, _ := a.queries.ListConversations(ctx, pgtype.UUID{})
 	for _, c := range convs {
-		title := "Untitled Conversation"
-		if c.Title.Valid {
-			title = c.Title.String
+		// Use saved summary if available, otherwise "New conversation"
+		title := "New conversation"
+		if c.Summary.Valid && c.Summary.String != "" {
+			title = c.Summary.String
 		}
 		agentName := agentNames[c.AgentID.String()]
 		desc := "Conversation started"

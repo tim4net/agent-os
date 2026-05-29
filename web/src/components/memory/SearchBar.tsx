@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { MemorySearchResult } from '../../api/client'
 import { searchMemory } from '../../api/client'
+import { Icon } from '../Icon'
 
 interface SearchBarProps {
   onFileSelect: (path: string) => void
@@ -60,7 +61,7 @@ export function SearchBar({ onFileSelect }: SearchBarProps) {
   return (
     <div ref={containerRef} className="relative">
       <div className="relative">
-        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 text-sm">🔍</span>
+        <Icon name="search" size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
         <input
           type="text"
           placeholder="Search memory…"

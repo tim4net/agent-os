@@ -408,7 +408,27 @@ func (o *OpenClawHarness) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	return nil, ErrNotSupported
 }
 
-func (o *OpenClawHarness) Commands() []Command { return nil }
+// openclawCommands defines slash commands for the OpenClaw/Crawbot agent.
+// Commands handled by Agent OS backend: /new, /clear, /compact, /retry, /undo,
+// /history, /title, /stop, /save.
+// Everything else is forwarded as a chat message to OpenClaw for processing.
+var openclawCommands = []Command{
+	// Session management (Agent OS handles these)
+	{Command: "/new", Description: "Start a new session"},
+	{Command: "/clear", Description: "Clear messages in current conversation"},
+	{Command: "/compact", Description: "Summarize and compact conversation history"},
+	{Command: "/retry", Description: "Retry the last message (resend to agent)"},
+	{Command: "/undo", Description: "Remove the last user/assistant exchange"},
+	{Command: "/history", Description: "Show conversation history"},
+	{Command: "/title", Description: "Set a title for the current session"},
+	{Command: "/stop", Description: "Stop current streaming response"},
+	{Command: "/save", Description: "Export conversation to Obsidian"},
+	// OpenClaw-specific (forwarded to OpenClaw)
+	{Command: "/dreams", Description: "View or manage OpenClaw dreams"},
+	{Command: "/help", Description: "Show available commands"},
+}
+
+func (o *OpenClawHarness) Commands() []Command { return openclawCommands }
 
 func (o *OpenClawHarness) Close() error {
 	o.httpClient.CloseIdleConnections()

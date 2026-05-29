@@ -30,5 +30,11 @@ UPDATE agents SET role = $2, system_prompt = $3, persona = $4, updated_at = NOW(
 WHERE id = $1
 RETURNING *;
 
+-- name: EnsureAgent :one
+INSERT INTO agents (name, display_name, harness, base_url, metadata)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (name) DO NOTHING
+RETURNING *;
+
 -- name: DeleteAgent :exec
 DELETE FROM agents WHERE id = $1;

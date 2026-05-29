@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Icon } from './Icon'
 
 interface Toast {
   id: string
@@ -48,7 +49,7 @@ export function ToastContainer() {
             onClick={() => dismiss(toast.id)}
             className="text-gray-400 hover:text-white transition-colors shrink-0"
           >
-            ✕
+            <Icon name="close" size={14} />
           </button>
         </div>
       ))}

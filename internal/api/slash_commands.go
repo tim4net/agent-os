@@ -8,6 +8,9 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -17,7 +20,7 @@ import (
 
 // SlashCommandResult is the JSON response for slash command execution.
 type SlashCommandResult struct {
-	Type    string `json:"type"`    // "new", "clear", "compact"
+	Type    string `json:"type"`    // "new", "clear", "compact", "retry", "undo", "history", "title", "stop", "save", "compress"
 	Message string `json:"message"` // Human-readable result
 	Data    any    `json:"data"`    // Optional payload
 }
@@ -58,9 +61,35 @@ func (a *API) HandleSlashCommand(w http.ResponseWriter, r *http.Request) {
 		result, err = a.slashClear(r.Context(), req.ConversationID)
 	case "/compact":
 		result, err = a.slashCompact(r.Context(), req.ConversationID)
+	case "/compress":
+		// Alias for /compact
+		result, err = a.slashCompact(r.Context(), req.ConversationID)
+	case "/retry":
+		result, err = a.slashRetry(r.Context(), req.AgentID, req.ConversationID)
+	case "/undo":
+		result, err = a.slashUndo(r.Context(), req.ConversationID)
+	case "/history":
+		result, err = a.slashHistory(r.Context(), req.ConversationID)
+	case "/title":
+		result, err = a.slashTitle(r.Context(), req.ConversationID, args)
+	case "/stop":
+		// Stop is handled client-side (abort the fetch), but acknowledge
+		result = &SlashCommandResult{
+			Type:    "stop",
+			Message: "Streaming stopped",
+		}
+	case "/save":
+		result, err = a.slashSave(r.Context(), req.ConversationID)
 	default:
-		http.Error(w, fmt.Sprintf("unknown command: %s", cmd), http.StatusBadRequest)
-		return
+		// Forward unknown slash commands to the agent as chat messages.
+		// The agent (Hermes, OpenClaw, etc.) handles its own slash commands.
+		result = &SlashCommandResult{
+			Type:    "forward",
+			Message: fmt.Sprintf("Forwarding %s to agent", cmd),
+			Data: map[string]any{
+				"forward_text": command,
+			},
+		}
 	}
 
 	if err != nil {
@@ -209,6 +238,207 @@ func (a *API) slashCompact(ctx context.Context, convIDStr string) (*SlashCommand
 			"conversation_id": convID.String(),
 			"removed":         deleted,
 			"summary":         summary,
+		},
+	}, nil
+}
+
+// slashRetry re-sends the last user message (removes last assistant reply, returns the user text).
+func (a *API) slashRetry(ctx context.Context, agentIDStr, convIDStr string) (*SlashCommandResult, error) {
+	if convIDStr == "" {
+		return nil, fmt.Errorf("conversation_id is required for /retry")
+	}
+
+	var convID pgtype.UUID
+	if err := convID.Scan(convIDStr); err != nil {
+		return nil, fmt.Errorf("invalid conversation_id: %w", err)
+	}
+
+	// Get the last user message
+	lastMsg, err := a.queries.GetLastUserMessage(ctx, convID)
+	if err != nil {
+		return nil, fmt.Errorf("no user message to retry: %w", err)
+	}
+
+	// Delete the last exchange (user + assistant)
+	deleted, err := a.queries.DeleteLastExchange(ctx, convID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to remove last exchange: %w", err)
+	}
+
+	return &SlashCommandResult{
+		Type:    "retry",
+		Message: fmt.Sprintf("Retrying last message (removed %d messages)", deleted),
+		Data: map[string]any{
+			"conversation_id": convID.String(),
+			"removed":         deleted,
+			"retry_message":   lastMsg.Content,
+		},
+	}, nil
+}
+
+// slashUndo removes the last user/assistant exchange.
+func (a *API) slashUndo(ctx context.Context, convIDStr string) (*SlashCommandResult, error) {
+	if convIDStr == "" {
+		return nil, fmt.Errorf("conversation_id is required for /undo")
+	}
+
+	var convID pgtype.UUID
+	if err := convID.Scan(convIDStr); err != nil {
+		return nil, fmt.Errorf("invalid conversation_id: %w", err)
+	}
+
+	deleted, err := a.queries.DeleteLastExchange(ctx, convID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to undo: %w", err)
+	}
+
+	return &SlashCommandResult{
+		Type:    "undo",
+		Message: fmt.Sprintf("Removed last exchange (%d messages)", deleted),
+		Data: map[string]any{
+			"conversation_id": convID.String(),
+			"removed":         deleted,
+		},
+	}, nil
+}
+
+// slashHistory returns the conversation messages as structured data.
+func (a *API) slashHistory(ctx context.Context, convIDStr string) (*SlashCommandResult, error) {
+	if convIDStr == "" {
+		return nil, fmt.Errorf("conversation_id is required for /history")
+	}
+
+	var convID pgtype.UUID
+	if err := convID.Scan(convIDStr); err != nil {
+		return nil, fmt.Errorf("invalid conversation_id: %w", err)
+	}
+
+	messages, err := a.queries.ListMessages(ctx, convID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load history: %w", err)
+	}
+
+	// Format as readable text
+	var sb strings.Builder
+	for _, m := range messages {
+		role := strings.Title(m.Role)
+		content := m.Content
+		if len(content) > 200 {
+			content = content[:200] + "..."
+		}
+		sb.WriteString(fmt.Sprintf("**%s**: %s\n\n", role, content))
+	}
+
+	return &SlashCommandResult{
+		Type:    "history",
+		Message: fmt.Sprintf("Showing %d messages", len(messages)),
+		Data: map[string]any{
+			"conversation_id": convID.String(),
+			"count":           len(messages),
+			"history_text":    sb.String(),
+		},
+	}, nil
+}
+
+// slashTitle sets the conversation title.
+func (a *API) slashTitle(ctx context.Context, convIDStr, title string) (*SlashCommandResult, error) {
+	if convIDStr == "" {
+		return nil, fmt.Errorf("conversation_id is required for /title")
+	}
+	if title == "" {
+		return nil, fmt.Errorf("title is required (e.g. /title My Conversation)")
+	}
+
+	var convID pgtype.UUID
+	if err := convID.Scan(convIDStr); err != nil {
+		return nil, fmt.Errorf("invalid conversation_id: %w", err)
+	}
+
+	conv, err := a.queries.UpdateConversation(ctx, db.UpdateConversationParams{
+		ID:    convID,
+		Title: pgtype.Text{String: title, Valid: true},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to update title: %w", err)
+	}
+
+	return &SlashCommandResult{
+		Type:    "title",
+		Message: fmt.Sprintf("Title set to: %s", title),
+		Data: map[string]any{
+			"conversation_id": convID.String(),
+			"title":           conv.Title.String,
+		},
+	}, nil
+}
+
+// slashSave exports the conversation to Obsidian.
+func (a *API) slashSave(ctx context.Context, convIDStr string) (*SlashCommandResult, error) {
+	if convIDStr == "" {
+		return nil, fmt.Errorf("conversation_id is required for /save")
+	}
+
+	var convID pgtype.UUID
+	if err := convID.Scan(convIDStr); err != nil {
+		return nil, fmt.Errorf("invalid conversation_id: %w", err)
+	}
+
+	conv, err := a.queries.GetConversation(ctx, convID)
+	if err != nil {
+		return nil, fmt.Errorf("conversation not found: %w", err)
+	}
+
+	messages, err := a.queries.ListMessages(ctx, convID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load messages: %w", err)
+	}
+
+	// Build title and filename
+	title := "Conversation Export"
+	if conv.Title.Valid {
+		title = conv.Title.String
+	}
+
+	date := time.Now().UTC().Format("2006-01-02")
+	slug := strings.ToLower(strings.ReplaceAll(title, " ", "-"))
+	slug = regexp.MustCompile(`[^a-z0-9-]`).ReplaceAllString(slug, "")
+	slug = regexp.MustCompile(`-+`).ReplaceAllString(slug, "-")
+	slug = strings.Trim(slug, "-")
+	filename := fmt.Sprintf("%s-%s.md", date, slug)
+
+	// Build markdown
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("# %s\n\n", title))
+	for _, m := range messages {
+		role := m.Role
+		if role == "user" {
+			role = "👤 User"
+		} else if role == "assistant" {
+			role = "🤖 Assistant"
+		}
+		sb.WriteString(fmt.Sprintf("## %s\n\n%s\n\n---\n\n", role, m.Content))
+	}
+
+	// Write to Obsidian vault
+	vaultDir := filepath.Join(a.obsidianPath, "projects", "agent-os", "conversations")
+	if err := os.MkdirAll(vaultDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create vault directory: %w", err)
+	}
+
+	fullPath := filepath.Join(vaultDir, filename)
+	if err := os.WriteFile(fullPath, []byte(sb.String()), 0644); err != nil {
+		return nil, fmt.Errorf("failed to write export file: %w", err)
+	}
+
+	relPath := filepath.Join("projects", "agent-os", "conversations", filename)
+	slog.Info("slash /save: exported conversation to obsidian", "conversation_id", convID.String(), "path", relPath)
+
+	return &SlashCommandResult{
+		Type:    "save",
+		Message: fmt.Sprintf("Exported to Obsidian: %s", relPath),
+		Data: map[string]any{
+			"conversation_id": convID.String(),
+			"path":            relPath,
 		},
 	}, nil
 }

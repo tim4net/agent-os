@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import type { Workflow } from '../../api/client'
 import { listWorkflows, deleteWorkflow, runWorkflow } from '../../api/client'
 import { WorkflowEditor } from './WorkflowEditor'
+import { Icon } from '../Icon'
 
 export function WorkflowList() {
   const [workflows, setWorkflows] = useState<Workflow[]>([])
@@ -92,7 +93,7 @@ export function WorkflowList() {
             onClick={() => setRunResult(null)}
             className="ml-3 text-gray-400 hover:text-white"
           >
-            ✕
+            <Icon name="close" size={14} />
           </button>
         </div>
       )}

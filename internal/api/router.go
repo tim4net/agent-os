@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/tim4net/agent-os/internal/db"
 	"github.com/tim4net/agent-os/internal/harness"
 	"github.com/tim4net/agent-os/internal/service"
@@ -13,6 +14,7 @@ import (
 // API holds dependencies for the API handlers.
 type API struct {
 	queries          *db.Queries
+	pool             *pgxpool.Pool
 	registry         *harness.Registry
 	bus              *service.EventBus
 	feed             *service.ActivityFeed
@@ -21,15 +23,17 @@ type API struct {
 	hermesSkillsPath string
 	hermesAPIKey     string
 	zaiAPIKey        string
+	openrouterAPIKey string
 	artifacts        *ArtifactAPI
 	memory           *MemoryAPI
 	studio           *StudioAPI
 }
 
 // NewAPI creates a new API instance with the given dependencies.
-func NewAPI(queries *db.Queries, registry *harness.Registry, bus *service.EventBus, feed *service.ActivityFeed, litellmURL string, artifactsPath string, obsidianPath string, hermesSkillsPath string, apiKeys map[string]string, hermesAPIKey string, zaiAPIKey string) *API {
+func NewAPI(queries *db.Queries, pool *pgxpool.Pool, registry *harness.Registry, bus *service.EventBus, feed *service.ActivityFeed, litellmURL string, artifactsPath string, obsidianPath string, hermesSkillsPath string, apiKeys map[string]string, hermesAPIKey string, zaiAPIKey string, openrouterAPIKey string) *API {
 	return &API{
 		queries:          queries,
+		pool:             pool,
 		registry:         registry,
 		bus:              bus,
 		feed:             feed,
@@ -38,6 +42,7 @@ func NewAPI(queries *db.Queries, registry *harness.Registry, bus *service.EventB
 		hermesSkillsPath: hermesSkillsPath,
 		hermesAPIKey:     hermesAPIKey,
 		zaiAPIKey:        zaiAPIKey,
+		openrouterAPIKey: openrouterAPIKey,
 		artifacts:        NewArtifactAPI(queries, artifactsPath),
 		memory:           NewMemoryAPI(queries, obsidianPath, litellmURL),
 		studio:           NewStudioAPI(queries, artifactsPath, apiKeys),
@@ -51,11 +56,11 @@ func (a *API) buildHarnessConfig(agent db.Agent) map[string]any {
 	}
 	// Pass harness-specific config for hermes
 	if agent.Harness == "hermes" {
-		if a.litellmURL != "" {
-			config["litellm_url"] = a.litellmURL
-		}
 		if a.hermesAPIKey != "" {
 			config["api_key"] = a.hermesAPIKey
+		}
+		if a.litellmURL != "" {
+			config["litellm_url"] = a.litellmURL
 		}
 	}
 	// Pass auth_token for openclaw from metadata
@@ -103,6 +108,7 @@ func (a *API) Router() http.Handler {
 	r.Route("/conversations", func(r chi.Router) {
 		r.Get("/", a.ListConversations)
 		r.Post("/", a.CreateConversation)
+		r.Post("/summarize", a.ConversationSummary)
 		r.Route("/{id}", func(r chi.Router) {
 			r.Get("/messages", a.GetConversationMessages)
 			r.Post("/export", a.ExportConversation)

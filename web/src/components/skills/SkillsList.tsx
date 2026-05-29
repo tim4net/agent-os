@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import type { Skill } from '../../api/client'
 import { listSkills, getSkill, deleteSkill, syncSkillsFromHermes } from '../../api/client'
+import { Icon } from '../Icon'
 import { SkillEditor } from './SkillEditor'
 
 const CATEGORIES = ['general', 'coding', 'research', 'writing', 'automation', 'creative', 'devops', 'gaming', 'media', 'productivity', 'software-development', 'mlops', 'apple', 'email', 'github', 'mcp', 'smart-home', 'social-media', 'red-teaming', 'note-taking', 'data-science', 'diagramming', 'dogfood', 'domain', 'inference-sh', 'multi-tier-llm-routing', 'autonomous-ai-agents', 'yuanbao'] as const
@@ -129,7 +130,7 @@ export function SkillsList() {
             className="px-4 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-purple-800 disabled:opacity-60 rounded-lg text-sm font-medium transition-colors"
             aria-label="Sync skills from Hermes"
           >
-            {syncing ? '⟳ Syncing...' : '🔄 Sync from Hermes'}
+            {syncing ? '⟳ Syncing...' : <><Icon name="refresh" size={14} /> Sync from Hermes</>}
           </button>
           <button
             onClick={() => setCreating(true)}
@@ -153,7 +154,7 @@ export function SkillsList() {
             className="ml-2 text-gray-400 hover:text-white"
             aria-label="Dismiss"
           >
-            ✕
+            <Icon name="close" size={16} />
           </button>
         </div>
       )}

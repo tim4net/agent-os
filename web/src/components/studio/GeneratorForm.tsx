@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { StudioGeneration, StudioProvider } from '../../api/client'
 import { getStudioProviders, studioGenerate } from '../../api/client'
+import { Icon } from '../Icon'
 
 interface GeneratorFormProps {
   onGenerated?: (generation: StudioGeneration) => void
@@ -81,7 +82,7 @@ export function GeneratorForm({ onGenerated, agentId }: GeneratorFormProps) {
       <div className="flex flex-col gap-4">
         <h3 className="text-lg font-semibold text-white">Generate Media</h3>
         <div className="p-4 bg-yellow-900/20 text-yellow-400 text-sm rounded-lg border border-yellow-900/30">
-          ⚠️ No generation providers are configured. Please check your server configuration.
+          <Icon name="warning" size={14} /> No generation providers are configured. Please check your server configuration.
         </div>
       </div>
     )
@@ -133,7 +134,7 @@ export function GeneratorForm({ onGenerated, agentId }: GeneratorFormProps) {
           {providers.filter(p => !p.available).length > 0 && (
             <details className="group/details">
               <summary className="inline-flex items-center gap-1 px-3 py-1.5 text-sm rounded-lg border border-gray-800 bg-gray-800/50 text-gray-600 cursor-pointer hover:text-gray-400 transition-colors list-none">
-                <span>🔒 {providers.filter(p => !p.available).length} locked</span>
+                <span><Icon name="lock" size={14} /> {providers.filter(p => !p.available).length} locked</span>
                 <svg className="w-3 h-3 transition-transform group-open/details:rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                 </svg>
@@ -147,7 +148,7 @@ export function GeneratorForm({ onGenerated, agentId }: GeneratorFormProps) {
                     className="px-3 py-1.5 text-sm rounded-lg transition-colors border bg-gray-800/50 text-gray-600 border-gray-800 cursor-not-allowed flex items-center gap-1.5"
                   >
                     {p.name}
-                    <span className="text-gray-600 text-xs">🔒</span>
+                    <span className="text-gray-600 text-xs"><Icon name="lock" size={14} /></span>
                   </button>
                 ))}
               </div>
@@ -159,7 +160,7 @@ export function GeneratorForm({ onGenerated, agentId }: GeneratorFormProps) {
       {/* No available providers warning */}
       {noProvidersAvailable && (
         <div className="p-3 bg-yellow-900/20 text-yellow-400 text-sm rounded-lg border border-yellow-900/30">
-          ⚠️ No providers are available. Configure an API key to enable image generation.
+          <Icon name="warning" size={14} /> No providers are available. Configure an API key to enable image generation.
         </div>
       )}
 

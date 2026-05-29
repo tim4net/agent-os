@@ -14,7 +14,7 @@ import (
 const createConversation = `-- name: CreateConversation :one
 INSERT INTO conversations (agent_id, title, metadata)
 VALUES ($1, $2, $3)
-RETURNING id, agent_id, title, metadata, created_at, updated_at
+RETURNING id, agent_id, title, metadata, created_at, updated_at, summary
 `
 
 type CreateConversationParams struct {
@@ -33,6 +33,7 @@ func (q *Queries) CreateConversation(ctx context.Context, arg CreateConversation
 		&i.Metadata,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Summary,
 	)
 	return i, err
 }
@@ -69,6 +70,37 @@ func (q *Queries) CreateMessage(ctx context.Context, arg CreateMessageParams) (M
 	return i, err
 }
 
+const deleteLastExchange = `-- name: DeleteLastExchange :execrows
+WITH last_user AS (
+    SELECT id FROM messages
+    WHERE messages.conversation_id = $1 AND messages.role = 'user'
+    ORDER BY messages.created_at DESC LIMIT 1
+),
+last_assistant AS (
+    SELECT id FROM messages
+    WHERE messages.conversation_id = $1 AND messages.role = 'assistant'
+    ORDER BY messages.created_at DESC LIMIT 1
+)
+DELETE FROM messages WHERE id IN (SELECT id FROM last_user) OR id IN (SELECT id FROM last_assistant)
+`
+
+func (q *Queries) DeleteLastExchange(ctx context.Context, conversationID pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteLastExchange, conversationID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteMessage = `-- name: DeleteMessage :exec
+DELETE FROM messages WHERE id = $1
+`
+
+func (q *Queries) DeleteMessage(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteMessage, id)
+	return err
+}
+
 const deleteMessagesByConversation = `-- name: DeleteMessagesByConversation :execrows
 DELETE FROM messages WHERE conversation_id = $1
 `
@@ -82,7 +114,7 @@ func (q *Queries) DeleteMessagesByConversation(ctx context.Context, conversation
 }
 
 const getConversation = `-- name: GetConversation :one
-SELECT id, agent_id, title, metadata, created_at, updated_at FROM conversations WHERE id = $1
+SELECT id, agent_id, title, metadata, created_at, updated_at, summary FROM conversations WHERE id = $1
 `
 
 func (q *Queries) GetConversation(ctx context.Context, id pgtype.UUID) (Conversation, error) {
@@ -95,12 +127,33 @@ func (q *Queries) GetConversation(ctx context.Context, id pgtype.UUID) (Conversa
 		&i.Metadata,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Summary,
+	)
+	return i, err
+}
+
+const getLastUserMessage = `-- name: GetLastUserMessage :one
+SELECT id, conversation_id, role, content, metadata, created_at FROM messages
+WHERE conversation_id = $1 AND role = 'user'
+ORDER BY created_at DESC LIMIT 1
+`
+
+func (q *Queries) GetLastUserMessage(ctx context.Context, conversationID pgtype.UUID) (Message, error) {
+	row := q.db.QueryRow(ctx, getLastUserMessage, conversationID)
+	var i Message
+	err := row.Scan(
+		&i.ID,
+		&i.ConversationID,
+		&i.Role,
+		&i.Content,
+		&i.Metadata,
+		&i.CreatedAt,
 	)
 	return i, err
 }
 
 const listConversations = `-- name: ListConversations :many
-SELECT c.id, c.agent_id, c.title, c.metadata, c.created_at, c.updated_at FROM conversations c
+SELECT c.id, c.agent_id, c.title, c.metadata, c.created_at, c.updated_at, c.summary FROM conversations c
 JOIN agents a ON c.agent_id = a.id
 WHERE a.visible = true
 AND ($1::uuid IS NULL OR c.agent_id = $1)
@@ -123,6 +176,7 @@ func (q *Queries) ListConversations(ctx context.Context, dollar_1 pgtype.UUID) (
 			&i.Metadata,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Summary,
 		); err != nil {
 			return nil, err
 		}
@@ -170,7 +224,7 @@ func (q *Queries) ListMessages(ctx context.Context, conversationID pgtype.UUID) 
 const updateConversation = `-- name: UpdateConversation :one
 UPDATE conversations SET title = $2, updated_at = NOW()
 WHERE id = $1
-RETURNING id, agent_id, title, metadata, created_at, updated_at
+RETURNING id, agent_id, title, metadata, created_at, updated_at, summary
 `
 
 type UpdateConversationParams struct {
@@ -188,6 +242,59 @@ func (q *Queries) UpdateConversation(ctx context.Context, arg UpdateConversation
 		&i.Metadata,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Summary,
+	)
+	return i, err
+}
+
+const updateConversationMetadata = `-- name: UpdateConversationMetadata :one
+UPDATE conversations SET metadata = $2, updated_at = NOW()
+WHERE id = $1
+RETURNING id, agent_id, title, metadata, created_at, updated_at, summary
+`
+
+type UpdateConversationMetadataParams struct {
+	ID       pgtype.UUID `json:"id"`
+	Metadata []byte      `json:"metadata"`
+}
+
+func (q *Queries) UpdateConversationMetadata(ctx context.Context, arg UpdateConversationMetadataParams) (Conversation, error) {
+	row := q.db.QueryRow(ctx, updateConversationMetadata, arg.ID, arg.Metadata)
+	var i Conversation
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.Title,
+		&i.Metadata,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Summary,
+	)
+	return i, err
+}
+
+const updateConversationSummary = `-- name: UpdateConversationSummary :one
+UPDATE conversations SET summary = $2, updated_at = NOW()
+WHERE id = $1
+RETURNING id, agent_id, title, metadata, created_at, updated_at, summary
+`
+
+type UpdateConversationSummaryParams struct {
+	ID      pgtype.UUID `json:"id"`
+	Summary pgtype.Text `json:"summary"`
+}
+
+func (q *Queries) UpdateConversationSummary(ctx context.Context, arg UpdateConversationSummaryParams) (Conversation, error) {
+	row := q.db.QueryRow(ctx, updateConversationSummary, arg.ID, arg.Summary)
+	var i Conversation
+	err := row.Scan(
+		&i.ID,
+		&i.AgentID,
+		&i.Title,
+		&i.Metadata,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Summary,
 	)
 	return i, err
 }

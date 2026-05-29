@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react'
 import type { MemoryTreeNode } from '../../api/client'
 import { getMemoryTree } from '../../api/client'
 import { SynthesisModal } from './SynthesisModal'
+import { Icon } from '../Icon'
 
 interface FileTreeProps {
   onFileSelect: (path: string) => void
@@ -13,28 +14,28 @@ function fileIcon(name: string): string {
   switch (ext) {
     case 'md':
     case 'markdown':
-      return '📝'
+      return 'edit_note'
     case 'json':
-      return '📋'
+      return 'checklist'
     case 'yaml':
     case 'yml':
-      return '⚙️'
+      return 'settings'
     case 'txt':
-      return '📄'
+      return 'description'
     case 'png':
     case 'jpg':
     case 'jpeg':
     case 'gif':
     case 'webp':
-      return '🖼️'
+      return 'image'
     case 'py':
     case 'js':
     case 'ts':
-      return '💻'
+      return 'code'
     case 'pdf':
-      return '📕'
+      return 'book'
     default:
-      return '📄'
+      return 'description'
   }
 }
 
@@ -118,7 +119,7 @@ function TreeNode({
             className="flex items-center gap-1.5 flex-1 min-w-0"
             aria-expanded={expanded}
           >
-            <span className="text-xs">{expanded ? '📂' : '📁'}</span>
+             <span className="text-xs"><Icon name={expanded ? 'folder_open' : 'folder'} size={14} /></span>
             <span className="truncate">{node.name}</span>
             {loading && <span className="text-xs text-gray-500 ml-1">…</span>}
             <span className="text-gray-600 text-xs ml-auto">
@@ -166,7 +167,7 @@ function TreeNode({
         onClick={() => onFileSelect(node.path)}
         className="flex items-center gap-1.5 flex-1 min-w-0"
       >
-        <span className="text-xs">{fileIcon(node.name)}</span>
+        <span className="text-xs"><Icon name={fileIcon(node.name)} size={14} /></span>
         <span className="truncate">{node.name}</span>
       </button>
     </div>
@@ -270,7 +271,7 @@ export function FileTree({ onFileSelect, selectedPath }: FileTreeProps) {
             onClick={() => setSynthesisOpen(true)}
             className="ml-auto px-3 py-1 text-xs font-medium rounded bg-blue-600 text-white hover:bg-blue-500 transition-colors"
           >
-            ✨ Synthesize
+            <Icon name="auto_awesome" size={14} /> Synthesize
           </button>
           <button
             onClick={clearSelection}

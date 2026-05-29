@@ -44,6 +44,7 @@ type Conversation struct {
 	Metadata  []byte             `json:"metadata"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+	Summary   pgtype.Text        `json:"summary"`
 }
 
 type Delegation struct {

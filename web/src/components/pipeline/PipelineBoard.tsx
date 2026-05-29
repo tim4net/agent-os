@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import type { PipelineItem } from '../../api/client'
 import { listPipeline, createPipelineItem, updatePipelineItem, generateContent, advancePipeline } from '../../api/client'
+import { Icon } from '../Icon'
 import { ContentEditor } from './ContentEditor'
 
 const COLUMNS = [
@@ -255,7 +256,7 @@ export function PipelineBoard() {
                               disabled={generating === item.id}
                               className="text-xs px-2 py-1 bg-purple-600 hover:bg-purple-700 disabled:bg-purple-800 rounded transition-colors"
                             >
-                              {generating === item.id ? 'Generating...' : '✨ Generate'}
+                              {generating === item.id ? 'Generating...' : <><Icon name="auto_awesome" size={14} /> Generate</>}
                             </button>
                           )}
                           {col.key !== 'published' && (

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { Workflow, WorkflowStep } from '../../api/client'
 import { createWorkflow, updateWorkflow } from '../../api/client'
+import { Icon } from '../Icon'
 
 interface WorkflowEditorProps {
   workflow?: Workflow | null
@@ -89,7 +90,7 @@ export function WorkflowEditor({ workflow, onDone }: WorkflowEditorProps) {
           onClick={onDone}
           className="text-gray-400 hover:text-white text-sm"
         >
-          ✕ Cancel
+          <Icon name="close" size={14} /> Cancel
         </button>
       </div>
 
@@ -176,7 +177,7 @@ export function WorkflowEditor({ workflow, onDone }: WorkflowEditorProps) {
                       className="text-red-400 hover:text-red-300 disabled:text-gray-700 text-xs px-1"
                       title="Remove step"
                     >
-                      ✕
+                      <Icon name="close" size={14} />
                     </button>
                   </div>
                 </div>

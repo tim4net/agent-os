@@ -33,8 +33,13 @@ func main() {
 
 	queries := db.New(pool)
 
+	// Ensure known agents exist in the database (INSERT-only, never overwrite).
+	// This guarantees agents are present on first boot but respects any DB-side
+	// edits to display_name, role, system_prompt, persona, etc.
+	ensureKnownAgents(ctx, queries)
+
 	// Ensure infrastructure agents are hidden (prevent visible flag regression)
-	// NOTE: LiteLLM agent is now user-visible as "Models" for direct model access.
+	// NOTE: LiteLLM agent visible as "LiteLLM on xps" for direct model access.
 	// Only hide true infrastructure-only agents here if needed.
 
 	// Create event bus
@@ -92,6 +97,9 @@ func main() {
 			case strings.HasSuffix(r.URL.Path, "/synthesize"):
 				next.ServeHTTP(w, r)
 				return
+			case strings.HasSuffix(r.URL.Path, "/summarize"):
+				next.ServeHTTP(w, r)
+				return
 			}
 			middleware.Timeout(60*time.Second)(next).ServeHTTP(w, r)
 		})
@@ -104,8 +112,13 @@ func main() {
 		"gemini":     cfg.GeminiAPIKey,
 		"fal":        cfg.FALKey,
 	}
-	a := api.NewAPI(queries, harness.DefaultRegistry, bus, feed, cfg.LiteLLMURL, cfg.ArtifactsPath, cfg.ObsidianPath, cfg.HermesSkillsPath, apiKeys, cfg.HermesAPIKey, cfg.ZAIAPIKey)
+	a := api.NewAPI(queries, pool, harness.DefaultRegistry, bus, feed, cfg.LiteLLMURL, cfg.ArtifactsPath, cfg.ObsidianPath, cfg.HermesSkillsPath, apiKeys, cfg.HermesAPIKey, cfg.ZAIAPIKey, cfg.OpenRouterAPIKey)
 	r.Mount("/api", a.Router())
+
+	// Start background title worker (hourly re-summarization of active conversations)
+	titleWorker := api.NewTitleWorker(a)
+	titleWorker.Start(ctx)
+	defer titleWorker.Stop()
 
 	// Start server with graceful shutdown
 	addr := ":" + cfg.Port
@@ -113,7 +126,7 @@ func main() {
 		Addr:         addr,
 		Handler:      r,
 		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 300 * time.Second, // Long timeout for SSE streams and slow LLM responses
+		WriteTimeout: 0, // No timeout — nginx handles proxy_read_timeout; SSE streams can run indefinitely
 		IdleTimeout:  120 * time.Second,
 	}
 
@@ -136,6 +149,7 @@ func main() {
 	watcher.Stop()
 	scanner.Stop()
 	indexer.Stop()
+	titleWorker.Stop()
 
 	// Drain connections with 10s timeout
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -149,4 +163,41 @@ func main() {
 	pool.Close()
 
 	slog.Info("agent-os stopped")
+}
+
+// knownAgent defines a known agent that should exist in the database.
+type knownAgent struct {
+	Name        string
+	DisplayName string
+	Harness     string
+	BaseURL     string
+}
+
+// knownAgentsList is the single source of truth for agents that must exist.
+// Only used for initial seeding — existing rows are never modified.
+var knownAgentsList = []knownAgent{
+	{Name: "roux", DisplayName: "Roux", Harness: "hermes", BaseURL: "http://roux:8080"},
+	{Name: "crawbot", DisplayName: "Crawbot", Harness: "openclaw", BaseURL: "http://crawbot:8080"},
+	{Name: "litellm", DisplayName: "LiteLLM on xps", Harness: "litellm", BaseURL: "http://xps:4000"},
+}
+
+// ensureKnownAgents inserts agents that don't yet exist in the database.
+// Uses ON CONFLICT (name) DO NOTHING so existing rows (including display_name,
+// role, system_prompt, persona) are never overwritten.
+func ensureKnownAgents(ctx context.Context, queries *db.Queries) {
+	for _, ka := range knownAgentsList {
+		_, err := queries.EnsureAgent(ctx, db.EnsureAgentParams{
+			Name:        ka.Name,
+			DisplayName: ka.DisplayName,
+			Harness:     ka.Harness,
+			BaseUrl:     ka.BaseURL,
+			Metadata:    []byte("{}"),
+		})
+		if err != nil {
+			// pgx.ErrNoRows means the agent already existed — that's the expected happy path.
+			slog.Debug("agent seeding skipped (already exists)", "agent", ka.Name)
+		} else {
+			slog.Info("agent seeding created new agent", "agent", ka.Name, "harness", ka.Harness)
+		}
+	}
 }

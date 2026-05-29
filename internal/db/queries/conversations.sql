@@ -18,6 +18,16 @@ UPDATE conversations SET title = $2, updated_at = NOW()
 WHERE id = $1
 RETURNING *;
 
+-- name: UpdateConversationMetadata :one
+UPDATE conversations SET metadata = $2, updated_at = NOW()
+WHERE id = $1
+RETURNING *;
+
+-- name: UpdateConversationSummary :one
+UPDATE conversations SET summary = $2, updated_at = NOW()
+WHERE id = $1
+RETURNING *;
+
 -- name: ListMessages :many
 SELECT * FROM messages
 WHERE conversation_id = $1
@@ -30,3 +40,24 @@ RETURNING *;
 
 -- name: DeleteMessagesByConversation :execrows
 DELETE FROM messages WHERE conversation_id = $1;
+
+-- name: DeleteLastExchange :execrows
+WITH last_user AS (
+    SELECT id FROM messages
+    WHERE messages.conversation_id = $1 AND messages.role = 'user'
+    ORDER BY messages.created_at DESC LIMIT 1
+),
+last_assistant AS (
+    SELECT id FROM messages
+    WHERE messages.conversation_id = $1 AND messages.role = 'assistant'
+    ORDER BY messages.created_at DESC LIMIT 1
+)
+DELETE FROM messages WHERE id IN (SELECT id FROM last_user) OR id IN (SELECT id FROM last_assistant);
+
+-- name: GetLastUserMessage :one
+SELECT * FROM messages
+WHERE conversation_id = $1 AND role = 'user'
+ORDER BY created_at DESC LIMIT 1;
+
+-- name: DeleteMessage :exec
+DELETE FROM messages WHERE id = $1;

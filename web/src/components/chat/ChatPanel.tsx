@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Agent, Message, Model, AgentCommand } from '../../api/client'
+import { Icon } from '../Icon'
 
 // crypto.randomUUID() requires a secure context (HTTPS).
 // Provide a fallback for HTTP / non-secure environments (Tailscale LAN, etc.).
@@ -29,6 +30,28 @@ function modelLabel(m: Model): string {
   return m.display_name || m.id
 }
 
+// Map raw tool names to friendly labels with icons
+function toolLabel(name: string): string {
+  const map: Record<string, string> = {
+    terminal:       '💻 Running terminal…',
+    shell:          '💻 Running terminal…',
+    process:        '💻 Running process…',
+    search_files:   '🔍 Searching files…',
+    grep:           '🔍 Searching files…',
+    read_file:      '📄 Reading file…',
+    write_file:     '📝 Writing file…',
+    patch:          '📝 Editing file…',
+    vision_analyze: '👁️ Analyzing image…',
+    browser:        '🌐 Using browser…',
+    web_search:     '🌐 Searching web…',
+    fetch:          '🌐 Fetching URL…',
+  }
+  if (map[name]) return map[name]
+  // Generic fallback — prettify the name
+  const pretty = name.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+  return `🔧 ${pretty}…`
+}
+
 export function ChatPanel({ agent, activeConversationId, onConversationLoaded, onConversationCreated, onNewChat }: ChatPanelProps) {
   const [models, setModels] = useState<Model[]>([])
   const [selectedModel, setSelectedModel] = useState('')
@@ -43,9 +66,12 @@ export function ChatPanel({ agent, activeConversationId, onConversationLoaded, o
   const [slashFilter, setSlashFilter] = useState('')
   const [slashCommands, setSlashCommands] = useState<AgentCommand[]>([])
   const [contextSources, setContextSources] = useState<string[]>([])
+  const [activeTools, setActiveTools] = useState<string[]>([])
+  const [queuedMessage, setQueuedMessage] = useState<string | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const slashMenuRef = useRef<HTMLDivElement>(null)
+  const abortRef = useRef<AbortController | null>(null)
 
   // Load models and slash commands for the agent
   useEffect(() => {
@@ -89,7 +115,7 @@ export function ChatPanel({ agent, activeConversationId, onConversationLoaded, o
   // Auto-scroll to bottom
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, partialContent])
+  }, [messages, partialContent, activeTools])
 
   // Close slash menu on outside click
   useEffect(() => {
@@ -137,11 +163,56 @@ export function ChatPanel({ agent, activeConversationId, onConversationLoaded, o
       } else if (result.type === 'clear') {
         setMessages([])
         setPartialContent('')
-      } else if (result.type === 'compact') {
+      } else if (result.type === 'compact' || result.type === 'compress') {
         if (conversationId) {
           const msgs = await getMessages(conversationId)
           setMessages(msgs)
         }
+      } else if (result.type === 'undo') {
+        if (conversationId) {
+          const msgs = await getMessages(conversationId)
+          setMessages(msgs)
+        }
+      } else if (result.type === 'retry') {
+        // Remove last exchange locally and auto-resend
+        if (conversationId) {
+          const msgs = await getMessages(conversationId)
+          setMessages(msgs)
+        }
+        const retryMsg = result.data?.retry_message as string | undefined
+        if (retryMsg) {
+          // Auto-resend the retried message
+          setInput(retryMsg)
+          // Use setTimeout to let state settle before sending
+          setTimeout(() => {
+            handleSendWithText(retryMsg)
+          }, 100)
+        }
+      } else if (result.type === 'history') {
+        const historyText = result.data?.history_text as string | undefined
+        if (historyText) {
+          // Show history as a system message in the chat
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: uuid(),
+              role: 'assistant' as const,
+              content: `📋 **Conversation History**\n\n${historyText}`,
+              created_at: new Date().toISOString(),
+            },
+          ])
+        }
+      } else if (result.type === 'title') {
+        // Title updated — sidebar will refresh via onConversationLoaded
+        onConversationLoaded()
+      } else if (result.type === 'stop') {
+        // Client handles abort separately
+      } else if (result.type === 'save') {
+        // Already showed toast with path
+      } else if (result.type === 'forward') {
+        // Agent handles this command natively — send as a chat message
+        const forwardText = (result.data?.forward_text as string) ?? command
+        await handleSendWithText(forwardText, true)
       }
     } catch (err) {
       showToast('Slash command failed: ' + (err instanceof Error ? err.message : 'Unknown error'), 'error')
@@ -156,9 +227,43 @@ export function ChatPanel({ agent, activeConversationId, onConversationLoaded, o
 
   async function handleSend() {
     const text = input.trim()
-    if (!text || streaming) return
+    if (!text) return
+    if (streaming) {
+      // Queue the message for after current stream ends
+      setQueuedMessage(text)
+      setInput('')
+      setShowSlashMenu(false)
+      showToast('Message queued', 'info')
+      return
+    }
+    await handleSendWithText(text)
+  }
 
-    if (text.startsWith('/')) {
+  function handleStop() {
+    if (abortRef.current) {
+      abortRef.current.abort()
+      abortRef.current = null
+    }
+    setStreaming(false)
+    setPartialContent('')
+    showToast('Stopped', 'info')
+  }
+
+  async function handleSendWithText(text: string, skipSlash = false) {
+    if (!text) return
+
+    if (!skipSlash && text.startsWith('/')) {
+      // /stop is handled client-side — abort current stream
+      if (text.trim() === '/stop') {
+        if (abortRef.current) {
+          abortRef.current.abort()
+          abortRef.current = null
+        }
+        setStreaming(false)
+        setPartialContent('')
+        showToast('Stopped streaming', 'info')
+        return
+      }
       await handleSlashCommand(text)
       return
     }
@@ -174,6 +279,7 @@ export function ChatPanel({ agent, activeConversationId, onConversationLoaded, o
     setStreaming(true)
     setPartialContent('')
     setContextSources([])
+    setActiveTools([])
 
     try {
       const stream = sendChat(agent.id, text, selectedModel || undefined, conversationId ?? undefined)
@@ -183,6 +289,17 @@ export function ChatPanel({ agent, activeConversationId, onConversationLoaded, o
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
+
+        // Handle tool lifecycle events
+        if (value.tool_name) {
+          if (value.tool_status === 'started') {
+            setActiveTools((prev) => prev.includes(value.tool_name!) ? prev : [...prev, value.tool_name!])
+          } else if (value.tool_status === 'completed') {
+            setActiveTools((prev) => prev.filter((t) => t !== value.tool_name))
+          }
+          continue
+        }
+
         if (value.content !== undefined) {
           accumulated += value.content
           setPartialContent(accumulated)
@@ -197,6 +314,7 @@ export function ChatPanel({ agent, activeConversationId, onConversationLoaded, o
           }
           setMessages((prev) => [...prev, assistantMsg])
           setPartialContent('')
+          setActiveTools([])
           if (value.conversation_id) {
             const newConvId = value.conversation_id as string
             setConversationId(newConvId)
@@ -224,8 +342,16 @@ export function ChatPanel({ agent, activeConversationId, onConversationLoaded, o
         },
       ])
       setPartialContent('')
+      setActiveTools([])
     } finally {
       setStreaming(false)
+      // Auto-send queued message after stream ends
+      setQueuedMessage((prev) => {
+        if (prev) {
+          setTimeout(() => handleSendWithText(prev), 100)
+        }
+        return null
+      })
     }
   }
 
@@ -248,6 +374,14 @@ export function ChatPanel({ agent, activeConversationId, onConversationLoaded, o
   function handleKeyDown(e: React.KeyboardEvent) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
+      if (streaming && input.trim()) {
+        // Queue the message
+        setQueuedMessage(input.trim())
+        setInput('')
+        setShowSlashMenu(false)
+        showToast('Message queued', 'info')
+        return
+      }
       handleSend()
     }
   }
@@ -286,7 +420,7 @@ export function ChatPanel({ agent, activeConversationId, onConversationLoaded, o
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
             </svg>
           </button>
-          {models.length > 0 && (
+          {models.length > 0 && agent.harness === 'litellm' && (
             <select
               value={selectedModel}
               onChange={(e) => setSelectedModel(e.target.value)}
@@ -323,10 +457,10 @@ export function ChatPanel({ agent, activeConversationId, onConversationLoaded, o
               </svg>
             </div>
             <h3 className="text-lg font-medium text-[var(--text-primary)] mb-1">
-              Chat with {agent.display_name || agent.name}
+              New conversation
             </h3>
             <p className="text-sm text-[var(--text-muted)] max-w-sm text-center">
-              Start a conversation below. Type / for available commands.
+              Message {agent.display_name || agent.name} below. Type / for available commands.
             </p>
           </div>
         )}
@@ -343,6 +477,21 @@ export function ChatPanel({ agent, activeConversationId, onConversationLoaded, o
                 content: partialContent,
               }}
             />
+          )}
+          {/* Active tool status pills */}
+          {streaming && activeTools.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mt-1 mb-2 slide-up">
+              {activeTools.map((name) => (
+                <span
+                  key={name}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium
+                    bg-[var(--bg-elevated)] text-[var(--text-muted)] border border-[var(--border-subtle)]
+                    animate-pulse opacity-80"
+                >
+                  {toolLabel(name)}
+                </span>
+              ))}
+            </div>
           )}
           {streaming && !partialContent && (
             <div className="flex items-start mb-4 slide-up">
@@ -378,6 +527,21 @@ export function ChatPanel({ agent, activeConversationId, onConversationLoaded, o
           </div>
         )}
 
+        {/* Queued message indicator */}
+        {queuedMessage && streaming && (
+          <div className="flex items-center gap-2 mb-1.5 px-2">
+            <span className="text-[10px] text-[var(--accent-blue)] opacity-70">
+              ⏳ Queued: {queuedMessage.length > 40 ? queuedMessage.slice(0, 40) + '…' : queuedMessage}
+            </span>
+            <button
+              onClick={() => { setQueuedMessage(null); showToast('Queue cleared', 'info') }}
+              className="text-[10px] text-[var(--text-muted)] opacity-50 hover:opacity-100"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
         <div className="floating-input flex items-end gap-2 p-2 max-w-3xl mx-auto">
           <VoiceButton onTranscribed={(text) => setInput((prev) => prev ? prev + ' ' + text : text)} />
           <textarea
@@ -385,32 +549,45 @@ export function ChatPanel({ agent, activeConversationId, onConversationLoaded, o
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Message..."
+            placeholder={streaming ? 'Type to queue…' : 'Message...'}
             aria-label="Chat message"
             rows={1}
             className="flex-1 bg-transparent text-[var(--text-primary)] text-sm px-4 py-2.5 resize-none border-none focus:outline-none placeholder:text-[var(--text-muted)]"
           />
-          <button
-            onClick={handleSend}
-            disabled={streaming || !input.trim()}
-            aria-label="Send message"
-            className={`flex-shrink-0 w-10 h-10 rounded-xl flex items-center justify-center transition-all duration-200 ${
-              input.trim() && !streaming
-                ? 'bg-gradient-to-br from-[var(--accent-blue)] to-[var(--accent-purple)] text-white shadow-[var(--shadow-glow)] hover:shadow-[0_0_28px_rgba(91,141,239,0.4)] hover:scale-105 active:scale-95'
-                : 'bg-[var(--bg-elevated)] text-[var(--text-muted)] cursor-not-allowed'
-            }`}
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14M12 5l7 7-7 7" />
-            </svg>
-          </button>
+          {streaming ? (
+            <button
+              onClick={handleStop}
+              aria-label="Stop generation"
+              title="Stop (or type /stop)"
+              className="flex-shrink-0 w-10 h-10 rounded-xl flex items-center justify-center transition-all duration-200 bg-[var(--bg-elevated)] text-[var(--text-secondary)] hover:text-[var(--accent-red)] hover:bg-[rgba(239,68,68,0.1)]"
+            >
+              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                <rect x="6" y="6" width="12" height="12" rx="1" />
+              </svg>
+            </button>
+          ) : (
+            <button
+              onClick={handleSend}
+              disabled={!input.trim()}
+              aria-label="Send message"
+              className={`flex-shrink-0 w-10 h-10 rounded-xl flex items-center justify-center transition-all duration-200 ${
+                input.trim()
+                  ? 'bg-gradient-to-br from-[var(--accent-blue)] to-[var(--accent-purple)] text-white shadow-[var(--shadow-glow)] hover:shadow-[0_0_28px_rgba(91,141,239,0.4)] hover:scale-105 active:scale-95'
+                  : 'bg-[var(--bg-elevated)] text-[var(--text-muted)] cursor-not-allowed'
+              }`}
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14M12 5l7 7-7 7" />
+              </svg>
+            </button>
+          )}
         </div>
 
         {/* Subtle context line */}
         {contextSources.length > 0 && (
           <div className="flex items-center justify-center mt-1.5 gap-1">
             <span className="text-[10px] text-[var(--accent-blue)] opacity-60">
-              📚 {contextSources.length} knowledge source{contextSources.length !== 1 ? 's' : ''} used:
+              <Icon name="auto_stories" size={10} /> {contextSources.length} knowledge source{contextSources.length !== 1 ? 's' : ''} used:
             </span>
             {contextSources.map((src, i) => (
               <span key={i} className="text-[10px] text-[var(--text-muted)] opacity-50" title={src}>
@@ -423,7 +600,7 @@ export function ChatPanel({ agent, activeConversationId, onConversationLoaded, o
               className="text-[10px] text-[var(--text-muted)] opacity-30 hover:opacity-60 ml-1"
               aria-label="Dismiss context sources"
             >
-              ✕
+              <Icon name="close" size={10} />
             </button>
           </div>
         )}

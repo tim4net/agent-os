@@ -100,9 +100,6 @@ func (aw *AgentWatcher) checkAgent(ctx context.Context, agent db.Agent) {
 		"base_url": agent.BaseUrl,
 	}
 	if agent.Harness == "hermes" {
-		if aw.litellmURL != "" {
-			config["litellm_url"] = aw.litellmURL
-		}
 		if aw.hermesAPIKey != "" {
 			config["api_key"] = aw.hermesAPIKey
 		}

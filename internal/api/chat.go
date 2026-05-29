@@ -118,6 +118,26 @@ type ChatRequest struct {
 	SystemPrompt   string `json:"system_prompt"`
 }
 
+// conversationMeta is the structured metadata stored in conversations.metadata.
+type conversationMeta struct {
+	HermesSessionID string `json:"hermes_session_id,omitempty"`
+}
+
+// getConversationMeta parses the JSON metadata bytes into conversationMeta.
+func getConversationMeta(raw []byte) conversationMeta {
+	var meta conversationMeta
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &meta)
+	}
+	return meta
+}
+
+// marshalConversationMeta serializes conversationMeta to JSON bytes.
+func marshalConversationMeta(meta conversationMeta) []byte {
+	b, _ := json.Marshal(meta)
+	return b
+}
+
 // ChatWithAgent sends a message to an agent and streams the response via SSE.
 func (a *API) ChatWithAgent(w http.ResponseWriter, r *http.Request) {
 	idStr := chi.URLParam(r, "id")
@@ -136,12 +156,6 @@ func (a *API) ChatWithAgent(w http.ResponseWriter, r *http.Request) {
 
 	if req.Message == "" {
 		http.Error(w, "message is required", http.StatusBadRequest)
-		return
-	}
-
-	// Detect slash commands at start of message
-	if strings.HasPrefix(strings.TrimSpace(req.Message), "/") {
-		http.Error(w, "slash commands should be sent to /api/slash-command endpoint", http.StatusBadRequest)
 		return
 	}
 
@@ -166,23 +180,47 @@ func (a *API) ChatWithAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	defer h.Close()
 
+	// Determine if this harness is a HermesHarness (supports sessions)
+	hermesHarness, isHermes := h.(*harness.HermesHarness)
+
 	// Create or resolve conversation
 	var convID pgtype.UUID
+	var convMeta conversationMeta
+
 	if req.ConversationID != "" {
 		if err := convID.Scan(req.ConversationID); err != nil {
 			http.Error(w, "invalid conversation_id", http.StatusBadRequest)
 			return
 		}
+		// Load existing conversation metadata
+		conv, err := a.queries.GetConversation(r.Context(), convID)
+		if err != nil {
+			http.Error(w, "conversation not found", http.StatusNotFound)
+			return
+		}
+		convMeta = getConversationMeta(conv.Metadata)
 	} else {
 		// Create a new conversation
 		var title pgtype.Text
-		title.String = "Chat with " + agent.DisplayName
+		title.String = "New conversation"
 		title.Valid = true
+
+		// For Hermes agents, create a session and store its ID in metadata
+		if isHermes {
+			sessionID, sessErr := hermesHarness.CreateSession(r.Context(), title.String)
+			if sessErr != nil {
+				slog.Warn("failed to create Hermes session, falling back to raw chat", "error", sessErr)
+				// Non-fatal: will fall back to Chat() below
+			} else {
+				convMeta.HermesSessionID = sessionID
+				slog.Debug("created Hermes session", "session_id", sessionID)
+			}
+		}
 
 		conv, err := a.queries.CreateConversation(r.Context(), db.CreateConversationParams{
 			AgentID:  agentID,
 			Title:    title,
-			Metadata: []byte("{}"),
+			Metadata: marshalConversationMeta(convMeta),
 		})
 		if err != nil {
 			http.Error(w, "failed to create conversation", http.StatusInternalServerError)
@@ -203,61 +241,113 @@ func (a *API) ChatWithAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// If this is a new conversation (no conversation_id in request),
+	// immediately update the title to a truncated version of the first message.
+	if req.ConversationID == "" {
+		truncated := req.Message
+		if len(truncated) > 60 {
+			// Try to truncate at a word boundary near 60 chars
+			truncated = truncated[:60]
+			if idx := strings.LastIndex(truncated, " "); idx > 30 {
+				truncated = truncated[:idx]
+			}
+		}
+		// Remove newlines from title
+		truncated = strings.ReplaceAll(truncated, "\n", " ")
+		truncated = strings.TrimSpace(truncated)
+
+		// Ensure uniqueness per agent — append #2, #3, etc. if duplicate
+		uniqueTitle := a.makeUniqueTitle(r.Context(), agentID, convID, truncated)
+
+		var titleText pgtype.Text
+		titleText.String = uniqueTitle
+		titleText.Valid = true
+		if _, titleErr := a.queries.UpdateConversation(r.Context(), db.UpdateConversationParams{
+			ID:    convID,
+			Title: titleText,
+		}); titleErr != nil {
+			slog.Warn("failed to set immediate title", "error", titleErr)
+		}
+
+		// Fire off background LLM title generation after a 30s delay
+		go a.deferredLLMTitle(convID, agentID)
+	}
+
 	// Send user message ID as first SSE event
 	userIDData, _ := json.Marshal(map[string]string{"user_message_id": userMsg.ID.String()})
 
-	// RAG: search memory_index for relevant context using the user's message
-	systemPrompt := req.SystemPrompt
+	// Decide: session chat (Hermes with session ID) vs raw chat (everything else)
+	var chunkCh <-chan harness.ChatChunk
 	var ragSources []string
-	if ragCtx := a.searchMemoryForContext(req.Message); ragCtx != nil {
-		if systemPrompt == "" {
-			systemPrompt = ragCtx.SystemBlock
-		} else {
-			systemPrompt = systemPrompt + "\n\n" + ragCtx.SystemBlock
-		}
-		ragSources = ragCtx.Sources
-		slog.Debug("RAG: injected memory context into system prompt", "query_length", len(req.Message), "sources", len(ragSources))
-	}
 
-	// Get conversation history for context
-	history, err := a.queries.ListMessages(r.Context(), convID)
-	if err != nil {
-		http.Error(w, "failed to load history", http.StatusInternalServerError)
-		return
-	}
+	useSession := isHermes && convMeta.HermesSessionID != ""
 
-	// Build messages for the harness
-	messages := make([]harness.ChatMessage, 0, len(history)+1)
-
-	// If the agent has a system_prompt, prepend it as a system message
-	if agent.SystemPrompt.Valid && agent.SystemPrompt.String != "" {
-		messages = append(messages, harness.ChatMessage{
-			Role:    "system",
-			Content: agent.SystemPrompt.String,
-		})
-	}
-
-	for _, m := range history {
-		messages = append(messages, harness.ChatMessage{
-			Role:    m.Role,
-			Content: m.Content,
-		})
-	}
-
-	// Start the chat stream with the actual messages
-	opts := harness.ChatOptions{
-		Model:        req.Model,
-		SystemPrompt: systemPrompt,
-	}
-
-	chunkCh, err := h.Chat(r.Context(), messages, opts)
-	if err != nil {
-		if err == harness.ErrNotSupported {
-			http.Error(w, "chat not supported for this agent", http.StatusNotImplemented)
+	if useSession {
+		// Use the Hermes session API — the agent manages its own conversation
+		// context internally, so we don't need to build message history.
+		chunkCh, err = hermesHarness.SessionChat(r.Context(), convMeta.HermesSessionID, req.Message)
+		if err != nil {
+			if err == harness.ErrNotSupported {
+				http.Error(w, "chat not supported for this agent", http.StatusNotImplemented)
+				return
+			}
+			http.Error(w, "chat failed: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		http.Error(w, "chat failed: "+err.Error(), http.StatusInternalServerError)
-		return
+	} else {
+		// Legacy path: build full message history for raw LLM chat
+		// RAG: search memory_index for relevant context using the user's message
+		systemPrompt := req.SystemPrompt
+		if ragCtx := a.searchMemoryForContext(req.Message); ragCtx != nil {
+			if systemPrompt == "" {
+				systemPrompt = ragCtx.SystemBlock
+			} else {
+				systemPrompt = systemPrompt + "\n\n" + ragCtx.SystemBlock
+			}
+			ragSources = ragCtx.Sources
+			slog.Debug("RAG: injected memory context into system prompt", "query_length", len(req.Message), "sources", len(ragSources))
+		}
+
+		// Get conversation history for context
+		history, err := a.queries.ListMessages(r.Context(), convID)
+		if err != nil {
+			http.Error(w, "failed to load history", http.StatusInternalServerError)
+			return
+		}
+
+		// Build messages for the harness
+		messages := make([]harness.ChatMessage, 0, len(history)+1)
+
+		// If the agent has a system_prompt, prepend it as a system message
+		if agent.SystemPrompt.Valid && agent.SystemPrompt.String != "" {
+			messages = append(messages, harness.ChatMessage{
+				Role:    "system",
+				Content: agent.SystemPrompt.String,
+			})
+		}
+
+		for _, m := range history {
+			messages = append(messages, harness.ChatMessage{
+				Role:    m.Role,
+				Content: m.Content,
+			})
+		}
+
+		// Start the chat stream with the actual messages
+		opts := harness.ChatOptions{
+			Model:        req.Model,
+			SystemPrompt: systemPrompt,
+		}
+
+		chunkCh, err = h.Chat(r.Context(), messages, opts)
+		if err != nil {
+			if err == harness.ErrNotSupported {
+				http.Error(w, "chat not supported for this agent", http.StatusNotImplemented)
+				return
+			}
+			http.Error(w, "chat failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 
 	// Now that chat is confirmed supported, start the SSE stream
@@ -275,6 +365,25 @@ func (a *API) ChatWithAgent(w http.ResponseWriter, r *http.Request) {
 
 	// Stream SSE response
 	flusher, canFlush := w.(http.Flusher)
+
+	// Heartbeat goroutine — sends ping every 30s to prevent frontend idle timeout
+	heartbeatCtx, heartbeatCancel := context.WithCancel(r.Context())
+	defer heartbeatCancel()
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				fmt.Fprintf(w, "event: ping\ndata: {}\n\n")
+				if canFlush {
+					flusher.Flush()
+				}
+			case <-heartbeatCtx.Done():
+				return
+			}
+		}
+	}()
 
 	// Collect full response for storage
 	var fullContent string
@@ -294,6 +403,18 @@ func (a *API) ChatWithAgent(w http.ResponseWriter, r *http.Request) {
 			fullContent += chunk.Content
 			data, _ := json.Marshal(map[string]string{"content": chunk.Content})
 			fmt.Fprintf(w, "event: chunk\ndata: %s\n\n", data)
+			if canFlush {
+				flusher.Flush()
+			}
+		}
+
+		if chunk.ToolName != "" {
+			// Forward tool lifecycle events to the frontend
+			toolData, _ := json.Marshal(map[string]string{
+				"tool_name":   chunk.ToolName,
+				"tool_status": chunk.ToolStatus,
+			})
+			fmt.Fprintf(w, "event: tool\ndata: %s\n\n", toolData)
 			if canFlush {
 				flusher.Flush()
 			}
@@ -397,5 +518,92 @@ func (a *API) searchMemoryForContext(query string) *RAGContext {
 	return &RAGContext{
 		SystemBlock: sb.String(),
 		Sources:     sources,
+	}
+}
+
+// makeUniqueTitle ensures the proposed title is unique for the given agent.
+// If another conversation with the same agent has the same title, it appends
+// #2, #3, etc. until unique.
+func (a *API) makeUniqueTitle(ctx context.Context, agentID pgtype.UUID, convID pgtype.UUID, proposed string) string {
+	base := proposed
+	suffix := 2
+	for {
+		var count int
+		err := a.pool.QueryRow(ctx,
+			`SELECT COUNT(*) FROM conversations WHERE agent_id = $1 AND title = $2 AND id != $3`,
+			agentID, base, convID,
+		).Scan(&count)
+		if err != nil {
+			slog.Warn("title uniqueness check failed, using proposed title", "error", err)
+			return proposed
+		}
+		if count == 0 {
+			return base
+		}
+		base = fmt.Sprintf("%s #%d", proposed, suffix)
+		suffix++
+		// Safety limit
+		if suffix > 100 {
+			return proposed
+		}
+	}
+}
+
+// deferredLLMTitle waits 30 seconds then generates an LLM-based title for
+// the conversation, updating the title column in the DB.
+func (a *API) deferredLLMTitle(convID pgtype.UUID, agentID pgtype.UUID) {
+	time.Sleep(30 * time.Second)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Load conversation messages for context
+	msgs, err := a.queries.ListMessages(ctx, convID)
+	if err != nil || len(msgs) == 0 {
+		return
+	}
+
+	// Build compact text representation (first 6 messages)
+	limit := len(msgs)
+	if limit > 6 {
+		limit = 6
+	}
+	var sb strings.Builder
+	for i := 0; i < limit; i++ {
+		m := msgs[i]
+		role := m.Role
+		if role == "user" {
+			role = "User"
+		} else if role == "assistant" {
+			role = "Assistant"
+		} else {
+			continue
+		}
+		content := m.Content
+		if len(content) > 200 {
+			content = content[:200] + "..."
+		}
+		sb.WriteString(fmt.Sprintf("%s: %s\n", role, content))
+	}
+
+	summary, err := a.generateSummary(ctx, sb.String())
+	if err != nil {
+		slog.Warn("deferred LLM title generation failed", "conversation_id", convID.String(), "error", err)
+		return
+	}
+
+	// Make the LLM title unique per agent
+	uniqueTitle := a.makeUniqueTitle(ctx, agentID, convID, summary)
+
+	var titleText pgtype.Text
+	titleText.String = uniqueTitle
+	titleText.Valid = true
+	if _, updateErr := a.queries.UpdateConversation(ctx, db.UpdateConversationParams{
+		ID:    convID,
+		Title: titleText,
+	}); updateErr != nil {
+		slog.Warn("failed to update conversation title with LLM summary", "conversation_id", convID.String(), "error", updateErr)
+	} else {
+		slog.Debug("updated conversation title via LLM", "conversation_id", convID.String(), "title", uniqueTitle)
 	}
 }

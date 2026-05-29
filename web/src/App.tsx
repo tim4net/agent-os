@@ -3,6 +3,7 @@ import type { Agent } from './api/client'
 import { uploadArtifact } from './api/client'
 import { useAgents } from './hooks/useAgents'
 import { useSSE } from './hooks/useSSE'
+import { Icon } from './components/Icon'
 import SettingsPanel from './components/SettingsPanel'
 import { Sidebar } from './components/layout/Sidebar'
 
@@ -18,8 +19,8 @@ import { Board } from './components/kanban/Board'
 import { GoalList } from './components/goals/GoalList'
 import { PipelineBoard } from './components/pipeline/PipelineBoard'
 import { WorkflowList } from './components/workflows/WorkflowList'
-import { SkillsList } from './components/skills/SkillsList'
 import { TimelineView } from './components/timeline/TimelineView'
+import { SkillsList } from './components/skills/SkillsList'
 
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { StatusFooter } from './components/StatusFooter'
@@ -27,46 +28,45 @@ import { ToastContainer } from './components/Toast'
 
 const MOBILE_BREAKPOINT = 768
 
-// Mobile bottom nav tabs — subset of main tabs for quick mobile access
-const mobileNavItems = [
-  { tab: 'Chat', icon: '💬' },
-  { tab: 'Studio', icon: '🎨' },
-  { tab: 'Memory', icon: '🧠' },
-  { tab: 'Kanban', icon: '📋' },
-  { tab: 'Settings', icon: '⚙️' },
-] as const
-
 const tabMeta: Record<string, string> = {
-  Overview: '📊',
-  Chat: '💬',
-  Timeline: '📜',
-  Studio: '🎨',
-  Workspace: '🗂️',
-  Kanban: '📋',
-  Goals: '🎯',
-  Pipeline: '🔄',
-  Memory: '🧠',
-  Skills: '🛠️',
-  Workflows: '⚡',
-  Settings: '⚙️',
+  Chat: 'chat',
+  Create: 'palette',
+  Build: 'view_kanban',
+  Knowledge: 'psychology',
+  Automate: 'bolt',
+  Settings: 'settings',
 }
 
-// Tab groups for visual sectioning in the nav bar
-const tabGroups = [
-  { label: null, tabs: ['Overview'] as const },
-  { label: 'Agent', tabs: ['Chat', 'Timeline'] as const },
-  { label: 'Create', tabs: ['Studio', 'Workspace'] as const },
-  { label: 'Plan', tabs: ['Kanban', 'Goals', 'Pipeline'] as const },
-  { label: 'Knowledge', tabs: ['Memory', 'Skills'] as const },
-  { label: 'Automate', tabs: ['Workflows'] as const },
-  { label: null, tabs: ['Settings'] as const },
-]
-
-const tabs = tabGroups.flatMap(g => [...g.tabs]) as unknown as readonly string[]
+const tabs = ['Chat', 'Create', 'Build', 'Knowledge', 'Automate', 'Settings'] as const
 type Tab = (typeof tabs)[number]
 
+/** Reusable segmented toggle for sub-views within a tab */
+function SubViewToggle({ options, value, onChange }: {
+  options: { key: string; label: string }[]
+  value: string
+  onChange: (v: string) => void
+}) {
+  return (
+    <div className="flex items-center gap-1 bg-[var(--bg-elevated)]/60 rounded-xl p-1">
+      {options.map((opt) => (
+        <button
+          key={opt.key}
+          onClick={() => onChange(opt.key)}
+          className={`px-3 py-1 text-xs font-medium rounded-lg transition-all ${
+            value === opt.key
+              ? 'bg-[var(--accent-blue)] text-white'
+              : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'
+          }`}
+        >
+          {opt.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 function App() {
-  const [activeTab, setActiveTab] = useState<Tab>('Overview')
+  const [activeTab, setActiveTab] = useState<Tab>('Chat')
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false) // mobile overlay
@@ -76,12 +76,17 @@ function App() {
   const [mediaPreviewKey, setMediaPreviewKey] = useState(0)
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null)
   const [conversationVersion, setConversationVersion] = useState(0)
+
+  // Sub-view states for merged tabs
+  const [createSubView, setCreateSubView] = useState<'generate' | 'gallery'>('generate')
+  const [buildSubView, setBuildSubView] = useState<'board' | 'goals' | 'pipeline'>('board')
+  const [knowledgeSubView, setKnowledgeSubView] = useState<'files' | 'skills'>('files')
+  const [automateSubView, setAutomateSubView] = useState<'workflows' | 'timeline'>('workflows')
+
   const { agents, loading: _loading, refresh: refreshAgents } = useAgents()
   const { sseConnected } = useSSE()
   const uploadInputRef = useRef<HTMLInputElement>(null)
   const tablistRef = useRef<HTMLDivElement>(null)
-
-  // Tabs use flex-wrap — all always visible, no scrollIntoView needed
 
   // Detect mobile viewport
   useEffect(() => {
@@ -105,6 +110,42 @@ function App() {
     if (isMobile) setSidebarOpen(false)
   }, [isMobile])
 
+  // Auto-restore last conversation on mount (chat persistence)
+  const hasAutoRestored = useRef(false)
+  useEffect(() => {
+    if (hasAutoRestored.current || agents.length === 0) return
+    hasAutoRestored.current = true
+
+    const savedConvId = sessionStorage.getItem('agent-os-last-conv')
+    const savedAgentId = sessionStorage.getItem('agent-os-last-agent')
+    if (savedConvId && savedAgentId) {
+      const agent = agents.find((a) => a.id === savedAgentId)
+      if (agent) {
+        setSelectedAgent(agent)
+        setActiveConversationId(savedConvId)
+        setActiveTab('Chat')
+        return
+      }
+    }
+
+    const onlineAgent = agents.find((a) => a.status === 'online')
+    if (onlineAgent) {
+      setSelectedAgent(onlineAgent)
+      setActiveTab('Chat')
+    }
+  }, [agents])
+
+  // Persist active conversation to sessionStorage on change
+  useEffect(() => {
+    if (activeConversationId && selectedAgent) {
+      sessionStorage.setItem('agent-os-last-conv', activeConversationId)
+      sessionStorage.setItem('agent-os-last-agent', selectedAgent.id)
+    } else {
+      sessionStorage.removeItem('agent-os-last-conv')
+      sessionStorage.removeItem('agent-os-last-agent')
+    }
+  }, [activeConversationId, selectedAgent])
+
   const handleSelectConversation = useCallback((conv: import('./api/client').Conversation) => {
     const agent = agents.find((a) => a.id === conv.agent_id)
     if (agent) {
@@ -117,6 +158,13 @@ function App() {
 
   const handleNewChat = useCallback(() => {
     setSelectedAgent(null)
+    setActiveConversationId(null)
+    setActiveTab('Chat')
+    if (isMobile) setSidebarOpen(false)
+  }, [isMobile])
+
+  const handleNewChatWithAgent = useCallback((agent: Agent) => {
+    setSelectedAgent(agent)
     setActiveConversationId(null)
     setActiveTab('Chat')
     if (isMobile) setSidebarOpen(false)
@@ -140,58 +188,17 @@ function App() {
     } catch (err) {
       console.error('Upload failed:', err)
     }
-    // Reset input so same file can be re-uploaded
     e.target.value = ''
-  }
-
-  function handleTimelineNavigate(tab: string, data?: { agentId?: string; conversationId?: string }) {
-    setActiveTab(tab as Tab)
-    if (data?.agentId) {
-      const agent = agents.find((a) => a.id === data.agentId)
-      if (agent) setSelectedAgent(agent)
-    }
   }
 
   function renderContent() {
     switch (activeTab) {
-      case 'Overview':
-        return (
-          <ErrorBoundary name="Mission Control">
-            <MissionControl agents={agents} />
-          </ErrorBoundary>
-        )
       case 'Chat':
         if (!selectedAgent) {
           return (
-            <div className="flex flex-col items-center justify-center h-full fade-in px-4">
-              <h2 className="text-2xl font-bold text-[var(--text-primary)] mb-2">Start a Chat</h2>
-              <p className="text-[var(--text-muted)] mb-6">Pick an agent to talk to.</p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-md w-full">
-                {agents.map((agent) => (
-                  <button
-                    key={agent.id}
-                    onClick={() => handleSelectAgent(agent)}
-                    className="glass-card p-4 text-left hover:border-[var(--accent-blue)] transition-all duration-200 group"
-                  >
-                    <div className="flex items-center gap-3">
-                      <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${
-                        agent.status === 'online'
-                          ? 'bg-emerald-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]'
-                          : 'bg-gray-500'
-                      }`} />
-                      <div className="min-w-0">
-                        <p className="font-semibold text-sm text-[var(--text-primary)] group-hover:text-[var(--accent-blue)] transition-colors">
-                          {agent.display_name || agent.name}
-                        </p>
-                        <p className="text-xs text-[var(--text-muted)] truncate">
-                          Chat with {agent.display_name || agent.name}
-                        </p>
-                      </div>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </div>
+            <ErrorBoundary name="Mission Control">
+              <MissionControl agents={agents} />
+            </ErrorBoundary>
           )
         }
         return (
@@ -206,99 +213,159 @@ function App() {
             />
           </ErrorBoundary>
         )
-      case 'Timeline':
+
+      case 'Create': {
+        const createOptions = [
+          { key: 'generate', label: 'Generate' },
+          { key: 'gallery', label: 'Gallery' },
+        ]
         return (
-          <ErrorBoundary name="Timeline">
-            <TimelineView onNavigate={handleTimelineNavigate} />
+          <ErrorBoundary name="Create">
+            <div className="flex flex-col h-full">
+              <div className="px-4 py-3 border-b border-[var(--border-subtle)] flex-shrink-0 flex items-center justify-between">
+                <h2 className="text-2xl font-bold text-[var(--text-primary)]">Create</h2>
+                <SubViewToggle
+                  options={createOptions}
+                  value={createSubView}
+                  onChange={(v) => setCreateSubView(v as 'generate' | 'gallery')}
+                />
+              </div>
+              {createSubView === 'generate' ? (
+                <div className="flex flex-col md:flex-row flex-1 min-h-0 gap-6 p-4">
+                  <div className="w-full md:w-96 flex-shrink-0">
+                    <GeneratorForm
+                      onGenerated={() => setMediaPreviewKey((k) => k + 1)}
+                      agentId={selectedAgent?.id}
+                    />
+                  </div>
+                  <div className="flex-1 min-w-0 overflow-y-auto">
+                    <MediaPreview key={mediaPreviewKey} />
+                  </div>
+                </div>
+              ) : (
+                <ArtifactGrid
+                  key={artifactGridKey}
+                  agents={agents}
+                  selectedAgent={selectedAgent}
+                  onUploadClick={handleUploadClick}
+                />
+              )}
+            </div>
           </ErrorBoundary>
         )
-      case 'Studio':
+      }
+
+      case 'Build': {
+        const buildOptions = [
+          { key: 'board', label: 'Board' },
+          { key: 'goals', label: 'Goals' },
+          { key: 'pipeline', label: 'Pipeline' },
+        ]
         return (
-          <ErrorBoundary name="Studio">
+          <ErrorBoundary name="Build">
             <div className="flex flex-col h-full">
-              <div className="px-4 py-3 border-b border-[var(--border-subtle)] flex-shrink-0">
-                <h2 className="text-2xl font-bold text-[var(--text-primary)]">Studio</h2>
+              <div className="px-4 py-3 border-b border-[var(--border-subtle)] flex-shrink-0 flex items-center justify-between">
+                <h2 className="text-2xl font-bold text-[var(--text-primary)]">Build</h2>
+                <SubViewToggle
+                  options={buildOptions}
+                  value={buildSubView}
+                  onChange={(v) => setBuildSubView(v as 'board' | 'goals' | 'pipeline')}
+                />
               </div>
-              <div className="flex flex-col md:flex-row flex-1 min-h-0 gap-6 p-4">
-                <div className="w-full md:w-96 flex-shrink-0">
-                  <GeneratorForm
-                    onGenerated={() => setMediaPreviewKey((k) => k + 1)}
-                    agentId={selectedAgent?.id}
-                  />
-                </div>
-                <div className="flex-1 min-w-0 overflow-y-auto">
-                  <MediaPreview key={mediaPreviewKey} />
-                </div>
+              <div className="flex-1 min-h-0">
+                {buildSubView === 'board' && <Board agents={agents} />}
+                {buildSubView === 'goals' && <GoalList />}
+                {buildSubView === 'pipeline' && <PipelineBoard />}
               </div>
             </div>
           </ErrorBoundary>
         )
-      case 'Workspace':
+      }
+
+      case 'Knowledge': {
+        const knowledgeOptions = [
+          { key: 'files', label: 'Files' },
+          { key: 'skills', label: 'Skills' },
+        ]
         return (
-          <ErrorBoundary name="Workspace">
-            <ArtifactGrid
-              key={artifactGridKey}
-              agents={agents}
-              selectedAgent={selectedAgent}
-              onUploadClick={handleUploadClick}
-            />
-          </ErrorBoundary>
-        )
-      case 'Kanban':
-        return (
-          <ErrorBoundary name="Kanban">
-            <Board agents={agents} />
-          </ErrorBoundary>
-        )
-      case 'Memory':
-        return (
-          <ErrorBoundary name="Memory">
+          <ErrorBoundary name="Knowledge">
             <div className="flex flex-col h-full">
-              <div className="px-4 py-3 border-b border-[var(--border-subtle)] flex-shrink-0">
-                <h2 className="text-2xl font-bold text-[var(--text-primary)] mb-3">Memory</h2>
-                <SearchBar onFileSelect={setMemoryFilePath} />
+              <div className="px-4 py-3 border-b border-[var(--border-subtle)] flex-shrink-0 flex items-center justify-between">
+                <h2 className="text-2xl font-bold text-[var(--text-primary)]">Knowledge</h2>
+                <SubViewToggle
+                  options={knowledgeOptions}
+                  value={knowledgeSubView}
+                  onChange={(v) => setKnowledgeSubView(v as 'files' | 'skills')}
+                />
               </div>
-              <div className="flex flex-col md:flex-row flex-1 min-h-0">
-                <div className="w-full md:w-72 flex-shrink-0 border-b md:border-b-0 md:border-r border-[var(--border-subtle)] overflow-y-auto bg-[var(--bg-surface)]/50 max-h-64 md:max-h-none">
-                  <FileTree onFileSelect={setMemoryFilePath} selectedPath={memoryFilePath ?? undefined} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <NoteViewer filePath={memoryFilePath} />
-                </div>
+              {knowledgeSubView === 'files' ? (
+                <>
+                  <div className="px-4 py-2 border-b border-[var(--border-subtle)] flex-shrink-0">
+                    <SearchBar onFileSelect={setMemoryFilePath} />
+                  </div>
+                  <div className="flex flex-col md:flex-row flex-1 min-h-0">
+                    <div className="w-full md:w-72 flex-shrink-0 border-b md:border-b-0 md:border-r border-[var(--border-subtle)] overflow-y-auto bg-[var(--bg-surface)]/50 max-h-64 md:max-h-none">
+                      <FileTree onFileSelect={setMemoryFilePath} selectedPath={memoryFilePath ?? undefined} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <NoteViewer filePath={memoryFilePath} />
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <SkillsList />
+              )}
+            </div>
+          </ErrorBoundary>
+        )
+      }
+
+      case 'Automate': {
+        const automateOptions = [
+          { key: 'workflows', label: 'Workflows' },
+          { key: 'timeline', label: 'Timeline' },
+        ]
+        return (
+          <ErrorBoundary name="Automate">
+            <div className="flex flex-col h-full">
+              <div className="px-4 py-3 border-b border-[var(--border-subtle)] flex-shrink-0 flex items-center justify-between">
+                <h2 className="text-2xl font-bold text-[var(--text-primary)]">Automate</h2>
+                <SubViewToggle
+                  options={automateOptions}
+                  value={automateSubView}
+                  onChange={(v) => setAutomateSubView(v as 'workflows' | 'timeline')}
+                />
+              </div>
+              <div className="flex-1 min-h-0">
+                {automateSubView === 'workflows' && <WorkflowList />}
+                {automateSubView === 'timeline' && <TimelineView onNavigate={(tab, data) => {
+                  // Map old tab names to new grouped tabs
+                  const tabMap: Record<string, Tab> = {
+                    Chat: 'Chat',
+                    Workspace: 'Create',
+                    Kanban: 'Build',
+                    Workflows: 'Automate',
+                  }
+                  const mapped = tabMap[tab] || 'Chat'
+                  setActiveTab(mapped)
+                  if (data?.agentId) {
+                    const agent = agents.find(a => a.id === data.agentId)
+                    if (agent) setSelectedAgent(agent)
+                  }
+                }} />}
               </div>
             </div>
           </ErrorBoundary>
         )
-      case 'Goals':
-        return (
-          <ErrorBoundary name="Goals">
-            <GoalList />
-          </ErrorBoundary>
-        )
-      case 'Pipeline':
-        return (
-          <ErrorBoundary name="Pipeline">
-            <PipelineBoard />
-          </ErrorBoundary>
-        )
-      case 'Workflows':
-        return (
-          <ErrorBoundary name="Workflows">
-            <WorkflowList />
-          </ErrorBoundary>
-        )
-      case 'Skills':
-        return (
-          <ErrorBoundary name="Skills">
-            <SkillsList />
-          </ErrorBoundary>
-        )
+      }
+
       case 'Settings':
         return (
           <ErrorBoundary name="Settings">
             <SettingsPanel />
           </ErrorBoundary>
         )
+
       default:
         return (
           <div>
@@ -327,187 +394,107 @@ function App() {
           selectedAgent={selectedAgent}
           onSelectAgent={handleSelectAgent}
           onAgentsChanged={refreshAgents}
-          activeTab={activeTab}
           collapsed={isMobile ? false : sidebarCollapsed}
           activeConversationId={activeConversationId}
           onSelectConversation={handleSelectConversation}
           onNewChat={handleNewChat}
+          onNewChatWithAgent={handleNewChatWithAgent}
           conversationVersion={conversationVersion}
         />
       </div>
 
       <div className="flex-1 flex flex-col min-w-0">
-        {/* Sleek horizontal nav bar — hidden on mobile (replaced by bottom nav) */}
-        {!isMobile && (
-          <nav className="flex-shrink-0 bg-[var(--bg-surface)]/60 backdrop-blur-sm">
-            <div
-              ref={tablistRef}
-              role="tablist"
-              aria-label="Main navigation"
-              className="flex items-center gap-1 px-3 md:px-6 py-2 flex-wrap"
-              onKeyDown={(e) => {
-                const currentIdx = tabs.indexOf(activeTab)
-                if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
-                  e.preventDefault()
-                  const next = tabs[(currentIdx + 1) % tabs.length]
-                  setActiveTab(next)
-                } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
-                  e.preventDefault()
-                  const prev = tabs[(currentIdx - 1 + tabs.length) % tabs.length]
-                  setActiveTab(prev)
-                } else if (e.key === 'Home') {
-                  e.preventDefault()
-                  setActiveTab(tabs[0])
-                } else if (e.key === 'End') {
-                  e.preventDefault()
-                  setActiveTab(tabs[tabs.length - 1])
-                }
-              }}
-            >
-              {/* Sidebar toggle */}
-              <button
-                onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-                aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-                className="flex-shrink-0 p-1.5 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-elevated)]/40 transition-all duration-200 mr-1"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  {sidebarCollapsed ? (
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-                  ) : (
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
-                  )}
-                </svg>
-              </button>
-              {tabGroups.map((group, gi) => {
-                // Render group separator (thin divider) between groups
-                const separator = gi > 0 ? (
-                  <span
-                    key={`sep-${gi}`}
-                    className="flex-shrink-0 w-px h-5 bg-[var(--border-subtle)] mx-1"
-                    aria-hidden="true"
-                  />
-                ) : null
-
-                // Render optional group label for logical sections
-                const label = group.label ? (
-                  <span
-                    key={`label-${gi}`}
-                    className="flex-shrink-0 text-[10px] font-medium uppercase tracking-wider text-[var(--text-muted)] opacity-50 mr-1 hidden md:inline-block select-none"
-                    aria-hidden="true"
-                  >
-                    {group.label}
-                  </span>
-                ) : null
-
-                const groupTabs = group.tabs.map((tab) => {
-                  const isActive = activeTab === tab
-                  return (
-                    <button
-                      key={tab}
-                      role="tab"
-                      aria-selected={isActive}
-                      tabIndex={isActive ? 0 : -1}
-                      onClick={() => setActiveTab(tab)}
-                      className={`
-                        relative px-3 md:px-4 py-1.5 text-xs md:text-sm font-medium rounded-full whitespace-nowrap transition-all duration-200
-                        ${isActive
-                          ? 'text-white'
-                          : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] hover:bg-[var(--bg-elevated)]/40'
-                        }
-                      `}
-                    >
-                      <span className="flex items-center gap-1.5">
-                        <span className="text-sm">{tabMeta[tab]}</span>
-                        <span>{tab}</span>
-                      </span>
-                      {/* Gradient underline accent for active tab */}
-                      {isActive && (
-                        <span
-                          className="absolute bottom-0 left-2 right-2 h-0.5 rounded-full"
-                          style={{
-                            background: 'linear-gradient(to right, var(--accent-blue), var(--accent-purple))',
-                          }}
-                        />
-                      )}
-                      {/* Subtle hover glow for inactive tabs */}
-                      {!isActive && (
-                        <span className="absolute inset-0 rounded-full opacity-0 hover:opacity-100 transition-opacity duration-300 pointer-events-none"
-                          style={{ boxShadow: '0 0 12px 2px rgba(91,141,239,0.06)' }}
-                        />
-                      )}
-                    </button>
-                  )
-                })
-
-                return [separator, label, ...groupTabs]
-              })}
-            </div>
-          </nav>
-        )}
-
-        {/* Mobile top bar with hamburger + current tab title */}
-        {isMobile && (
-          <div className="flex-shrink-0 flex items-center gap-3 px-4 py-2 bg-[var(--bg-surface)]/60 backdrop-blur-sm border-b border-[var(--border-subtle)]">
+        {/* Horizontal tab nav bar — compact scrollable on mobile */}
+        <nav className="flex-shrink-0 bg-[var(--bg-surface)]/60 backdrop-blur-sm border-b border-[var(--border-subtle)]">
+          <div
+            ref={tablistRef}
+            role="tablist"
+            aria-label="Main navigation"
+            className={`flex items-center gap-1 px-3 md:px-6 py-2 ${isMobile ? 'overflow-x-auto' : 'flex-wrap'}`}
+            onKeyDown={(e) => {
+              const currentIdx = tabs.indexOf(activeTab)
+              if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+                e.preventDefault()
+                const next = tabs[(currentIdx + 1) % tabs.length]
+                setActiveTab(next)
+              } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+                e.preventDefault()
+                const prev = tabs[(currentIdx - 1 + tabs.length) % tabs.length]
+                setActiveTab(prev)
+              } else if (e.key === 'Home') {
+                e.preventDefault()
+                setActiveTab(tabs[0])
+              } else if (e.key === 'End') {
+                e.preventDefault()
+                setActiveTab(tabs[tabs.length - 1])
+              }
+            }}
+          >
+            {/* Sidebar toggle */}
             <button
-              onClick={() => setSidebarOpen(!sidebarOpen)}
-              aria-label="Open sidebar"
-              className="p-1.5 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-elevated)]/40"
+              onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+              aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+              className="flex-shrink-0 p-1.5 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-elevated)]/40 transition-all duration-200 mr-1"
             >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                {sidebarCollapsed ? (
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                ) : (
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
+                )}
               </svg>
             </button>
-            <h1 className="text-sm font-semibold text-[var(--text-primary)]">
-              {tabMeta[activeTab]} {activeTab}
-            </h1>
-            <div className="flex-1" />
-            {selectedAgent && activeTab === 'Chat' && (
-              <span className="text-xs text-[var(--text-muted)]">
-                <span className="agent-dot agent-dot--online" /> {selectedAgent.display_name || selectedAgent.name}
-              </span>
-            )}
+
+            {/* Flat list of 6 tabs */}
+            {tabs.map((tab) => {
+              const isActive = activeTab === tab
+              return (
+                <button
+                  key={tab}
+                  role="tab"
+                  aria-selected={isActive}
+                  tabIndex={isActive ? 0 : -1}
+                  onClick={() => setActiveTab(tab)}
+                  className={`
+                    relative px-3 md:px-4 py-1.5 text-xs md:text-sm font-medium rounded-full whitespace-nowrap transition-all duration-200
+                    ${isActive
+                      ? 'text-white'
+                      : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] hover:bg-[var(--bg-elevated)]/40'
+                    }
+                  `}
+                >
+                  <span className="flex items-center gap-1.5">
+                    <Icon name={tabMeta[tab]} size={16} />
+                    <span>{tab}</span>
+                  </span>
+                  {/* Gradient underline accent for active tab */}
+                  {isActive && (
+                    <span
+                      className="absolute bottom-0 left-2 right-2 h-0.5 rounded-full"
+                      style={{
+                        background: 'linear-gradient(to right, var(--accent-blue), var(--accent-purple))',
+                      }}
+                    />
+                  )}
+                  {/* Subtle hover glow for inactive tabs */}
+                  {!isActive && (
+                    <span className="absolute inset-0 rounded-full opacity-0 hover:opacity-100 transition-opacity duration-300 pointer-events-none"
+                      style={{ boxShadow: '0 0 12px 2px rgba(91,141,239,0.06)' }}
+                    />
+                  )}
+                </button>
+              )
+            })}
           </div>
-        )}
+        </nav>
 
         {/* Content with page transition */}
-        <main role="tabpanel" aria-label={`${activeTab} panel`} className={`flex-1 overflow-auto page-transition ${isMobile ? 'pb-16' : ''}`} key={activeTab}>
+        <main role="tabpanel" aria-label={`${activeTab} panel`} className="flex-1 overflow-auto page-transition" key={activeTab}>
           {renderContent()}
         </main>
 
         {/* Status Footer — desktop only */}
         {!isMobile && <StatusFooter sseConnected={sseConnected} agents={agents} />}
-
-        {/* Mobile bottom nav */}
-        {isMobile && (
-          <nav
-            className="fixed bottom-0 left-0 right-0 z-30 bg-[var(--bg-surface)]/95 backdrop-blur-md border-t border-[var(--border-subtle)]"
-            aria-label="Mobile navigation"
-          >
-            <div className="flex items-center justify-around h-14 max-w-lg mx-auto">
-              {mobileNavItems.map((item) => {
-                const isActive = activeTab === item.tab
-                return (
-                  <button
-                    key={item.tab}
-                    onClick={() => setActiveTab(item.tab as Tab)}
-                    className={`flex flex-col items-center justify-center gap-0.5 px-2 py-1 rounded-lg transition-colors ${
-                      isActive
-                        ? 'text-[var(--accent-blue)]'
-                        : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'
-                    }`}
-                    aria-label={item.tab}
-                    aria-current={isActive ? 'page' : undefined}
-                  >
-                    <span className="text-lg">{item.icon}</span>
-                    <span className="text-[10px] font-medium leading-none">{item.tab}</span>
-                  </button>
-                )
-              })}
-            </div>
-            {/* Safe area spacer for notch devices */}
-            <div className="h-[env(safe-area-inset-bottom)]" />
-          </nav>
-        )}
       </div>
 
       {/* Hidden file input for artifact upload */}

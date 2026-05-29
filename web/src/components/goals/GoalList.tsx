@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import type { Goal } from '../../api/client'
 import { listGoals, createGoal, updateGoal, breakdownGoal, deleteGoal } from '../../api/client'
+import { Icon } from '../Icon'
 import { GoalProgress } from './GoalProgress'
 
 const statusColors: Record<string, string> = {
@@ -175,7 +176,7 @@ export function GoalList() {
                     className="text-xs text-gray-500 hover:text-red-400 transition-colors"
                     title="Delete goal"
                   >
-                    ✕
+                    <Icon name="close" size={16} />
                   </button>
                 </div>
               </div>
@@ -211,7 +212,7 @@ export function GoalList() {
                     Breaking down...
                   </span>
                 ) : (
-                  '🤖 Break down with AI'
+                  <><Icon name="smart_toy" size={16} /> Break down with AI</>
                 )}
               </button>
             </div>

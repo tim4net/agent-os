@@ -30,9 +30,11 @@ type ChatOptions struct {
 
 // ChatChunk represents a streaming chunk from a chat response.
 type ChatChunk struct {
-	Content string `json:"content"`
-	Done    bool   `json:"done"`
-	Error   error  `json:"-"`
+	Content    string `json:"content"`
+	Done       bool   `json:"done"`
+	Error      error  `json:"-"`
+	ToolName   string `json:"tool_name,omitempty"`   // set for tool.started / tool.completed
+	ToolStatus string `json:"tool_status,omitempty"` // "started" or "completed"
 }
 
 // ModelInfo describes an available model.

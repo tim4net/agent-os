@@ -138,10 +138,18 @@ func (aa *ArtifactAPI) ListArtifacts(w http.ResponseWriter, r *http.Request) {
 		artifacts = []db.Artifact{}
 	}
 
-	// Convert to response DTOs
+	// Convert to response DTOs and populate file sizes from disk
 	responses := make([]artifactResponse, len(artifacts))
 	for i, a := range artifacts {
-		responses[i] = artifactToResponse(a)
+		resp := artifactToResponse(a)
+		// Populate size from disk if file_path exists
+		if a.FilePath.Valid && a.FilePath.String != "" {
+			absPath := filepath.Join(aa.artifactsPath, a.FilePath.String)
+			if stat, err := os.Stat(absPath); err == nil {
+				resp.Size = stat.Size()
+			}
+		}
+		responses[i] = resp
 	}
 
 	w.Header().Set("Content-Type", "application/json")

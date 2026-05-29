@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { StudioGeneration } from '../../api/client'
 import { listGenerations } from '../../api/client'
+import { Icon } from '../Icon'
 
 export function MediaPreview() {
   const [generations, setGenerations] = useState<StudioGeneration[]>([])
@@ -69,12 +70,12 @@ export function MediaPreview() {
               )}
               {gen.type === 'video' && (
                 <div className="flex items-center justify-center text-gray-600">
-                  <span className="text-3xl">🎬</span>
+                  <Icon name="movie" size={48} />
                 </div>
               )}
               {gen.type === 'audio' && (
                 <div className="flex items-center justify-center text-gray-600">
-                  <span className="text-3xl">🎵</span>
+                  <Icon name="music_note" size={48} />
                 </div>
               )}
             </div>
@@ -105,7 +106,7 @@ export function MediaPreview() {
                 onClick={() => setExpanded(null)}
                 className="text-gray-400 hover:text-white text-lg flex-shrink-0"
               >
-                ✕
+                <Icon name="close" size={16} />
               </button>
             </div>
 

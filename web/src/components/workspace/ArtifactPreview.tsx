@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import type { Artifact, LinkedNote } from '../../api/client'
 import { deleteArtifact, getArtifactNotes, exportArtifact } from '../../api/client'
 import { showToast } from '../Toast'
+import { Icon } from '../Icon'
 
 interface ArtifactPreviewProps {
   artifact: Artifact
@@ -141,7 +142,7 @@ export function ArtifactPreview({ artifact, onClose, onDeleted }: ArtifactPrevie
 
           {/* Linked Notes */}
           <div className="mt-4 pt-4 border-t border-gray-800">
-            <h4 className="text-sm font-medium text-gray-300 mb-2">📝 Linked Notes</h4>
+            <h4 className="text-sm font-medium text-gray-300 mb-2"><Icon name="edit_note" size={14} /> Linked Notes</h4>
             {loadingNotes ? (
               <div className="space-y-2">
                 <div className="h-4 bg-gray-800 rounded animate-pulse w-3/4" />
@@ -174,7 +175,7 @@ export function ArtifactPreview({ artifact, onClose, onDeleted }: ArtifactPrevie
             className="px-4 py-2 text-sm font-medium rounded bg-gray-800 text-gray-200 hover:bg-gray-700 transition-colors disabled:opacity-50"
             aria-label="Export to Obsidian"
           >
-            {exporting ? 'Exporting...' : '📄 Export to Obsidian'}
+            {exporting ? 'Exporting...' : <><Icon name="description" size={14} /> Export to Obsidian</>}
           </button>
           <a
             href={fileUrl}

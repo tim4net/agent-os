@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { Skill } from '../../api/client'
 import { createSkill, updateSkill } from '../../api/client'
+import { Icon } from '../Icon'
 
 const CATEGORIES = ['general', 'coding', 'research', 'writing', 'automation', 'creative']
 
@@ -76,7 +77,7 @@ export function SkillEditor({ skill, onDone }: SkillEditorProps) {
           onClick={onDone}
           className="text-gray-400 hover:text-white text-sm"
         >
-          ✕ Cancel
+          <Icon name="close" size={16} /> Cancel
         </button>
       </div>
 

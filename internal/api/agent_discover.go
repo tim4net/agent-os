@@ -93,7 +93,7 @@ func (a *API) AutoRegisterAgents(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		agent, err := a.queries.CreateAgent(r.Context(), db.CreateAgentParams{
+		agent, err := a.queries.EnsureAgent(r.Context(), db.EnsureAgentParams{
 			Name:        ka.Hostname,
 			DisplayName: ka.DisplayName,
 			Harness:     ka.Harness,
@@ -101,8 +101,13 @@ func (a *API) AutoRegisterAgents(w http.ResponseWriter, r *http.Request) {
 			Metadata:    []byte(`{"auto_registered": true, "discovered": true}`),
 		})
 		if err != nil {
-			slog.Error("failed to auto-register agent", "hostname", ka.Hostname, "error", err)
-			continue
+			// err == pgx.ErrNoRows means agent was created by a concurrent request — fetch it.
+			existing, getErr := a.queries.GetAgentByName(r.Context(), ka.Hostname)
+			if getErr != nil {
+				slog.Error("failed to auto-register agent", "hostname", ka.Hostname, "error", err)
+				continue
+			}
+			agent = existing
 		}
 
 		slog.Info("auto-registered agent", "hostname", ka.Hostname, "harness", ka.Harness, "id", agent.ID.String())

@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
+import { Icon } from './Icon'
 
 /* ─── Types ─── */
 interface Agent {
@@ -146,10 +147,10 @@ export default function MissionControl({ agents }: { agents: Agent[] }) {
 
       {/* ── Stats Bar ── */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard label="Agents Online" value={`${onlineCount}/${agents.length}`} icon="🤖" accent={onlineCount === agents.length ? 'emerald' : 'amber'} />
-        <StatCard label="Active Tasks" value={`${taskSummary.in_progress + taskSummary.review}`} subtext={`${totalTasks} total`} icon="📋" accent="blue" />
-        <StatCard label="Running Delegations" value={`${activeDelegations.length}`} subtext={`${delegations.length} total`} icon="⚡" accent={activeDelegations.length > 0 ? 'blue' : 'gray'} />
-        <StatCard label="Active Goals" value={`${goals.filter(g => g.status === 'active').length}`} subtext={`${goals.length} total`} icon="🎯" accent="purple" />
+        <StatCard label="Agents Online" value={`${onlineCount}/${agents.length}`} icon="smart_toy" size={16} accent={onlineCount === agents.length ? 'emerald' : 'amber'} />
+        <StatCard label="Active Tasks" value={`${taskSummary.in_progress + taskSummary.review}`} subtext={`${totalTasks} total`} icon="checklist" size={16} accent="blue" />
+        <StatCard label="Running Delegations" value={`${activeDelegations.length}`} subtext={`${delegations.length} total`} icon="bolt" size={16} accent={activeDelegations.length > 0 ? 'blue' : 'gray'} />
+        <StatCard label="Active Goals" value={`${goals.filter(g => g.status === 'active').length}`} subtext={`${goals.length} total`} icon="flag" size={16} accent="purple" />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -250,8 +251,8 @@ export default function MissionControl({ agents }: { agents: Agent[] }) {
 }
 
 /* ── Sub-components ── */
-function StatCard({ label, value, subtext, icon, accent }: {
-  label: string, value: string, subtext?: string, icon: string, accent: string
+function StatCard({ label, value, subtext, icon, size = 16, accent }: {
+  label: string, value: string, subtext?: string, icon: string, size?: number, accent: string
 }) {
   const colorMap: Record<string, string> = {
     emerald: 'from-emerald-500/10 to-transparent border-emerald-500/20',
@@ -263,7 +264,7 @@ function StatCard({ label, value, subtext, icon, accent }: {
   return (
     <div className={`glass-card p-4 bg-gradient-to-br ${colorMap[accent] || colorMap.gray}`}>
       <div className="flex items-center gap-2 mb-1">
-        <span className="text-base">{icon}</span>
+        <Icon name={icon} size={size} />
         <span className="text-xs text-[var(--color-text-muted)]">{label}</span>
       </div>
       <p className="text-2xl font-bold text-[var(--color-text-primary)]">{value}</p>

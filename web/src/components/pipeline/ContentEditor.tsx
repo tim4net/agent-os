@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { PipelineItem } from '../../api/client'
+import { Icon } from '../Icon'
 
 interface ContentEditorProps {
   item: PipelineItem
@@ -49,7 +50,7 @@ export function ContentEditor({ item, generating, onClose, onSave, onGenerate, o
             disabled={generating}
             className="text-sm px-4 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-purple-800 rounded font-medium transition-colors"
           >
-            {generating ? 'Generating...' : '✨ AI Generate'}
+             {generating ? 'Generating...' : <><Icon name="auto_awesome" size={14} /> AI Generate</>}
           </button>
           <button
             onClick={handleSave}

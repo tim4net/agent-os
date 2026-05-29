@@ -53,6 +53,51 @@ func (q *Queries) CreateAgent(ctx context.Context, arg CreateAgentParams) (Agent
 	return i, err
 }
 
+const ensureAgent = `-- name: EnsureAgent :one
+INSERT INTO agents (name, display_name, harness, base_url, metadata)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (name) DO NOTHING
+RETURNING id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible
+`
+
+type EnsureAgentParams struct {
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name"`
+	Harness     string `json:"harness"`
+	BaseUrl     string `json:"base_url"`
+	Metadata    []byte `json:"metadata"`
+}
+
+// EnsureAgent inserts a new agent only if no agent with the same name exists.
+// Returns the inserted agent, or pgx.ErrNoRows if the agent already existed.
+func (q *Queries) EnsureAgent(ctx context.Context, arg EnsureAgentParams) (Agent, error) {
+	row := q.db.QueryRow(ctx, ensureAgent,
+		arg.Name,
+		arg.DisplayName,
+		arg.Harness,
+		arg.BaseUrl,
+		arg.Metadata,
+	)
+	var i Agent
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.DisplayName,
+		&i.Harness,
+		&i.BaseUrl,
+		&i.Status,
+		&i.Metadata,
+		&i.LastSeen,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Role,
+		&i.SystemPrompt,
+		&i.Persona,
+		&i.Visible,
+	)
+	return i, err
+}
+
 const deleteAgent = `-- name: DeleteAgent :exec
 DELETE FROM agents WHERE id = $1
 `

@@ -27,10 +27,13 @@ type Querier interface {
 	CreateTask(ctx context.Context, arg CreateTaskParams) (Task, error)
 	CreateWorkflow(ctx context.Context, arg CreateWorkflowParams) (Workflow, error)
 	CreateWorkflowRun(ctx context.Context, arg CreateWorkflowRunParams) (WorkflowRun, error)
+	EnsureAgent(ctx context.Context, arg EnsureAgentParams) (Agent, error)
 	DeleteAgent(ctx context.Context, id pgtype.UUID) error
 	DeleteArtifact(ctx context.Context, id pgtype.UUID) error
 	DeleteGoal(ctx context.Context, id pgtype.UUID) error
+	DeleteLastExchange(ctx context.Context, conversationID pgtype.UUID) (int64, error)
 	DeleteMemory(ctx context.Context, filePath string) error
+	DeleteMessage(ctx context.Context, id pgtype.UUID) error
 	DeleteMessagesByConversation(ctx context.Context, conversationID pgtype.UUID) (int64, error)
 	DeletePipelineItem(ctx context.Context, id pgtype.UUID) error
 	DeleteSkill(ctx context.Context, id pgtype.UUID) error
@@ -43,6 +46,7 @@ type Querier interface {
 	GetConversation(ctx context.Context, id pgtype.UUID) (Conversation, error)
 	GetDelegation(ctx context.Context, id pgtype.UUID) (Delegation, error)
 	GetGoal(ctx context.Context, id pgtype.UUID) (Goal, error)
+	GetLastUserMessage(ctx context.Context, conversationID pgtype.UUID) (Message, error)
 	GetLatestWorkflowRun(ctx context.Context, workflowID pgtype.UUID) (WorkflowRun, error)
 	GetMemoryByPath(ctx context.Context, filePath string) (MemoryIndex, error)
 	GetPipelineItem(ctx context.Context, id pgtype.UUID) (PipelineItem, error)
@@ -71,6 +75,8 @@ type Querier interface {
 	UpdateAgentConfig(ctx context.Context, arg UpdateAgentConfigParams) (Agent, error)
 	UpdateAgentStatus(ctx context.Context, arg UpdateAgentStatusParams) (Agent, error)
 	UpdateConversation(ctx context.Context, arg UpdateConversationParams) (Conversation, error)
+	UpdateConversationMetadata(ctx context.Context, arg UpdateConversationMetadataParams) (Conversation, error)
+	UpdateConversationSummary(ctx context.Context, arg UpdateConversationSummaryParams) (Conversation, error)
 	UpdateDelegation(ctx context.Context, arg UpdateDelegationParams) (Delegation, error)
 	UpdateGoal(ctx context.Context, arg UpdateGoalParams) (Goal, error)
 	UpdatePipelineItem(ctx context.Context, arg UpdatePipelineItemParams) (PipelineItem, error)

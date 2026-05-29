@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { saveMemoryFile, synthesizeMemory } from '../../api/client'
 import { showToast } from '../Toast'
+import { Icon } from '../Icon'
 
 interface SynthesisModalProps {
   filePaths: string[]
@@ -64,9 +65,9 @@ export function SynthesisModal({ filePaths, onClose }: SynthesisModalProps) {
             onClick={onClose}
             aria-label="Close"
             className="text-gray-400 hover:text-white transition-colors text-xl leading-none"
-          >
-            ✕
-          </button>
+            >
+             <Icon name="close" size={16} />
+            </button>
         </div>
 
         {/* Selected files */}
@@ -79,9 +80,9 @@ export function SynthesisModal({ filePaths, onClose }: SynthesisModalProps) {
               <span
                 key={p}
                 className="inline-flex items-center gap-1 px-2 py-0.5 bg-gray-800 text-gray-300 text-xs rounded-full"
-              >
-                📝 {p.split('/').pop()}
-              </span>
+                >
+                 <Icon name="edit_note" size={12} /> {p.split('/').pop()}
+                </span>
             ))}
           </div>
         </div>
@@ -153,17 +154,17 @@ export function SynthesisModal({ filePaths, onClose }: SynthesisModalProps) {
                 onClick={handleSaveToObsidian}
                 disabled={saving}
                 className="px-4 py-1.5 text-xs font-medium rounded bg-green-700 text-white hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              >
-                {saving ? 'Saving...' : '📝 Save to Obsidian'}
-              </button>
+                >
+                 {saving ? 'Saving...' : <><Icon name="edit_note" size={14} /> Save to Obsidian</>}
+                </button>
             )}
             <button
               onClick={handleSynthesize}
               disabled={loading || filePaths.length < 2}
               className="px-4 py-1.5 text-xs font-medium rounded bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              {loading ? 'Synthesizing...' : '✨ Synthesize'}
-            </button>
+              >
+               {loading ? 'Synthesizing...' : <><Icon name="auto_awesome" size={14} /> Synthesize</>}
+              </button>
           </div>
         </div>
       </div>

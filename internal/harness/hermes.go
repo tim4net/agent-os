@@ -224,15 +224,300 @@ func (h *HermesHarness) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	return result.Data, nil
 }
 
-// hermesCommands defines the slash commands supported by the Hermes agent.
+// hermesCommands defines ALL slash commands from the Hermes COMMAND_REGISTRY.
+// Commands handled by Agent OS backend: /new, /clear, /compact, /compress, /retry,
+// /undo, /history, /title, /stop, /save.
+// Everything else is forwarded as a chat message to Hermes for processing.
 var hermesCommands = []Command{
-	{Command: "/new", Description: "Start a new conversation"},
+	// Session
+	{Command: "/start", Description: "Acknowledge platform start pings without a reply"},
+	{Command: "/new", Description: "Start a new session (fresh session ID + history)"},
+	{Command: "/topic", Description: "Enable or inspect Telegram DM topic sessions"},
+	{Command: "/clear", Description: "Clear screen and start a new session"},
+	{Command: "/redraw", Description: "Force a full UI repaint (recovers from terminal drift)"},
+	{Command: "/history", Description: "Show conversation history"},
+	{Command: "/save", Description: "Save the current conversation"},
+	{Command: "/retry", Description: "Retry the last message (resend to agent)"},
+	{Command: "/undo", Description: "Remove the last user/assistant exchange"},
+	{Command: "/title", Description: "Set a title for the current session"},
+	{Command: "/handoff", Description: "Hand off this session to a messaging platform"},
+	{Command: "/branch", Description: "Branch the current session (explore a different path)"},
+	{Command: "/compress", Description: "Manually compress conversation context"},
 	{Command: "/compact", Description: "Summarize and compact conversation history"},
-	{Command: "/clear", Description: "Clear all messages in current conversation"},
+	{Command: "/rollback", Description: "List or restore filesystem checkpoints"},
+	{Command: "/snapshot", Description: "Create or restore state snapshots of Hermes config/state"},
+	{Command: "/stop", Description: "Kill all running background processes"},
+	{Command: "/approve", Description: "Approve a pending dangerous command"},
+	{Command: "/deny", Description: "Deny a pending dangerous command"},
+	{Command: "/background", Description: "Run a prompt in the background"},
+	{Command: "/agents", Description: "Show active agents and running tasks"},
+	{Command: "/queue", Description: "Queue a prompt for the next turn (doesn't interrupt)"},
+	{Command: "/steer", Description: "Inject a message after the next tool call without interrupting"},
+	{Command: "/goal", Description: "Set a standing goal Hermes works on across turns until achieved"},
+	{Command: "/subgoal", Description: "Add or manage extra criteria on the active goal"},
+	{Command: "/status", Description: "Show session info"},
+	{Command: "/resume", Description: "Resume a previously-named session"},
+	{Command: "/sessions", Description: "Browse and resume previous sessions"},
+	{Command: "/sethome", Description: "Set this chat as the home channel"},
+	{Command: "/restart", Description: "Gracefully restart the gateway after draining active runs"},
+	// Info
+	{Command: "/whoami", Description: "Show your slash command access (admin / user)"},
+	{Command: "/profile", Description: "Show active profile name and home directory"},
+	{Command: "/commands", Description: "Browse all commands and skills (paginated)"},
+	{Command: "/help", Description: "Show available commands"},
+	{Command: "/usage", Description: "Show token usage and rate limits for the current session"},
+	{Command: "/insights", Description: "Show usage insights and analytics"},
+	{Command: "/platforms", Description: "Show gateway/messaging platform status"},
+	{Command: "/platform", Description: "Pause, resume, or list a failing gateway platform"},
+	{Command: "/copy", Description: "Copy the last assistant response to clipboard"},
+	{Command: "/paste", Description: "Attach clipboard image from your clipboard"},
+	{Command: "/image", Description: "Attach a local image file for your next prompt"},
+	{Command: "/update", Description: "Update Hermes Agent to the latest version"},
+	{Command: "/debug", Description: "Upload debug report (system info + logs) and get shareable links"},
+	// Configuration
+	{Command: "/config", Description: "Show current configuration"},
+	{Command: "/model", Description: "Switch model for this session"},
+	{Command: "/codex-runtime", Description: "Toggle codex app-server runtime for OpenAI/Codex models"},
+	{Command: "/gquota", Description: "Show Google Gemini Code Assist quota usage"},
+	{Command: "/personality", Description: "Set a predefined personality"},
+	{Command: "/statusbar", Description: "Toggle the context/model status bar"},
+	{Command: "/verbose", Description: "Cycle tool progress display: off -> new -> all -> verbose"},
+	{Command: "/footer", Description: "Toggle gateway runtime-metadata footer on final replies"},
+	{Command: "/yolo", Description: "Toggle YOLO mode (skip all dangerous command approvals)"},
+	{Command: "/reasoning", Description: "Manage reasoning effort and display"},
+	{Command: "/fast", Description: "Toggle fast mode"},
+	{Command: "/skin", Description: "Show or change the display skin/theme"},
+	{Command: "/indicator", Description: "Pick the TUI busy-indicator style"},
+	{Command: "/voice", Description: "Toggle voice mode"},
+	{Command: "/busy", Description: "Control what Enter does while Hermes is working"},
+	// Tools & Skills
+	{Command: "/tools", Description: "Manage tools: /tools [list|disable|enable] [name...]"},
+	{Command: "/toolsets", Description: "List available toolsets"},
+	{Command: "/skills", Description: "Search, install, inspect, or manage skills"},
+	{Command: "/bundles", Description: "List skill bundles (aliases /<name> for multiple skills)"},
+	{Command: "/cron", Description: "Manage scheduled tasks"},
+	{Command: "/curator", Description: "Background skill maintenance (status, run, pin, archive, list-archived)"},
+	{Command: "/kanban", Description: "Multi-profile collaboration board (tasks, links, comments)"},
+	{Command: "/reload", Description: "Reload .env variables into the running session"},
+	{Command: "/reload-mcp", Description: "Reload MCP servers from config"},
+	{Command: "/reload-skills", Description: "Re-scan ~/.hermes/skills/ for newly installed or removed skills"},
+	{Command: "/browser", Description: "Connect browser tools to your live Chromium-family browser via CDP"},
+	{Command: "/plugins", Description: "List installed plugins and their status"},
+	// Exit
+	{Command: "/quit", Description: "Exit the CLI"},
 }
 
 func (h *HermesHarness) Commands() []Command {
 	return hermesCommands
+}
+
+// CreateSession creates a new Hermes session via POST /api/sessions.
+// Returns the session ID (e.g. "api_...") on success.
+func (h *HermesHarness) CreateSession(ctx context.Context, title string) (string, error) {
+	url := h.baseURL + "/api/sessions"
+
+	body := map[string]string{"title": title}
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return "", fmt.Errorf("hermes create-session: marshal body: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(jsonBody))
+	if err != nil {
+		return "", fmt.Errorf("hermes create-session: create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if h.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+h.apiKey)
+	}
+
+	resp, err := h.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("hermes create-session: do request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		respBody, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("hermes create-session: unexpected status %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var result struct {
+		Session struct {
+			ID string `json:"id"`
+		} `json:"session"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("hermes create-session: decode response: %w", err)
+	}
+
+	if result.Session.ID == "" {
+		return "", fmt.Errorf("hermes create-session: empty session ID in response")
+	}
+
+	return result.Session.ID, nil
+}
+
+// SessionChat sends a message to a Hermes session via
+// POST /api/sessions/{sessionID}/chat/stream and returns a channel of
+// ChatChunks parsed from the custom SSE event format.
+//
+// SSE events handled:
+//   - event: assistant.delta → {delta: "text chunk"}  → ChatChunk{Content}
+//   - event: done            → terminal                → ChatChunk{Done: true}
+//   - event: error           → {message}               → ChatChunk{Error}
+//
+// Keepalive lines (starting with ":") are silently skipped.
+func (h *HermesHarness) SessionChat(ctx context.Context, sessionID, message string) (<-chan ChatChunk, error) {
+	url := fmt.Sprintf("%s/api/sessions/%s/chat/stream", h.baseURL, sessionID)
+
+	body := map[string]string{"message": message}
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("hermes session-chat: marshal body: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("hermes session-chat: create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	if h.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+h.apiKey)
+	}
+
+	resp, err := h.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("hermes session-chat: do request: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, fmt.Errorf("hermes session-chat: unexpected status %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	ch := make(chan ChatChunk, 64)
+
+	go func() {
+		defer close(ch)
+		defer resp.Body.Close()
+
+		scanner := bufio.NewScanner(resp.Body)
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+
+		var currentEvent string
+
+		for scanner.Scan() {
+			line := scanner.Text()
+
+			// Skip empty lines (SSE event separators)
+			if line == "" {
+				currentEvent = ""
+				continue
+			}
+
+			// Skip keepalive comments
+			if strings.HasPrefix(line, ":") {
+				continue
+			}
+
+			// Parse event type
+			if strings.HasPrefix(line, "event: ") {
+				currentEvent = strings.TrimPrefix(line, "event: ")
+				continue
+			}
+
+			// Parse data lines
+			if !strings.HasPrefix(line, "data: ") {
+				continue
+			}
+			data := strings.TrimPrefix(line, "data: ")
+
+			switch currentEvent {
+			case "assistant.delta":
+				var payload struct {
+					Delta string `json:"delta"`
+				}
+				if err := json.Unmarshal([]byte(data), &payload); err != nil {
+					ch <- ChatChunk{Error: fmt.Errorf("parse assistant.delta: %w", err)}
+					return
+				}
+				if payload.Delta != "" {
+					ch <- ChatChunk{Content: payload.Delta}
+				}
+
+			case "assistant.completed":
+				// Final assembled content — we already streamed deltas, so nothing to emit
+				// unless we haven't seen any deltas (single-shot response).
+				var payload struct {
+					Content   string `json:"content"`
+					Completed bool   `json:"completed"`
+				}
+				if err := json.Unmarshal([]byte(data), &payload); err != nil {
+					// Non-fatal, just log
+					continue
+				}
+				// If we got completed content but never streamed deltas, emit it
+				// This handles edge cases where the gateway sends the full response in one shot.
+				// We don't have a way to know if deltas were sent, so we skip this to avoid
+				// duplicate content. The done event will signal completion.
+
+			case "run.completed":
+				// Terminal event — the run is fully complete
+				ch <- ChatChunk{Done: true}
+				return
+
+			case "done":
+				// Terminal event
+				ch <- ChatChunk{Done: true}
+				return
+
+			case "error":
+				var payload struct {
+					Message string `json:"message"`
+				}
+				if err := json.Unmarshal([]byte(data), &payload); err != nil {
+					ch <- ChatChunk{Error: fmt.Errorf("session error (unparseable): %s", data)}
+					return
+				}
+				ch <- ChatChunk{Error: fmt.Errorf("session error: %s", payload.Message)}
+				return
+
+			case "tool.started", "tool.completed", "tool.progress":
+				var payload struct {
+					Name      string `json:"name"`
+					ToolName  string `json:"tool_name"`
+					ToolCallID string `json:"tool_call_id"`
+				}
+				if err := json.Unmarshal([]byte(data), &payload); err != nil {
+					// Non-fatal, skip malformed tool event
+					continue
+				}
+				status := "started"
+				if currentEvent == "tool.completed" {
+					status = "completed"
+				}
+				name := payload.Name
+				if name == "" {
+					name = payload.ToolName
+				}
+				if name != "" && status != "progress" {
+					ch <- ChatChunk{ToolName: name, ToolStatus: status}
+				}
+
+			default:
+				// Unknown event type — skip
+			}
+		}
+
+		if err := scanner.Err(); err != nil {
+			ch <- ChatChunk{Error: fmt.Errorf("read session stream: %w", err)}
+		}
+	}()
+
+	return ch, nil
 }
 
 func (h *HermesHarness) Close() error {

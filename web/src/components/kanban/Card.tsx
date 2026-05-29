@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import type { Task, Agent, LinkedNote } from '../../api/client'
 import { getTaskNotes, breakdownTask } from '../../api/client'
+import { Icon } from '../Icon'
 
 interface CardProps {
   task: Task
@@ -147,7 +148,7 @@ export function Card({ task, agents, subtaskCount = 0, onDelete, onUpdate, onBre
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
               </svg>
             ) : (
-              <span className="text-sm">✨</span>
+              <span className="text-sm"><Icon name="auto_awesome" size={14} /></span>
             )}
           </button>
           <span
@@ -184,7 +185,7 @@ export function Card({ task, agents, subtaskCount = 0, onDelete, onUpdate, onBre
 
           {/* Related Notes */}
           <div className="mb-3">
-            <p className="text-xs text-gray-400 font-medium mb-1">📝 Related Notes</p>
+            <p className="text-xs text-gray-400 font-medium mb-1"><Icon name="edit_note" size={12} /> Related Notes</p>
             {loadingNotes ? (
               <div className="space-y-1">
                 <div className="h-3 bg-gray-700 rounded animate-pulse w-3/4" />
@@ -220,7 +221,7 @@ export function Card({ task, agents, subtaskCount = 0, onDelete, onUpdate, onBre
               aria-label="Break down with AI"
               className="text-xs px-3 py-1 bg-purple-700 hover:bg-purple-600 disabled:bg-gray-700 disabled:text-gray-500 rounded transition-colors"
             >
-              {breakingDown ? 'Breaking down...' : '✨ AI Breakdown'}
+              {breakingDown ? 'Breaking down...' : <><Icon name="auto_awesome" size={14} /> AI Breakdown</>}
             </button>
             <button
               onClick={(e) => { e.stopPropagation(); handleDelete() }}

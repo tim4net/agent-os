@@ -3,6 +3,7 @@ import { getMemoryFile, saveMemoryFile } from '../../api/client'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { Components } from 'react-markdown'
+import { Icon } from '../Icon'
 
 interface NoteViewerProps {
   filePath: string | null
@@ -72,7 +73,7 @@ export function NoteViewer({ filePath }: NoteViewerProps) {
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800 flex-shrink-0">
         <div className="flex items-center gap-2 min-w-0">
-          <span className="text-lg">📝</span>
+          <Icon name="edit_note" size={20} />
           <h3 className="text-sm font-semibold text-white truncate">{fileName}</h3>
           <span className="text-xs text-gray-500 truncate">{filePath}</span>
         </div>

@@ -103,8 +103,9 @@ CREATE TABLE memory_index (
 -- Full text search index
 CREATE INDEX idx_memory_fts ON memory_index USING gin(to_tsvector('english', coalesce(content, '')));
 
--- Seed initial agents
+-- Seed initial agents (idempotent: skip if already exists by name)
 INSERT INTO agents (name, display_name, harness, base_url, status) VALUES
     ('roux', 'Roux', 'hermes', 'http://100.66.94.15:8642', 'unknown'),
     ('crawbot', 'Crawbot', 'openclaw', 'http://100.68.106.15:2222', 'unknown'),
-    ('litellm', 'LiteLLM', 'litellm', 'http://100.113.84.43:4000', 'unknown');
+    ('litellm', 'LiteLLM', 'litellm', 'http://100.113.84.43:4000', 'unknown')
+ON CONFLICT (name) DO NOTHING;

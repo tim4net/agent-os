@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import type { TimelineEvent } from '../../api/client'
 import { getTimeline } from '../../api/client'
+import { Icon } from '../Icon'
 
 // --- Helpers ---
 
@@ -44,35 +45,35 @@ interface EventTypeConfig {
 
 const eventTypeConfig: Record<string, EventTypeConfig> = {
   conversation: {
-    icon: '💬',
+    icon: 'chat',
     color: 'text-blue-400',
     bgColor: 'bg-blue-500/10',
     borderColor: 'border-blue-500/30',
     label: 'Conversation',
   },
   task_completed: {
-    icon: '✅',
+    icon: 'check_circle',
     color: 'text-green-400',
     bgColor: 'bg-green-500/10',
     borderColor: 'border-green-500/30',
     label: 'Task Completed',
   },
   artifact_created: {
-    icon: '📎',
+    icon: 'attach_file',
     color: 'text-purple-400',
     bgColor: 'bg-purple-500/10',
     borderColor: 'border-purple-500/30',
     label: 'Artifact Created',
   },
   workflow_run: {
-    icon: '⚙️',
+    icon: 'settings',
     color: 'text-orange-400',
     bgColor: 'bg-orange-500/10',
     borderColor: 'border-orange-500/30',
     label: 'Workflow Run',
   },
   delegation: {
-    icon: '🔄',
+    icon: 'refresh',
     color: 'text-cyan-400',
     bgColor: 'bg-cyan-500/10',
     borderColor: 'border-cyan-500/30',
@@ -82,7 +83,7 @@ const eventTypeConfig: Record<string, EventTypeConfig> = {
 
 function getEventConfig(type: string): EventTypeConfig {
   return eventTypeConfig[type] ?? {
-    icon: '•',
+    icon: 'circle',
     color: 'text-gray-400',
     bgColor: 'bg-gray-500/10',
     borderColor: 'border-gray-500/30',
@@ -134,7 +135,7 @@ function TimelineItem({ event, isLast, onClick }: { event: TimelineEvent; isLast
         <div
           className={`w-9 h-9 rounded-full flex items-center justify-center text-sm ${config.bgColor} border ${config.borderColor} shrink-0`}
         >
-          {config.icon}
+          <Icon name={config.icon} size={14} />
         </div>
         {!isLast && (
           <div className="w-px flex-1 bg-gray-800 my-1" />
@@ -190,10 +191,10 @@ function StatsBar({ events }: { events: TimelineEvent[] }) {
   }
 
   const stats = [
-    { label: 'Conversations', count: counts.conversation, color: 'text-blue-400', icon: '💬' },
-    { label: 'Tasks Done', count: counts.task_completed, color: 'text-green-400', icon: '✅' },
-    { label: 'Artifacts', count: counts.artifact_created, color: 'text-purple-400', icon: '📎' },
-    { label: 'Workflows', count: counts.workflow_run, color: 'text-orange-400', icon: '⚙️' },
+    { label: 'Conversations', count: counts.conversation, color: 'text-blue-400', icon: 'chat' },
+    { label: 'Tasks Done', count: counts.task_completed, color: 'text-green-400', icon: 'check_circle' },
+    { label: 'Artifacts', count: counts.artifact_created, color: 'text-purple-400', icon: 'attach_file' },
+    { label: 'Workflows', count: counts.workflow_run, color: 'text-orange-400', icon: 'settings' },
   ]
 
   return (
@@ -201,7 +202,7 @@ function StatsBar({ events }: { events: TimelineEvent[] }) {
       {stats.map((stat) => (
         <div key={stat.label} className="bg-gray-900 border border-gray-800 rounded-lg px-4 py-3">
           <div className="flex items-center gap-2">
-            <span className="text-base">{stat.icon}</span>
+            <span className="text-base"><Icon name={stat.icon} size={16} /></span>
             <span className="text-lg font-bold text-gray-100">{stat.count}</span>
           </div>
           <p className="text-xs text-gray-500 mt-1">{stat.label}</p>
@@ -326,7 +327,7 @@ export function TimelineView({ onNavigate }: { onNavigate?: (tab: string, data?:
 
       {events.length === 0 ? (
         <div className="text-center py-16">
-          <div className="text-4xl mb-4">📋</div>
+          <div className="text-4xl mb-4"><Icon name="checklist" size={36} /></div>
           <p className="text-gray-400 text-sm">No activity yet. Events will appear here as conversations, tasks, and artifacts are created.</p>
         </div>
       ) : (
