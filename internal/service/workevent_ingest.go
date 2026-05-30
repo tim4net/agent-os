@@ -135,7 +135,10 @@ func ResolveTenantFromKey(ingestKey string) (string, error) {
 }
 
 // ValidateWorkEvent validates a WorkEventRequest against the frozen contract.
-func ValidateWorkEvent(req WorkEventRequest) error {
+// artifactRoot is the configured artifact root directory; when non-empty, absolute
+// artifact paths are accepted if they canonicalize under the root.
+// Pass "" to enforce relative-only paths (backward-compatible for unit tests).
+func ValidateWorkEvent(artifactRoot string, req WorkEventRequest) error {
 	// schema
 	if req.Schema != "agentos.work_event/v1" {
 		return &ValidationError{HTTPStatus: http.StatusBadRequest, Message: fmt.Sprintf("invalid schema: must be \"agentos.work_event/v1\", got %q", req.Schema)}
@@ -256,7 +259,7 @@ func ValidateWorkEvent(req WorkEventRequest) error {
 			return &ValidationError{HTTPStatus: http.StatusBadRequest, Message: fmt.Sprintf("artifact[%d]: must have exactly one of path or url, not both", i)}
 		}
 		if hasPath {
-			if err := validateArtifactPath(art.Path); err != nil {
+			if err := validateArtifactPath(artifactRoot, art.Path); err != nil {
 				return &ValidationError{HTTPStatus: http.StatusBadRequest, Message: fmt.Sprintf("artifact[%d]: %v", i, err)}
 			}
 		}
@@ -271,14 +274,33 @@ func ValidateWorkEvent(req WorkEventRequest) error {
 	return nil
 }
 
-// validateArtifactPath ensures the path is relative, doesn't traverse, and is under the artifacts root.
-func validateArtifactPath(p string) error {
-	// Must not be empty (already checked)
-	if filepath.IsAbs(p) {
-		return fmt.Errorf("path must be relative, got absolute: %s", p)
+// validateArtifactPath ensures the path is under the configured artifact root.
+// When root is empty, only relative paths without traversal are accepted (backward compat).
+// When root is non-empty, absolute paths that canonicalize under root are accepted
+// (contract §3: "must canonicalize under the artifact root"), and traversal/out-of-root
+// absolute paths are rejected.
+func validateArtifactPath(root, p string) error {
+	if p == "" {
+		return fmt.Errorf("path must not be empty")
 	}
-	// Clean and check for traversal
 	cleaned := filepath.Clean(p)
+	if filepath.IsAbs(cleaned) {
+		if root == "" {
+			// No root configured — reject all absolute paths (unit-test compat).
+			return fmt.Errorf("path must be relative, got absolute: %s", p)
+		}
+		// Root-aware: accept absolute paths that canonicalize under root.
+		rootClean := filepath.Clean(root)
+		rel, err := filepath.Rel(rootClean, cleaned)
+		if err != nil {
+			return fmt.Errorf("path must canonicalize under the artifact root: %s", p)
+		}
+		if strings.HasPrefix(rel, "..") {
+			return fmt.Errorf("path must be under the artifact root (traversal detected): %s", p)
+		}
+		return nil
+	}
+	// Relative path: reject traversal.
 	if strings.HasPrefix(cleaned, "..") {
 		return fmt.Errorf("path must not contain traversal (..): %s", p)
 	}
@@ -356,7 +378,7 @@ func (s *IngestService) resolveProject(ctx context.Context, tenant string, req W
 // Ingest validates, resolves the project, persists (upsert), and publishes.
 func (s *IngestService) Ingest(ctx context.Context, req WorkEventRequest) (db.WorkEvent, int, error) {
 	// Validate
-	if err := ValidateWorkEvent(req); err != nil {
+	if err := ValidateWorkEvent(s.artifactsPath, req); err != nil {
 		if ve, ok := err.(*ValidationError); ok {
 			s.log.Warn("work event validation failed", "error", ve.Message)
 			return db.WorkEvent{}, ve.HTTPStatus, ve

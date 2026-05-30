@@ -218,7 +218,7 @@ func TestIntegrationProjectResolution(t *testing.T) {
 	// Pre-create the project to avoid the NULL tracker scan issue in EnsureProjectBySlug
 	var projectID pgtype.UUID
 	err := pool.QueryRow(context.Background(),
-		"INSERT INTO projects (slug, name, tenant, tracker) VALUES ($1, $2, $3, '') ON CONFLICT (slug) DO UPDATE SET updated_at = NOW() RETURNING id",
+		"INSERT INTO projects (slug, name, tenant, tracker) VALUES ($1, $2, $3, 'agent_os_native') ON CONFLICT (slug) DO UPDATE SET updated_at = NOW() RETURNING id",
 		"agent-os", "agent-os", "personal",
 	).Scan(&projectID)
 	if err != nil {
@@ -266,7 +266,7 @@ func TestIntegrationProjectResolutionFromCwd(t *testing.T) {
 	// Pre-create the project with tracker to avoid NULL scan issue
 	var projectID pgtype.UUID
 	err := pool.QueryRow(context.Background(),
-		"INSERT INTO projects (slug, name, tenant, tracker) VALUES ($1, $2, $3, '') ON CONFLICT (slug) DO UPDATE SET updated_at = NOW() RETURNING id",
+		"INSERT INTO projects (slug, name, tenant, tracker) VALUES ($1, $2, $3, 'agent_os_native') ON CONFLICT (slug) DO UPDATE SET updated_at = NOW() RETURNING id",
 		"my-cool-project", "my-cool-project", "personal",
 	).Scan(&projectID)
 	if err != nil {
@@ -450,7 +450,7 @@ func TestIntegrationHeartbeatValidationComprehensive(t *testing.T) {
 			req.Kind = "session.heartbeat"
 			req.LivenessMode = tt.lm
 			req.Pid = &pid
-			err := ValidateWorkEvent(req)
+			err := ValidateWorkEvent("", req)
 			if tt.valid && err != nil {
 				t.Fatalf("expected valid, got: %v", err)
 			}
@@ -493,7 +493,7 @@ func TestIntegrationURLSSRF(t *testing.T) {
 			req.LivenessMode = ""
 			req.Pid = nil
 			req.Artifacts = []ArtifactDescriptor{{Type: "log", URL: tt.url}}
-			err := ValidateWorkEvent(req)
+			err := ValidateWorkEvent("", req)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatal("expected error, got nil")
@@ -517,12 +517,12 @@ func TestIntegrationDelegationShimProducesWorkEvent(t *testing.T) {
 	pool := getTestDB(t)
 	queries := db.New(pool)
 	bus := NewEventBus()
-	svc := NewIngestService(queries, bus, slog.Default(), "/tmp/aos-artifacts")
+	svc := NewIngestService(queries, bus, slog.Default(), "/data/artifacts")
 
 	// Pre-create a project for the delegation to reference (avoid NULL tracker scan)
 	var projectID pgtype.UUID
 	err := pool.QueryRow(context.Background(),
-		"INSERT INTO projects (slug, name, tenant, tracker) VALUES ($1, $2, $3, '') ON CONFLICT (slug) DO UPDATE SET updated_at = NOW() RETURNING id",
+		"INSERT INTO projects (slug, name, tenant, tracker) VALUES ($1, $2, $3, 'agent_os_native') ON CONFLICT (slug) DO UPDATE SET updated_at = NOW() RETURNING id",
 		"test-project", "test-project", "personal",
 	).Scan(&projectID)
 	if err != nil {
@@ -568,5 +568,56 @@ func TestIntegrationDelegationShimProducesWorkEvent(t *testing.T) {
 	// Verify it references the correct project
 	if !fetched.ProjectID.Valid || fetched.ProjectID.String() != projectID.String() {
 		t.Fatalf("project_id mismatch: got %v, want %s", fetched.ProjectID, projectID.String())
+	}
+}
+
+// --- TestIntegrationArtifactPathRoot ---
+// Proves contract §3: absolute artifact paths under the configured root are accepted,
+// paths outside the root are rejected.
+func TestIntegrationArtifactPathRoot(t *testing.T) {
+	pool := getTestDB(t)
+	queries := db.New(pool)
+	bus := NewEventBus()
+	svc := NewIngestService(queries, bus, slog.Default(), "/data/artifacts")
+
+	// Contract-valid: absolute path under root → 201
+	eventID := uuid.NewString()
+	req := validIngestRequest(eventID)
+	req.Kind = "artifact.created"
+	req.Status = ""
+	req.LivenessMode = ""
+	req.Pid = nil
+	req.Artifacts = []ArtifactDescriptor{{Type: "image", Path: "/data/artifacts/x.png"}}
+
+	row, httpStatus, err := svc.Ingest(context.Background(), req)
+	if err != nil {
+		t.Fatalf("expected no error for in-root absolute path, got: %v", err)
+	}
+	if httpStatus != 201 {
+		t.Fatalf("expected 201, got %d", httpStatus)
+	}
+
+	fetched, err := queries.GetWorkEventByEventID(context.Background(), row.EventID)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if fetched.Kind != "artifact.created" {
+		t.Fatalf("kind mismatch: got %s", fetched.Kind)
+	}
+
+	// Out-of-root absolute path → 400
+	badReq := validIngestRequest(uuid.NewString())
+	badReq.Kind = "artifact.created"
+	badReq.Status = ""
+	badReq.LivenessMode = ""
+	badReq.Pid = nil
+	badReq.Artifacts = []ArtifactDescriptor{{Type: "image", Path: "/etc/passwd"}}
+
+	_, httpStatus, err = svc.Ingest(context.Background(), badReq)
+	if err == nil {
+		t.Fatal("expected error for out-of-root path, got nil")
+	}
+	if httpStatus != 400 {
+		t.Fatalf("expected 400 for out-of-root path, got %d", httpStatus)
 	}
 }

@@ -1,12 +1,16 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // validRequest returns a minimal valid WorkEventRequest for session.start.
@@ -232,7 +236,7 @@ func TestValidateWorkEvent(t *testing.T) {
 			req := validRequest()
 			tt.mutate(&req)
 
-			err := ValidateWorkEvent(req)
+			err := ValidateWorkEvent("", req)
 
 			if tt.wantErr == "" {
 				if err != nil {
@@ -273,11 +277,74 @@ func TestValidateArtifactPath(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateArtifactPath(tt.path)
+			err := validateArtifactPath("", tt.path)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("validateArtifactPath(%q) = %v, wantErr %v", tt.path, err, tt.wantErr)
 			}
 		})
+	}
+}
+
+// TestValidateArtifactPathWithRoot proves contract §3 adherence:
+// absolute paths under the configured artifact root are accepted.
+func TestValidateArtifactPathWithRoot(t *testing.T) {
+	root := "/data/artifacts"
+	tests := []struct {
+		name    string
+		root    string
+		path    string
+		wantErr bool
+	}{
+		// Root-aware: absolute paths under root are accepted
+		{"absolute path under root", root, "/data/artifacts/x.png", false},
+		{"nested absolute under root", root, "/data/artifacts/sub/dir/file.png", false},
+		{"contract example", root, "/data/artifacts/x.png", false},
+		// Rejected: absolute path outside root
+		{"absolute path outside root", root, "/etc/passwd", true},
+		{"absolute path sibling", root, "/data/other/file.png", true},
+		{"absolute root traversal", root, "/data/artifacts/../etc/passwd", true},
+		// Rejected: traversal via symlink-like path (canonicalized)
+		{"traversal past root", root, "/data/artifacts/sub/../../etc/passwd", true},
+		// Relative paths still work with root set
+		{"relative path", root, "some/file.png", false},
+		{"relative traversal", root, "../etc/passwd", true},
+		// No root: backward compat (absolute rejected)
+		{"no root, absolute rejected", "", "/data/artifacts/x.png", true},
+		{"no root, relative accepted", "", "some/file.png", false},
+		{"no root, traversal rejected", "", "../etc/passwd", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateArtifactPath(tt.root, tt.path)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateArtifactPath(root=%q, %q) = %v, wantErr %v", tt.root, tt.path, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestValidateArtifactPathInRootViaIngest proves: Ingest() with artifactsPath accepts
+// contract-valid absolute paths under the root.
+func TestValidateArtifactPathInRootViaIngest(t *testing.T) {
+	fq := newFakeQuerier()
+	bus := NewEventBus()
+	svc := NewIngestService(fq, bus, slog.Default(), "/data/artifacts")
+
+	eventID := uuid.NewString()
+	req := validFakeRequest(eventID)
+	req.Kind = "artifact.created"
+	req.Status = ""
+	req.LivenessMode = ""
+	req.Pid = nil
+	// Contract §3 example: absolute path under the configured root
+	req.Artifacts = []ArtifactDescriptor{{Type: "image", Path: "/data/artifacts/x.png", Name: "before.png"}}
+
+	_, status, err := svc.Ingest(context.Background(), req)
+	if err != nil {
+		t.Fatalf("expected no error for in-root absolute path, got: %v", err)
+	}
+	if status != 201 {
+		t.Fatalf("expected 201, got %d", status)
 	}
 }
 
@@ -408,7 +475,7 @@ func TestArtifactsValidation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			req := validRequest()
 			req.Artifacts = tt.arts
-			err := ValidateWorkEvent(req)
+			err := ValidateWorkEvent("", req)
 			if tt.wantErr == "" {
 				if err != nil {
 					t.Errorf("expected no error, got: %v", err)
