@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# scripts/hooks/pre-push — cheap local pre-filter before push (NOT authoritative).
+#
+# The authoritative gate is hpms1 pull-and-verify (deployments/deploy.sh). This hook
+# is just a fast local smell test so obviously-broken pushes don't even reach review.
+# It is intentionally bypassable (`git push --no-verify`) — hpms1 is the real gate.
+#
+# Install: bash scripts/install-hooks.sh   (sets core.hooksPath=scripts/hooks)
+#
+# Checks (fail-fast, fast):
+#   1. go build ./...           — must compile
+#   2. go vet ./...             — no vet errors
+#   3. go test -short ./...     — unit tests (integration tests are -short-skipped here;
+#                                 they RUN authoritatively in review + on hpms1)
+#   4. generated-file guard     — refuse to push staged internal/db/*.sql.go unless
+#                                 AOS_INTEGRATOR=1 (only Lead regenerates at integration)
+set -uo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root" || exit 1
+
+# locate go (linuxbrew or system)
+export PATH="/home/linuxbrew/.linuxbrew/bin:$HOME/go/bin:/usr/local/go/bin:$PATH"
+if ! command -v go >/dev/null 2>&1; then
+  echo "pre-push: go not found on PATH — skipping Go checks (install go or fix PATH)" >&2
+  exit 0
+fi
+
+fail() { echo "pre-push BLOCKED: $*" >&2; echo "(bypass with: git push --no-verify — but hpms1 gate still runs)" >&2; exit 1; }
+
+# 4. generated-file guard (cheap, do first)
+if [ "${AOS_INTEGRATOR:-0}" != "1" ]; then
+  staged_gen="$(git diff --cached --name-only 2>/dev/null | grep -E 'internal/db/.*\.sql\.go$' || true)"
+  # also catch already-committed-on-branch generated files about to be pushed
+  pushed_gen="$(git diff --name-only origin/HEAD...HEAD 2>/dev/null | grep -E 'internal/db/.*\.sql\.go$' || true)"
+  if [ -n "$staged_gen$pushed_gen" ]; then
+    fail "generated sqlc files present ($(echo $staged_gen $pushed_gen | tr '\n' ' ')). Roux must NOT commit *.sql.go; Lead regenerates at integration. Set AOS_INTEGRATOR=1 if you are the integrator."
+  fi
+fi
+
+echo "pre-push: go build ./..."
+go build ./... || fail "go build failed"
+
+echo "pre-push: go vet ./..."
+go vet ./... 2>&1 | grep -v '^#' | grep . && fail "go vet reported issues" || true
+
+echo "pre-push: go test -short ./..."
+go test -short ./... || fail "unit tests failed"
+
+echo "pre-push: OK (authoritative gate is hpms1 — deployments/deploy.sh)"
+exit 0
