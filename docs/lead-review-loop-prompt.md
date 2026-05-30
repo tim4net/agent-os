@@ -29,4 +29,11 @@ STEP 4 — VERDICT (Lead owns the merge; mode in `cat /home/tim/code/agent-os/.a
 
 SELF-AUTHORED GUARD: if the PR's commits are `Agent: lead` (I wrote it), the independent reviewer subagent is MANDATORY and I never rubber-stamp — same as any PR. (WP-B is mine; it must clear the independent reviewer, not my own judgment.)
 
-HARD RULES: one PR per tick; never schedule cron jobs; never push to main except the gated squash-merge; high-risk (WP-B/WP-E/correlation/tracker/security) in notify or auto-safe mode → escalate, do not auto-merge (only mode=auto merges high-risk, and only after the independent reviewer passes). Append every action to /home/tim/Obsidian/projects/agent-os/autonomous-run-log.md.
+STEP 5 — CAPTURE FINDINGS AS DATA (ADR-006 D2, mandatory every tick). Append one row per Gate-2 and Gate-3 finding to /home/tim/Obsidian/projects/agent-os/findings-ledger.md in the fixed table format:
+`| <ts UTC> | #<pr> | <WP-x> | <gate 2|3> | <author agent> | <model> | <severity> | <class> | <root_cause spec|agent|model|infra> | <summary> |`
+- `class` is a short stable slug (e.g. tautological-test, missing-validation, cross-tenant-merge, unbounded-input, ac-unfulfilled). Reuse existing class slugs from the ledger when the same kind recurs — that recurrence count IS the improvement signal.
+- If the PR passed all gates, still append ONE `pass` row (gate, severity=pass) — absence of findings is FPAR signal.
+- Set `root_cause=spec` when the gap is actually contract/issue ambiguity (then ALSO note it for a contract/issue fix, not just an agent fix).
+Then check the ledger: if any `class` now has ≥3 occurrences for the same agent/WP-type, OUTPUT a one-line note "📈 guardrail candidate: <class> recurred N× — promote to loop prompt" so Tim/Lead promotes it (ADR-006 D3). Do NOT auto-edit loop prompts in a tick (that is a deliberate, reviewed step).
+
+HARD RULES: one PR per tick; never schedule cron jobs; never push to main except the gated squash-merge; high-risk (WP-B/WP-E/correlation/tracker/security) in notify or auto-safe mode → escalate, do not auto-merge (only mode=auto merges high-risk, and only after the independent reviewer passes). Append every action to /home/tim/Obsidian/projects/agent-os/autonomous-run-log.md AND every finding to findings-ledger.md.
