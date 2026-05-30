@@ -15,6 +15,8 @@ type Querier interface {
 	CountArtifacts(ctx context.Context, dollar_1 string) (int64, error)
 	CountDelegations(ctx context.Context, arg CountDelegationsParams) (int64, error)
 	CountSubtasks(ctx context.Context, parentTaskID pgtype.UUID) (int64, error)
+	// Consistent with ListWorkUnits grouping (same key) so pagination Total matches.
+	CountWorkUnits(ctx context.Context) (int64, error)
 	CreateAgent(ctx context.Context, arg CreateAgentParams) (Agent, error)
 	CreateArtifact(ctx context.Context, arg CreateArtifactParams) (Artifact, error)
 	CreateConversation(ctx context.Context, arg CreateConversationParams) (Conversation, error)
@@ -57,6 +59,9 @@ type Querier interface {
 	GetProjectBySlug(ctx context.Context, slug string) (Project, error)
 	GetSkill(ctx context.Context, id pgtype.UUID) (Skill, error)
 	GetTask(ctx context.Context, id pgtype.UUID) (Task, error)
+	// All events in one group (drill-down). Matches the same 5-part key as ListWorkUnits,
+	// NULL-safe so the uncorrelated buckets match rows with NULL key parts.
+	GetWorkUnitEvents(ctx context.Context, arg GetWorkUnitEventsParams) ([]WorkEvent, error)
 	GetWorkflow(ctx context.Context, id pgtype.UUID) (Workflow, error)
 	GetWorkflowRun(ctx context.Context, id pgtype.UUID) (WorkflowRun, error)
 	ListAgents(ctx context.Context) ([]Agent, error)
@@ -74,6 +79,14 @@ type Querier interface {
 	ListSubtasks(ctx context.Context, parentTaskID pgtype.UUID) ([]Task, error)
 	ListTasks(ctx context.Context, arg ListTasksParams) ([]Task, error)
 	ListVisibleAgents(ctx context.Context) ([]Agent, error)
+	// WP-B correlation engine. Groups work_events into work_units by the correlation key.
+	// Per contract §7 the key is (project_id, external_ref, branch, sha); we ALSO group by
+	// `tenant` so two tenants emitting the same external_ref with a NULL project_id are never
+	// merged into one unit (ADR-002 D6 — employer tenants never co-mingle).
+	// Events sharing no code/tracker anchor are surfaced as `correlated=false` units, grouped
+	// by their (tenant, project) context — NEVER dropped (ADR-001 F3). The no-drop invariant:
+	// SUM(event_count) over all units == COUNT(*) of work_events.
+	ListWorkUnits(ctx context.Context, arg ListWorkUnitsParams) ([]ListWorkUnitsRow, error)
 	ListWorkflowRuns(ctx context.Context, workflowID pgtype.UUID) ([]WorkflowRun, error)
 	ListWorkflows(ctx context.Context) ([]Workflow, error)
 	SearchMemory(ctx context.Context, arg SearchMemoryParams) ([]MemoryIndex, error)

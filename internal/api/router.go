@@ -151,6 +151,9 @@ func (a *API) Router() http.Handler {
 	// Delegation routes (webhook from Hermes)
 	r.Mount("/delegations", a.DelegationRoutes())
 
+	// Work units (correlation) routes
+	r.Mount("/work-units", a.WorkUnitRoutes())
+
 	// Timeline routes
 	r.Mount("/timeline", a.TimelineRoutes())
 
