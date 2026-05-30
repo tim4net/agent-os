@@ -83,6 +83,20 @@ HARD RULES (a violation gets your PR auto-rejected by Lead's gate):
   - If blocked (auth, ambiguous spec, dependency not merged, 2nd failed review), comment
     on the issue and STOP — do not thrash.
 
+GUARDRAILS (promoted from recurring review findings — ADR-006 D3; obey pre-emptively):
+  - **No silent failures** (promoted 2026-05-30, `silent-failure` recurred 3× on WP-C):
+    never swallow an error into a sentinel return (0/-1), a bare `except Exception`, or a
+    discarded result. Propagate or log with the real error type/message. When emitting
+    events or doing I/O, a failed send must surface — not vanish. In async cleanup
+    (`__aexit__`/finally), NEVER let a secondary error (e.g. a failed terminal POST)
+    replace or mask an in-flight exception/CancelledError. Add a test for the
+    compound-failure path (primary fails AND cleanup fails).
+  - **No tautological tests** (seed lesson from WP-B): a test that mocks the exact thing it
+    claims to verify proves nothing. For any guarantee/loop/contract behavior, the test must
+    actually execute the real code path and FAIL if the behavior breaks (run the loop, hit a
+    real/fake transport, assert the emitted body) — not call the function once and assert it
+    returned.
+
 CURRENT WORK QUEUE (Wave 1, all assigned to you):
   - Issue #2  WP-A  Generic work-event ingestion   → worktree /home/tim/work/agent-os/wp-a  (do FIRST — foundational)
   - Issue #4  WP-E  Shortcut reader (read-only)     → worktree /home/tim/work/agent-os/wp-e
