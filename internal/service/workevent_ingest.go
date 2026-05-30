@@ -13,11 +13,16 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/tim4net/agent-os/internal/db"
 )
+
+// bridgeNamespace is a UUID v5 namespace for deterministic bridge event IDs.
+// This ensures the delegation shim produces idempotent event_ids across retries.
+var bridgeNamespace = uuid.MustParse("a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d")
 
 // ValidationError is a structured validation error with an HTTP status code.
 type ValidationError struct {
@@ -505,4 +510,75 @@ func (s *IngestService) Ingest(ctx context.Context, req WorkEventRequest) (db.Wo
 	}
 
 	return row, http.StatusCreated, nil
+}
+
+// BuildBridgeWorkEventRequest creates a WorkEventRequest from a delegation (legacy bridge shim).
+// kindOverride, if non-empty, forces a specific kind (used for PATCH terminal synthesis).
+// Otherwise the kind is derived from the delegation status.
+// The event_id is deterministic (UUIDv5 from delegation_id + kind) so retries dedupe.
+func BuildBridgeWorkEventRequest(deg db.Delegation, kindOverride string) WorkEventRequest {
+	// Map delegation status → work_event kind + status
+	var kind, status string
+	if kindOverride != "" {
+		kind = kindOverride
+		switch kind {
+		case "session.start":
+			status = "running"
+		case "session.end":
+			switch deg.Status {
+			case "completed":
+				status = "done"
+			case "failed":
+				status = "failed"
+			case "interrupted":
+				status = "cancelled"
+			default:
+				status = "done"
+			}
+		default:
+			status = ""
+		}
+	} else {
+		switch deg.Status {
+		case "pending", "running":
+			kind = "session.start"
+			status = "running"
+		case "completed":
+			kind = "session.end"
+			status = "done"
+		case "failed":
+			kind = "session.end"
+			status = "failed"
+		case "interrupted":
+			kind = "session.end"
+			status = "cancelled"
+		default:
+			kind = "note"
+			status = ""
+		}
+	}
+
+	// Derive session_id from parent_agent_id
+	sessionID := deg.ParentAgentID.String()
+
+	// Use server clock (now) so synthetic bridge events don't trip the ±10min skew rule.
+	ts := time.Now().UTC().Format("2006-01-02T15:04:05Z")
+
+	// Deterministic event_id via UUIDv5 so retries dedupe.
+	// The seed is delegation_id + kind, ensuring one work_event per delegation per terminal state.
+	eventID := uuid.NewSHA1(bridgeNamespace, []byte(deg.ID.String()+":"+kind))
+
+	return WorkEventRequest{
+		Schema:       "agentos.work_event/v1",
+		EventID:      eventID.String(),
+		Host:         "bridge",
+		Harness:      "hermes",
+		Kind:         kind,
+		SessionID:    sessionID,
+		Ts:           ts,
+		Status:       status,
+		LivenessMode: "bounded",
+		Title:        deg.TaskGoal,
+		Tenant:       "personal",
+	}
 }

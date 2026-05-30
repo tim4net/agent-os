@@ -7,19 +7,13 @@ import (
 	"net/http"
 	"os"
 	"strconv"
-	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/tim4net/agent-os/internal/db"
 	"github.com/tim4net/agent-os/internal/service"
 )
-
-// bridgeNamespace is a UUID v5 namespace for deterministic bridge event IDs.
-// This ensures the delegation shim produces idempotent event_ids across retries.
-var bridgeNamespace = uuid.MustParse("a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d")
 
 // DelegationRequest is the webhook payload from Hermes.
 type DelegationRequest struct {
@@ -143,71 +137,7 @@ func (a *API) CreateDelegation(w http.ResponseWriter, r *http.Request) {
 // kindOverride, if non-empty, forces a specific kind (used for PATCH terminal synthesis).
 // Otherwise the kind is derived from the delegation status.
 func (a *API) synthesizeWorkEvent(ctx context.Context, deg db.Delegation, kindOverride string) error {
-	// Map delegation status → work_event kind + status
-	var kind, status string
-	if kindOverride != "" {
-		kind = kindOverride
-		switch kind {
-		case "session.start":
-			status = "running"
-		case "session.end":
-			// Determine terminal status from delegation status
-			switch deg.Status {
-			case "completed":
-				status = "done"
-			case "failed":
-				status = "failed"
-			case "interrupted":
-				status = "cancelled"
-			default:
-				status = "done"
-			}
-		default:
-			status = ""
-		}
-	} else {
-		switch deg.Status {
-		case "pending", "running":
-			kind = "session.start"
-			status = "running"
-		case "completed":
-			kind = "session.end"
-			status = "done"
-		case "failed":
-			kind = "session.end"
-			status = "failed"
-		case "interrupted":
-			kind = "session.end"
-			status = "cancelled"
-		default:
-			kind = "note"
-			status = ""
-		}
-	}
-
-	// Derive session_id from parent_agent_id
-	sessionID := deg.ParentAgentID.String()
-
-	// FIX (finding #4): Use server clock (now) so synthetic bridge events don't trip the ±10min skew rule.
-	ts := time.Now().UTC().Format("2006-01-02T15:04:05Z")
-
-	// FIX (finding #3): Deterministic event_id via UUIDv5 so retries dedupe.
-	// The seed is delegation_id + kind, ensuring one work_event per delegation per terminal state.
-	eventID := uuid.NewSHA1(bridgeNamespace, []byte(deg.ID.String()+":"+kind))
-
-	req := service.WorkEventRequest{
-		Schema:       "agentos.work_event/v1",
-		EventID:      eventID.String(),
-		Host:         "bridge",
-		Harness:      "hermes",
-		Kind:         kind,
-		SessionID:    sessionID,
-		Ts:           ts,
-		Status:       status,
-		LivenessMode: "bounded",
-		Title:        deg.TaskGoal,
-		Tenant:       "personal",
-	}
+	req := service.BuildBridgeWorkEventRequest(deg, kindOverride)
 
 	artifactsPath := os.Getenv("AGENTOS_ARTIFACTS_PATH")
 	if artifactsPath == "" {

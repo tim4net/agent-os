@@ -411,6 +411,255 @@ func TestFakeIngestValidationRejectsBadEvents(t *testing.T) {
 	}
 }
 
+// --- Bridge (delegation shim) regression tests ---
+// Tests the BuildBridgeWorkEventRequest logic and its integration with Ingest.
+
+// makeFakeDelegation creates a db.Delegation for testing bridge synthesis.
+func makeFakeDelegation(id, parentID, taskGoal, status string) db.Delegation {
+	var pgID, pgParent pgtype.UUID
+	_ = pgID.Scan(id)
+	_ = pgParent.Scan(parentID)
+	return db.Delegation{
+		ID:            pgID,
+		ParentAgentID: pgParent,
+		ChildAgentName: "test-child",
+		TaskGoal:      taskGoal,
+		Status:        status,
+		CreatedAt:     pgtype.Timestamptz{Time: time.Now().Add(-30 * time.Minute), Valid: true},
+	}
+}
+
+// TestBridgeEventIDIsDeterministic proves: same delegation_id + kind always produces the same event_id.
+// This is the regression guard for finding #3 (bridge idempotency via UUIDv5).
+func TestBridgeEventIDIsDeterministic(t *testing.T) {
+	deg := makeFakeDelegation(
+		uuid.NewString(), uuid.NewString(), "test task", "running",
+	)
+
+	req1 := BuildBridgeWorkEventRequest(deg, "")
+	req2 := BuildBridgeWorkEventRequest(deg, "")
+
+	if req1.EventID != req2.EventID {
+		t.Fatalf("bridge event_id not deterministic: %s vs %s", req1.EventID, req2.EventID)
+	}
+
+	// Also verify different kinds produce different event_ids for the same delegation
+	req3 := BuildBridgeWorkEventRequest(deg, "session.end")
+	if req1.EventID == req3.EventID {
+		t.Fatalf("bridge event_id should differ by kind: session.start=%s session.end=%s", req1.EventID, req3.EventID)
+	}
+}
+
+// TestBridgeStatusMapping proves: delegation statuses map to correct work_event kinds/statuses.
+func TestBridgeStatusMapping(t *testing.T) {
+	tests := []struct {
+		name      string
+		degStatus string
+		wantKind  string
+		wantSts   string
+	}{
+		{"pending → session.start/running", "pending", "session.start", "running"},
+		{"running → session.start/running", "running", "session.start", "running"},
+		{"completed → session.end/done", "completed", "session.end", "done"},
+		{"failed → session.end/failed", "failed", "session.end", "failed"},
+		{"interrupted → session.end/cancelled", "interrupted", "session.end", "cancelled"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			deg := makeFakeDelegation(uuid.NewString(), uuid.NewString(), "task", tt.degStatus)
+			req := BuildBridgeWorkEventRequest(deg, "")
+			if req.Kind != tt.wantKind {
+				t.Fatalf("kind: got %q, want %q", req.Kind, tt.wantKind)
+			}
+			if req.Status != tt.wantSts {
+				t.Fatalf("status: got %q, want %q", req.Status, tt.wantSts)
+			}
+			if req.Host != "bridge" {
+				t.Fatalf("host: got %q, want \"bridge\"", req.Host)
+			}
+			if req.Harness != "hermes" {
+				t.Fatalf("harness: got %q, want \"hermes\"", req.Harness)
+			}
+			if req.LivenessMode != "bounded" {
+				t.Fatalf("liveness_mode: got %q, want \"bounded\"", req.LivenessMode)
+			}
+		})
+	}
+}
+
+// TestBridgePatchTerminalStatusMapping proves: PATCH kindOverride maps terminal delegation statuses correctly.
+func TestBridgePatchTerminalStatusMapping(t *testing.T) {
+	tests := []struct {
+		name      string
+		degStatus string
+		override  string
+		wantKind  string
+		wantSts   string
+	}{
+		{"completed + session.end → done", "completed", "session.end", "session.end", "done"},
+		{"failed + session.end → failed", "failed", "session.end", "session.end", "failed"},
+		{"interrupted + session.end → cancelled", "interrupted", "session.end", "session.end", "cancelled"},
+		{"completed + session.end default → done", "weird", "session.end", "session.end", "done"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			deg := makeFakeDelegation(uuid.NewString(), uuid.NewString(), "task", tt.degStatus)
+			req := BuildBridgeWorkEventRequest(deg, tt.override)
+			if req.Kind != tt.wantKind {
+				t.Fatalf("kind: got %q, want %q", req.Kind, tt.wantKind)
+			}
+			if req.Status != tt.wantSts {
+				t.Fatalf("status: got %q, want %q", req.Status, tt.wantSts)
+			}
+		})
+	}
+}
+
+// TestBridgeRetryIdempotency proves: calling Ingest twice with the same bridge request
+// results in exactly one row (202 on second call). Regression for finding #3.
+func TestBridgeRetryIdempotency(t *testing.T) {
+	fq := newFakeQuerier()
+	bus := NewEventBus()
+	svc := NewIngestService(fq, bus, slog.Default(), "/tmp/test")
+
+	deg := makeFakeDelegation(uuid.NewString(), uuid.NewString(), "bridge task", "completed")
+	req := BuildBridgeWorkEventRequest(deg, "session.end")
+
+	// First Ingest → 201
+	row1, s1, err := svc.Ingest(context.Background(), req)
+	if err != nil || s1 != 201 {
+		t.Fatalf("first bridge ingest: status=%d err=%v", s1, err)
+	}
+	if row1.Kind != "session.end" {
+		t.Fatalf("expected kind session.end, got %s", row1.Kind)
+	}
+	if row1.Status.String != "done" {
+		t.Fatalf("expected status done, got %s", row1.Status.String)
+	}
+
+	// Second Ingest (same deterministic event_id) → 202, same row
+	bus2 := NewEventBus()
+	svc2 := NewIngestService(fq, bus2, slog.Default(), "/tmp/test")
+	sub2 := bus2.Subscribe()
+	defer bus2.Unsubscribe(sub2)
+
+	row2, s2, err := svc2.Ingest(context.Background(), req)
+	if err != nil {
+		t.Fatalf("second bridge ingest error: %v", err)
+	}
+	if s2 != 202 {
+		t.Fatalf("expected 202 on retry, got %d", s2)
+	}
+	if row2.ID.String() != row1.ID.String() {
+		t.Fatalf("retry should return same id: %s vs %s", row2.ID.String(), row1.ID.String())
+	}
+	if fq.inserts != 1 {
+		t.Fatalf("expected 1 insert after retry, got %d", fq.inserts)
+	}
+
+	// No SSE on retry
+	select {
+	case evt := <-sub2:
+		t.Fatalf("expected NO SSE on bridge retry, got type=%q", evt.Type)
+	default:
+		// good
+	}
+}
+
+// TestBridgePOSTAndPATCHProduceCorrectEvents proves the full delegation flow:
+// POST (pending) → session.start, PATCH (completed) → session.end.
+// Regression for finding #5 (PATCH path synthesis).
+func TestBridgePOSTAndPATCHProduceCorrectEvents(t *testing.T) {
+	fq := newFakeQuerier()
+	bus := NewEventBus()
+	svc := NewIngestService(fq, bus, slog.Default(), "/tmp/test")
+
+	degID := uuid.NewString()
+	parentID := uuid.NewString()
+
+	// Simulate POST: CreateDelegation with status "pending" → session.start
+	degPending := makeFakeDelegation(degID, parentID, "delegate task", "pending")
+	reqStart := BuildBridgeWorkEventRequest(degPending, "")
+	row1, s1, err := svc.Ingest(context.Background(), reqStart)
+	if err != nil || s1 != 201 {
+		t.Fatalf("POST session.start: status=%d err=%v", s1, err)
+	}
+	if row1.Kind != "session.start" {
+		t.Fatalf("POST: expected kind session.start, got %s", row1.Kind)
+	}
+	if row1.Status.String != "running" {
+		t.Fatalf("POST: expected status running, got %s", row1.Status.String)
+	}
+	if fq.inserts != 1 {
+		t.Fatalf("expected 1 insert after POST, got %d", fq.inserts)
+	}
+
+	// Simulate PATCH: UpdateDelegationStatus to "completed" → session.end
+	degCompleted := degPending
+	degCompleted.Status = "completed"
+	reqEnd := BuildBridgeWorkEventRequest(degCompleted, "session.end")
+	bus2 := NewEventBus()
+	svc2 := NewIngestService(fq, bus2, slog.Default(), "/tmp/test")
+
+	row2, s2, err := svc2.Ingest(context.Background(), reqEnd)
+	if err != nil || s2 != 201 {
+		t.Fatalf("PATCH session.end: status=%d err=%v", s2, err)
+	}
+	if row2.Kind != "session.end" {
+		t.Fatalf("PATCH: expected kind session.end, got %s", row2.Kind)
+	}
+	if row2.Status.String != "done" {
+		t.Fatalf("PATCH: expected status done, got %s", row2.Status.String)
+	}
+
+	// Verify exactly 2 inserts total (session.start + session.end)
+	if fq.inserts != 2 {
+		t.Fatalf("expected 2 inserts (start + end), got %d", fq.inserts)
+	}
+
+	// Verify the two events have different event_ids (different kinds)
+	if row1.EventID.String() == row2.EventID.String() {
+		t.Fatalf("POST and PATCH should produce different event_ids: %s", row1.EventID.String())
+	}
+}
+
+// TestBridgePATCHRetryIdempotency proves: PATCHing terminal status twice produces one session.end.
+// Regression for finding #3 (bridge retry idempotency on PATCH path).
+func TestBridgePATCHRetryIdempotency(t *testing.T) {
+	fq := newFakeQuerier()
+	bus := NewEventBus()
+	svc := NewIngestService(fq, bus, slog.Default(), "/tmp/test")
+
+	degID := uuid.NewString()
+	parentID := uuid.NewString()
+
+	// First PATCH terminal → 201
+	deg := makeFakeDelegation(degID, parentID, "task", "completed")
+	req := BuildBridgeWorkEventRequest(deg, "session.end")
+	row1, s1, err := svc.Ingest(context.Background(), req)
+	if err != nil || s1 != 201 {
+		t.Fatalf("first PATCH: status=%d err=%v", s1, err)
+	}
+
+	// Retry PATCH (same delegation_id + same kind → same deterministic event_id) → 202
+	bus2 := NewEventBus()
+	svc2 := NewIngestService(fq, bus2, slog.Default(), "/tmp/test")
+
+	row2, s2, err := svc2.Ingest(context.Background(), req)
+	if err != nil {
+		t.Fatalf("retry PATCH error: %v", err)
+	}
+	if s2 != 202 {
+		t.Fatalf("expected 202 on PATCH retry, got %d", s2)
+	}
+	if row2.ID.String() != row1.ID.String() {
+		t.Fatalf("retry should return same id: %s vs %s", row2.ID.String(), row1.ID.String())
+	}
+	if fq.inserts != 1 {
+		t.Fatalf("expected 1 insert after PATCH retry, got %d", fq.inserts)
+	}
+}
+
 // validFakeRequest returns a minimal valid WorkEventRequest for testing with the fake querier.
 func validFakeRequest(eventID string) WorkEventRequest {
 	pid := 12345
