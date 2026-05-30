@@ -366,6 +366,7 @@ func TestValidateArtifactURL(t *testing.T) {
 		{".internal suffix rejected", "http://myhost.internal/file.png", "private/link-local"},
 		{"ftp scheme rejected", "ftp://example.com/file.png", "scheme must be http or https"},
 		{"invalid URL", "://bad", "invalid URL"},
+		{"empty hostname rejected", "http:///path/file.png", "non-empty hostname"},
 	}
 
 	for _, tt := range tests {

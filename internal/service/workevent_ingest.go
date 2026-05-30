@@ -317,6 +317,9 @@ func validateArtifactURL(rawURL string) error {
 		return fmt.Errorf("URL scheme must be http or https, got %q", u.Scheme)
 	}
 	host := u.Hostname()
+	if host == "" {
+		return fmt.Errorf("URL must have a non-empty hostname")
+	}
 	// Reject common localhost hostnames
 	lower := strings.ToLower(host)
 	if lower == "localhost" || strings.HasSuffix(lower, ".local") || strings.HasSuffix(lower, ".internal") {
