@@ -22,12 +22,12 @@ type Querier interface {
 	CreateGoal(ctx context.Context, arg CreateGoalParams) (Goal, error)
 	CreateMessage(ctx context.Context, arg CreateMessageParams) (Message, error)
 	CreatePipelineItem(ctx context.Context, arg CreatePipelineItemParams) (PipelineItem, error)
+	CreateProject(ctx context.Context, arg CreateProjectParams) (Project, error)
 	CreateSkill(ctx context.Context, arg CreateSkillParams) (Skill, error)
 	CreateSubtask(ctx context.Context, arg CreateSubtaskParams) (Task, error)
 	CreateTask(ctx context.Context, arg CreateTaskParams) (Task, error)
 	CreateWorkflow(ctx context.Context, arg CreateWorkflowParams) (Workflow, error)
 	CreateWorkflowRun(ctx context.Context, arg CreateWorkflowRunParams) (WorkflowRun, error)
-	EnsureAgent(ctx context.Context, arg EnsureAgentParams) (Agent, error)
 	DeleteAgent(ctx context.Context, id pgtype.UUID) error
 	DeleteArtifact(ctx context.Context, id pgtype.UUID) error
 	DeleteGoal(ctx context.Context, id pgtype.UUID) error
@@ -39,6 +39,9 @@ type Querier interface {
 	DeleteSkill(ctx context.Context, id pgtype.UUID) error
 	DeleteTask(ctx context.Context, id pgtype.UUID) error
 	DeleteWorkflow(ctx context.Context, id pgtype.UUID) error
+	EnsureAgent(ctx context.Context, arg EnsureAgentParams) (Agent, error)
+	// Idempotent resolution used by the ingest project resolver (contract §1).
+	EnsureProjectBySlug(ctx context.Context, arg EnsureProjectBySlugParams) (Project, error)
 	GetAgent(ctx context.Context, id pgtype.UUID) (Agent, error)
 	GetAgentByName(ctx context.Context, name string) (Agent, error)
 	GetArtifact(ctx context.Context, id pgtype.UUID) (Artifact, error)
@@ -50,6 +53,8 @@ type Querier interface {
 	GetLatestWorkflowRun(ctx context.Context, workflowID pgtype.UUID) (WorkflowRun, error)
 	GetMemoryByPath(ctx context.Context, filePath string) (MemoryIndex, error)
 	GetPipelineItem(ctx context.Context, id pgtype.UUID) (PipelineItem, error)
+	GetProject(ctx context.Context, id pgtype.UUID) (Project, error)
+	GetProjectBySlug(ctx context.Context, slug string) (Project, error)
 	GetSkill(ctx context.Context, id pgtype.UUID) (Skill, error)
 	GetTask(ctx context.Context, id pgtype.UUID) (Task, error)
 	GetWorkflow(ctx context.Context, id pgtype.UUID) (Workflow, error)
@@ -62,6 +67,7 @@ type Querier interface {
 	ListMemoryIndex(ctx context.Context) ([]MemoryIndex, error)
 	ListMessages(ctx context.Context, conversationID pgtype.UUID) ([]Message, error)
 	ListPipelineItems(ctx context.Context, arg ListPipelineItemsParams) ([]PipelineItem, error)
+	ListProjects(ctx context.Context) ([]Project, error)
 	ListSkillSummaries(ctx context.Context) ([]ListSkillSummariesRow, error)
 	ListSkills(ctx context.Context) ([]Skill, error)
 	ListSkillsByAgent(ctx context.Context, agentID pgtype.UUID) ([]Skill, error)
@@ -80,6 +86,7 @@ type Querier interface {
 	UpdateDelegation(ctx context.Context, arg UpdateDelegationParams) (Delegation, error)
 	UpdateGoal(ctx context.Context, arg UpdateGoalParams) (Goal, error)
 	UpdatePipelineItem(ctx context.Context, arg UpdatePipelineItemParams) (PipelineItem, error)
+	UpdateProjectTracker(ctx context.Context, arg UpdateProjectTrackerParams) (Project, error)
 	UpdateSkill(ctx context.Context, arg UpdateSkillParams) (Skill, error)
 	UpdateTask(ctx context.Context, arg UpdateTaskParams) (Task, error)
 	UpdateWorkflow(ctx context.Context, arg UpdateWorkflowParams) (Workflow, error)

@@ -53,6 +53,15 @@ func (q *Queries) CreateAgent(ctx context.Context, arg CreateAgentParams) (Agent
 	return i, err
 }
 
+const deleteAgent = `-- name: DeleteAgent :exec
+DELETE FROM agents WHERE id = $1
+`
+
+func (q *Queries) DeleteAgent(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteAgent, id)
+	return err
+}
+
 const ensureAgent = `-- name: EnsureAgent :one
 INSERT INTO agents (name, display_name, harness, base_url, metadata)
 VALUES ($1, $2, $3, $4, $5)
@@ -68,8 +77,6 @@ type EnsureAgentParams struct {
 	Metadata    []byte `json:"metadata"`
 }
 
-// EnsureAgent inserts a new agent only if no agent with the same name exists.
-// Returns the inserted agent, or pgx.ErrNoRows if the agent already existed.
 func (q *Queries) EnsureAgent(ctx context.Context, arg EnsureAgentParams) (Agent, error) {
 	row := q.db.QueryRow(ctx, ensureAgent,
 		arg.Name,
@@ -96,15 +103,6 @@ func (q *Queries) EnsureAgent(ctx context.Context, arg EnsureAgentParams) (Agent
 		&i.Visible,
 	)
 	return i, err
-}
-
-const deleteAgent = `-- name: DeleteAgent :exec
-DELETE FROM agents WHERE id = $1
-`
-
-func (q *Queries) DeleteAgent(ctx context.Context, id pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteAgent, id)
-	return err
 }
 
 const getAgent = `-- name: GetAgent :one
