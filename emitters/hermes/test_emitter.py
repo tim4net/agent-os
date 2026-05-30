@@ -4,8 +4,10 @@ import asyncio
 import json
 import os
 import uuid
+from typing import Any
 from unittest import mock
 
+import httpx
 import pytest
 
 from emitters.hermes.emitter import (
@@ -14,10 +16,45 @@ from emitters.hermes.emitter import (
     LivenessMode,
     Status,
     WorkEvent,
+    _PostError,
     _rfc3339_now,
     _detect_branch,
     _detect_sha,
 )
+
+
+# ---------------------------------------------------------------------------
+# MockTransport helpers (Finding 2: real HTTP round-trip, not MagicMock)
+# ---------------------------------------------------------------------------
+
+def _mock_handler_201(
+    captured: list[dict[str, Any]],
+    captured_headers: list[dict[str, str]] | None = None,
+):
+    """Return a MockTransport handler that captures requests and returns 201."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        captured.append(body)
+        if captured_headers is not None:
+            captured_headers.append(dict(request.headers))
+        return httpx.Response(
+            201, json={"id": "test-uuid", "accepted": True},
+            request=request,
+        )
+    return handler
+
+
+def _mock_handler_status(status_code: int, reason: str = "test"):
+    """Return a MockTransport handler that always returns the given status."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status_code, text=reason, request=request,
+        )
+    return handler
+
+
+def _make_mock_client(handler) -> httpx.AsyncClient:
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
 
 # ---------------------------------------------------------------------------
@@ -40,7 +77,6 @@ class TestWorkEvent:
 
     def test_event_id_is_uuid(self) -> None:
         ev = WorkEvent()
-        # Should not raise
         uuid.UUID(ev.event_id)
 
     def test_status_omitted_when_none(self) -> None:
@@ -136,14 +172,11 @@ class TestWorkEvent:
 class TestHelpers:
     def test_rfc3339_now_format(self) -> None:
         ts = _rfc3339_now()
-        # Should be parseable and end with Z
         assert ts.endswith("Z")
-        # Should parse as ISO format
         from datetime import datetime
         datetime.fromisoformat(ts.replace("Z", "+00:00"))
 
     def test_detect_branch_in_non_git_dir(self, tmp_path: object) -> None:
-        # In a non-git directory, should return None
         result = _detect_branch(str(tmp_path))
         assert result is None
 
@@ -151,24 +184,54 @@ class TestHelpers:
         result = _detect_sha(str(tmp_path))
         assert result is None
 
+    def test_detect_branch_in_git_dir(self, tmp_path: object) -> None:
+        """Finding 6: branch/sha are detected when in a git repo."""
+        import subprocess
+        subprocess.run(["git", "init"], cwd=str(tmp_path), check=True,
+                       capture_output=True)
+        subprocess.run(["git", "checkout", "-b", "my-feature"],
+                       cwd=str(tmp_path), check=True, capture_output=True)
+        # Need at least one commit for rev-parse to work
+        readme = tmp_path / "README.md"  # type: ignore
+        readme.write_text("init")
+        subprocess.run(["git", "add", "."], cwd=str(tmp_path), check=True,
+                       capture_output=True)
+        subprocess.run(["git", "-c", "user.name=test", "-c",
+                        "user.email=t@t", "commit", "-m", "init"],
+                       cwd=str(tmp_path), check=True, capture_output=True)
+
+        branch = _detect_branch(str(tmp_path))
+        assert branch == "my-feature"
+
+        sha = _detect_sha(str(tmp_path))
+        assert sha is not None and len(sha) >= 7
+
 
 # ---------------------------------------------------------------------------
-# Emitter tests
+# Emitter tests (using httpx.MockTransport — Finding 2)
 # ---------------------------------------------------------------------------
 
 class TestHermesEmitter:
-    """Test emitter lifecycle with mocked HTTP."""
+    """Test emitter lifecycle with MockTransport (real HTTP round-trip)."""
 
     def _make_emitter(self, **kwargs) -> HermesEmitter:
-        return HermesEmitter(
-            endpoint="http://localhost:9999/api/events/work",
+        posted: list[dict] = []
+        hdrs: list[dict] = []
+        handler = _mock_handler_201(posted, hdrs)
+        client = _make_mock_client(handler)
+        em = HermesEmitter(
+            endpoint="http://test/api/events/work",
             ingest_key="test-key",
+            client=client,
             **kwargs,
         )
+        # Stash for test access
+        em._test_posted = posted  # type: ignore[attr-defined]
+        em._test_headers = hdrs  # type: ignore[attr-defined]
+        return em
 
     def test_requires_ingest_key(self) -> None:
         with mock.patch.dict(os.environ, {}, clear=True):
-            # Remove env var if set
             os.environ.pop("AGENTOS_INGEST_KEY", None)
             with pytest.raises(ValueError, match="INGEST_KEY"):
                 HermesEmitter()
@@ -181,20 +244,11 @@ class TestHermesEmitter:
     @pytest.mark.asyncio
     async def test_start_emits_correct_event(self) -> None:
         em = self._make_emitter()
-        posted: list[dict] = []
-
-        async def mock_post(url: str, json: dict, headers: dict) -> mock.MagicMock:
-            posted.append(json)
-            resp = mock.MagicMock()
-            resp.status_code = 201
-            return resp
-
-        em._client.post = mock_post  # type: ignore[assignment]
         status = await em.start(title="test session", project_hint="agent-os")
 
         assert status == 201
-        assert len(posted) == 1
-        body = posted[0]
+        assert len(em._test_posted) == 1  # type: ignore[attr-defined]
+        body = em._test_posted[0]  # type: ignore[attr-defined]
         assert body["schema"] == "agentos.work_event/v1"
         assert body["harness"] == "hermes"
         assert body["kind"] == "session.start"
@@ -205,267 +259,384 @@ class TestHermesEmitter:
         assert body["project_hint"] == "agent-os"
         assert body["session_id"] == em.session_id
         assert body["host"] == em._host
-        # event_id should be a UUID
         uuid.UUID(body["event_id"])
+        await em.close()
 
     @pytest.mark.asyncio
     async def test_start_sends_correct_headers(self) -> None:
         em = self._make_emitter()
-        captured_headers: list[dict] = []
-
-        async def mock_post(url: str, json: dict, headers: dict) -> mock.MagicMock:
-            captured_headers.append(headers)
-            resp = mock.MagicMock()
-            resp.status_code = 201
-            return resp
-
-        em._client.post = mock_post  # type: ignore[assignment]
         await em.start()
 
-        hdrs = captured_headers[0]
-        assert hdrs["Content-Type"] == "application/json"
-        assert hdrs["X-AgentOS-Ingest-Key"] == "test-key"
+        hdrs = em._test_headers[0]  # type: ignore[attr-defined]
+        assert hdrs.get("content-type") == "application/json"
+        assert hdrs.get("x-agentos-ingest-key") == "test-key"
         # Idempotency-Key should match event_id
-        assert "Idempotency-Key" in hdrs
+        body = em._test_posted[0]  # type: ignore[attr-defined]
+        assert hdrs.get("idempotency-key") == body["event_id"]
+        await em.close()
 
     @pytest.mark.asyncio
     async def test_heartbeat_emits_running(self) -> None:
         em = self._make_emitter()
-        posted: list[dict] = []
-
-        async def mock_post(url: str, json: dict, headers: dict) -> mock.MagicMock:
-            posted.append(json)
-            resp = mock.MagicMock()
-            resp.status_code = 201
-            return resp
-
-        em._client.post = mock_post  # type: ignore[assignment]
         await em.heartbeat()
 
-        assert len(posted) == 1
-        assert posted[0]["kind"] == "session.heartbeat"
-        assert posted[0]["status"] == "running"
-        assert posted[0]["liveness_mode"] == "supervised"
-        assert posted[0]["pid"] == os.getpid()
+        assert len(em._test_posted) == 1  # type: ignore[attr-defined]
+        assert em._test_posted[0]["kind"] == "session.heartbeat"  # type: ignore[attr-defined]
+        assert em._test_posted[0]["status"] == "running"  # type: ignore[attr-defined]
+        assert em._test_posted[0]["liveness_mode"] == "supervised"  # type: ignore[attr-defined]
+        assert em._test_posted[0]["pid"] == os.getpid()  # type: ignore[attr-defined]
+        await em.close()
 
     @pytest.mark.asyncio
     async def test_end_emits_terminal_status_done(self) -> None:
         em = self._make_emitter()
-        posted: list[dict] = []
-
-        async def mock_post(url: str, json: dict, headers: dict) -> mock.MagicMock:
-            posted.append(json)
-            resp = mock.MagicMock()
-            resp.status_code = 201
-            return resp
-
-        em._client.post = mock_post  # type: ignore[assignment]
         await em.end("done")
 
-        assert len(posted) == 1
-        assert posted[0]["kind"] == "session.end"
-        assert posted[0]["status"] == "done"
+        assert em._test_posted[0]["kind"] == "session.end"  # type: ignore[attr-defined]
+        assert em._test_posted[0]["status"] == "done"  # type: ignore[attr-defined]
+        await em.close()
 
     @pytest.mark.asyncio
     async def test_end_emits_terminal_status_failed(self) -> None:
         em = self._make_emitter()
-        posted: list[dict] = []
-
-        async def mock_post(url: str, json: dict, headers: dict) -> mock.MagicMock:
-            posted.append(json)
-            resp = mock.MagicMock()
-            resp.status_code = 201
-            return resp
-
-        em._client.post = mock_post  # type: ignore[assignment]
         await em.end("failed")
 
-        assert posted[0]["status"] == "failed"
+        assert em._test_posted[0]["status"] == "failed"  # type: ignore[attr-defined]
+        await em.close()
 
     @pytest.mark.asyncio
     async def test_end_rejects_non_terminal_status(self) -> None:
         em = self._make_emitter()
         with pytest.raises(ValueError, match="terminal status"):
             await em.end("running")
+        await em.close()
 
     @pytest.mark.asyncio
     async def test_end_with_cost(self) -> None:
         em = self._make_emitter()
-        posted: list[dict] = []
-
-        async def mock_post(url: str, json: dict, headers: dict) -> mock.MagicMock:
-            posted.append(json)
-            resp = mock.MagicMock()
-            resp.status_code = 201
-            return resp
-
-        em._client.post = mock_post  # type: ignore[assignment]
         await em.end("done", cost_usd=0.1234)
 
-        assert posted[0]["cost_usd"] == 0.1234
+        assert em._test_posted[0]["cost_usd"] == 0.1234  # type: ignore[attr-defined]
+        await em.close()
 
     @pytest.mark.asyncio
     async def test_end_with_cancelled(self) -> None:
         em = self._make_emitter()
-        posted: list[dict] = []
-
-        async def mock_post(url: str, json: dict, headers: dict) -> mock.MagicMock:
-            posted.append(json)
-            resp = mock.MagicMock()
-            resp.status_code = 201
-            return resp
-
-        em._client.post = mock_post  # type: ignore[assignment]
         await em.end("cancelled")
 
-        assert posted[0]["status"] == "cancelled"
+        assert em._test_posted[0]["status"] == "cancelled"  # type: ignore[attr-defined]
+        await em.close()
 
     @pytest.mark.asyncio
     async def test_event_id_fresh_per_event(self) -> None:
         """Each event must have a unique event_id (idempotency-safe on retry)."""
         em = self._make_emitter()
-        event_ids: list[str] = []
-
-        async def mock_post(url: str, json: dict, headers: dict) -> mock.MagicMock:
-            event_ids.append(json["event_id"])
-            resp = mock.MagicMock()
-            resp.status_code = 201
-            return resp
-
-        em._client.post = mock_post  # type: ignore[assignment]
         await em.start()
         await em.heartbeat()
         await em.end("done")
 
+        event_ids = [e["event_id"] for e in em._test_posted]  # type: ignore[attr-defined]
         assert len(event_ids) == 3
         assert len(set(event_ids)) == 3, "each event_id must be unique"
+        await em.close()
 
     @pytest.mark.asyncio
     async def test_session_id_stable_across_events(self) -> None:
         """session_id must be the same across all events for a session."""
         em = self._make_emitter()
-        session_ids: list[str] = []
-
-        async def mock_post(url: str, json: dict, headers: dict) -> mock.MagicMock:
-            session_ids.append(json["session_id"])
-            resp = mock.MagicMock()
-            resp.status_code = 201
-            return resp
-
-        em._client.post = mock_post  # type: ignore[assignment]
         await em.start()
         await em.heartbeat()
         await em.end("done")
 
+        session_ids = [e["session_id"] for e in em._test_posted]  # type: ignore[attr-defined]
         assert len(set(session_ids)) == 1, "session_id must be stable"
-
-    @pytest.mark.asyncio
-    async def test_supervised_context_success(self) -> None:
-        """supervised() emits start → (heartbeats) → end(done) on clean exit."""
-        em = self._make_emitter()
-        posted: list[dict] = []
-
-        async def mock_post(url: str, json: dict, headers: dict) -> mock.MagicMock:
-            posted.append(json)
-            resp = mock.MagicMock()
-            resp.status_code = 201
-            return resp
-
-        em._client.post = mock_post  # type: ignore[assignment]
-
-        async with em.supervised(title="ctx test"):
-            pass  # no error
-
-        kinds = [p["kind"] for p in posted]
-        assert "session.start" in kinds
-        assert "session.end" in kinds
-        end_event = [p for p in posted if p["kind"] == "session.end"][0]
-        assert end_event["status"] == "done"
-
-    @pytest.mark.asyncio
-    async def test_supervised_context_failure(self) -> None:
-        """supervised() emits end(failed) when an exception occurs."""
-        em = self._make_emitter()
-        posted: list[dict] = []
-
-        async def mock_post(url: str, json: dict, headers: dict) -> mock.MagicMock:
-            posted.append(json)
-            resp = mock.MagicMock()
-            resp.status_code = 201
-            return resp
-
-        em._client.post = mock_post  # type: ignore[assignment]
-
-        with pytest.raises(RuntimeError, match="boom"):
-            async with em.supervised(title="fail test"):
-                raise RuntimeError("boom")
-
-        end_event = [p for p in posted if p["kind"] == "session.end"][0]
-        assert end_event["status"] == "failed"
-
-    @pytest.mark.asyncio
-    async def test_heartbeat_loop_sends_heartbeats(self) -> None:
-        """Heartbeat loop sends heartbeats at the configured interval."""
-        em = self._make_emitter(heartbeat_s=60)
-        posted: list[dict] = []
-
-        async def mock_post(url: str, json: dict, headers: dict) -> mock.MagicMock:
-            posted.append(json)
-            resp = mock.MagicMock()
-            resp.status_code = 201
-            return resp
-
-        em._client.post = mock_post  # type: ignore[assignment]
-
-        # Directly exercise the heartbeat method multiple times to simulate
-        # what the loop does.
-        await em.heartbeat()
-        await em.heartbeat()
-        await em.heartbeat()
-
-        hb_events = [p for p in posted if p["kind"] == "session.heartbeat"]
-        assert len(hb_events) == 3
-
-        # Verify each has correct shape
-        for ev in hb_events:
-            assert ev["status"] == "running"
-            assert ev["liveness_mode"] == "supervised"
-            assert ev["pid"] == os.getpid()
+        await em.close()
 
     @pytest.mark.asyncio
     async def test_idempotency_key_matches_event_id(self) -> None:
         """Idempotency-Key header must equal the body's event_id."""
         em = self._make_emitter()
-        captured: list[tuple[dict, dict]] = []
-
-        async def mock_post(url: str, json: dict, headers: dict) -> mock.MagicMock:
-            captured.append((json, headers))
-            resp = mock.MagicMock()
-            resp.status_code = 201
-            return resp
-
-        em._client.post = mock_post  # type: ignore[assignment]
         await em.start()
 
-        body, headers = captured[0]
-        assert headers["Idempotency-Key"] == body["event_id"]
+        body = em._test_posted[0]  # type: ignore[attr-defined]
+        hdrs = em._test_headers[0]  # type: ignore[attr-defined]
+        assert hdrs.get("idempotency-key") == body["event_id"]
+        await em.close()
 
     @pytest.mark.asyncio
-    async def test_connect_error_returns_zero(self) -> None:
-        """Unreachable endpoint returns status 0."""
+    async def test_supervised_context_success(self) -> None:
+        """supervised() emits start → end(done) on clean exit."""
+        em = self._make_emitter()
+
+        async with em.supervised(title="ctx test"):
+            pass  # no error
+
+        kinds = [p["kind"] for p in em._test_posted]  # type: ignore[attr-defined]
+        assert "session.start" in kinds
+        assert "session.end" in kinds
+        end_event = [p for p in em._test_posted if p["kind"] == "session.end"][0]  # type: ignore[attr-defined]
+        assert end_event["status"] == "done"
+        await em.close()
+
+    @pytest.mark.asyncio
+    async def test_supervised_context_failure(self) -> None:
+        """supervised() emits end(failed) when an exception occurs."""
+        em = self._make_emitter()
+
+        with pytest.raises(RuntimeError, match="boom"):
+            async with em.supervised(title="fail test"):
+                raise RuntimeError("boom")
+
+        end_event = [p for p in em._test_posted if p["kind"] == "session.end"][0]  # type: ignore[attr-defined]
+        assert end_event["status"] == "failed"
+        await em.close()
+
+    @pytest.mark.asyncio
+    async def test_supervised_context_cancellation_emits_cancelled(self) -> None:
+        """Finding 5: CancelledError → end('cancelled'), re-raised."""
+        em = self._make_emitter()
+
+        async def _work_that_gets_cancelled():
+            async with em.supervised(title="cancel test"):
+                await asyncio.sleep(10)  # will be cancelled
+
+        task = asyncio.create_task(_work_that_gets_cancelled())
+        # Let the start emit, then cancel
+        await asyncio.sleep(0.01)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        end_events = [p for p in em._test_posted if p["kind"] == "session.end"]  # type: ignore[attr-defined]
+        assert len(end_events) == 1
+        assert end_events[0]["status"] == "cancelled"
+        await em.close()
+
+    # -----------------------------------------------------------------------
+    # Finding 3: Real heartbeat loop test (not tautological)
+    # -----------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_loop_fires_real_heartbeats(self) -> None:
+        """_heartbeat_loop actually runs and emits ≥2 heartbeats when
+        given a short interval, and stops after supervised exit."""
+        posted: list[dict] = []
+        handler = _mock_handler_201(posted)
+        client = _make_mock_client(handler)
+        # heartbeat_s=0.01 → ~10 heartbeats per 100ms
+        em = HermesEmitter(
+            endpoint="http://test/api/events/work",
+            ingest_key="test-key",
+            heartbeat_s=0.01,
+            client=client,
+        )
+
+        async with em.supervised(title="heartbeat loop test"):
+            # Sleep long enough for ≥2 heartbeats to fire (0.05s >> 2×0.01s)
+            await asyncio.sleep(0.05)
+
+        hb_events = [p for p in posted if p["kind"] == "session.heartbeat"]
+        assert len(hb_events) >= 2, (
+            f"expected ≥2 loop-emitted heartbeats, got {len(hb_events)}"
+        )
+        # Each heartbeat must have correct shape
+        for ev in hb_events:
+            assert ev["status"] == "running"
+            assert ev["liveness_mode"] == "supervised"
+            assert ev["pid"] == os.getpid()
+            uuid.UUID(ev["event_id"])  # must be valid UUID
+
+        # After supervised exit, no more heartbeats should fire
+        last_count = len(hb_events)
+        await asyncio.sleep(0.03)  # wait — would produce more if loop still running
+        new_hb = [p for p in posted if p["kind"] == "session.heartbeat"]
+        assert len(new_hb) == last_count, (
+            "heartbeats must stop after session.end"
+        )
+
+        # session.start and session.end should also be present
+        kinds = [p["kind"] for p in posted]
+        assert "session.start" in kinds
+        assert "session.end" in kinds
+        await em.close()
+
+    # -----------------------------------------------------------------------
+    # Finding 2 (body shape via MockTransport) — start event deep assertion
+    # -----------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_start_body_shape_survives_real_round_trip(self) -> None:
+        """The exact emitted body shape survives a real HTTP round-trip
+        through MockTransport — no MagicMock hand-stamping."""
+        posted: list[dict] = []
+        hdrs: list[dict] = []
+        handler = _mock_handler_201(posted, hdrs)
+        client = _make_mock_client(handler)
+        em = HermesEmitter(
+            endpoint="http://test/api/events/work",
+            ingest_key="test-key",
+            client=client,
+        )
+        await em.start(
+            title="shape test",
+            project_hint="agent-os",
+            external_ref="SC-42",
+        )
+        await em.close()
+
+        assert len(posted) == 1
+        body = posted[0]
+        # Exact contract §2 shape assertion
+        assert isinstance(body, dict)
+        # Required fields
+        assert body["schema"] == "agentos.work_event/v1"
+        uuid.UUID(body["event_id"])  # valid UUID
+        assert body["harness"] == "hermes"
+        uuid.UUID(body["session_id"])  # valid UUID
+        assert isinstance(body["host"], str) and len(body["host"]) > 0
+        assert body["kind"] == "session.start"
+        assert isinstance(body["ts"], str) and body["ts"].endswith("Z")
+        # Conditional session fields
+        assert body["status"] == "running"
+        assert body["liveness_mode"] == "supervised"
+        assert body["pid"] == os.getpid()
+        # Correlation hints
+        assert body["title"] == "shape test"
+        assert body["project_hint"] == "agent-os"
+        assert body["external_ref"] == "SC-42"
+        assert "cwd" in body
+        # Headers asserted by MockTransport
+        assert hdrs[0]["x-agentos-ingest-key"] == "test-key"
+        assert hdrs[0]["idempotency-key"] == body["event_id"]
+
+    # -----------------------------------------------------------------------
+    # Finding 4: HTTP failure handling
+    # -----------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_start_4xx_raises_post_error(self) -> None:
+        """Non-retryable 4xx from start() raises _PostError."""
+        handler = _mock_handler_status(422, "invalid payload")
+        client = _make_mock_client(handler)
+        em = HermesEmitter(
+            endpoint="http://test/api/events/work",
+            ingest_key="test-key",
+            client=client,
+            max_retries=1,
+        )
+        with pytest.raises(_PostError) as exc_info:
+            await em.start()
+        assert exc_info.value.status_code == 422
+        await em.close()
+
+    @pytest.mark.asyncio
+    async def test_end_4xx_raises_post_error(self) -> None:
+        """session.end rejection (4xx) raises _PostError — caller must handle."""
+        handler = _mock_handler_status(403, "bad key")
+        client = _make_mock_client(handler)
+        em = HermesEmitter(
+            endpoint="http://test/api/events/work",
+            ingest_key="test-key",
+            client=client,
+            max_retries=1,
+        )
+        with pytest.raises(_PostError) as exc_info:
+            await em.end("done")
+        assert exc_info.value.status_code == 403
+        await em.close()
+
+    @pytest.mark.asyncio
+    async def test_5xx_retries_then_raises(self) -> None:
+        """5xx triggers bounded retry then raises _PostError."""
+        call_count = 0
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal call_count
+            call_count += 1
+            return httpx.Response(500, text="internal error", request=request)
+        client = _make_mock_client(handler)
+        em = HermesEmitter(
+            endpoint="http://test/api/events/work",
+            ingest_key="test-key",
+            client=client,
+            max_retries=3,
+            retry_backoff_s=0.001,  # fast for tests
+        )
+        with pytest.raises(_PostError):
+            await em.start()
+        # Should have tried MAX_RETRIES times
+        assert call_count == 3
+        await em.close()
+
+    @pytest.mark.asyncio
+    async def test_connect_error_retries_then_raises(self) -> None:
+        """Connection error triggers bounded retry then raises _PostError."""
         em = HermesEmitter(
             endpoint="http://127.0.0.1:1/api/events/work",
             ingest_key="test-key",
+            max_retries=2,
+            retry_backoff_s=0.001,
         )
-        status = await em.start()
-        assert status == 0
+        with pytest.raises(_PostError) as exc_info:
+            await em.start()
+        assert exc_info.value.status_code == 0
+        await em.close()
 
     @pytest.mark.asyncio
-    async def test_close_stops_heartbeats_and_client(self) -> None:
-        em = self._make_emitter()
-        await em._start_heartbeats()
+    async def test_supervised_context_surfaces_start_failure(self) -> None:
+        """If start() fails (rejected), supervised() raises."""
+        handler = _mock_handler_status(422, "bad event")
+        client = _make_mock_client(handler)
+        em = HermesEmitter(
+            endpoint="http://test/api/events/work",
+            ingest_key="test-key",
+            client=client,
+            max_retries=1,
+        )
+        with pytest.raises(_PostError):
+            async with em.supervised(title="will fail"):
+                pass
         await em.close()
-        assert em._heartbeat_task is None
+
+    @pytest.mark.asyncio
+    async def test_supervised_context_surfaces_end_failure(self) -> None:
+        """If end() fails on exit, supervised() raises _PostError."""
+        # Start succeeds, end fails
+        call_count = 0
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return httpx.Response(201, json={"id": "x", "accepted": True}, request=request)
+            return httpx.Response(500, text="server down", request=request)
+        client = _make_mock_client(handler)
+        em = HermesEmitter(
+            endpoint="http://test/api/events/work",
+            ingest_key="test-key",
+            client=client,
+            max_retries=1,
+            retry_backoff_s=0.001,
+        )
+        with pytest.raises(_PostError):
+            async with em.supervised(title="end fails"):
+                pass
+        await em.close()
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_swallows_post_error(self) -> None:
+        """Heartbeat delivery failure is swallowed (best-effort)."""
+        handler = _mock_handler_status(500, "server down")
+        client = _make_mock_client(handler)
+        em = HermesEmitter(
+            endpoint="http://test/api/events/work",
+            ingest_key="test-key",
+            client=client,
+            max_retries=1,
+            retry_backoff_s=0.001,
+        )
+        # Should not raise — heartbeats are best-effort
+        status = await em.heartbeat()
+        assert status == -1
+        await em.close()
 
 
 # ---------------------------------------------------------------------------

@@ -25,6 +25,9 @@ Usage as a supervisor (heartbeats run in the background):
         await do_work()          # heartbeats sent every 60s
     # session.end emitted automatically with "done"
 
+Entry point (run as Hermes hook):
+    python -m emitters.hermes
+
 Environment variables:
   AGENTOS_ENDPOINT    — ingestion URL  (default http://localhost:8080/api/events/work)
   AGENTOS_INGEST_KEY  — per-tenant ingest key (REQUIRED)
@@ -35,6 +38,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import socket
 import sys
@@ -58,7 +62,10 @@ __all__ = [
     "Status",
     "LivenessMode",
     "HermesEmitter",
+    "WorkEvent",
 ]
+
+logger = logging.getLogger("agentos.hermes")
 
 # ---------------------------------------------------------------------------
 # Frozen enums (contract §4)
@@ -195,6 +202,16 @@ def _detect_sha(cwd: str | None = None) -> str | None:
 # Emitter
 # ---------------------------------------------------------------------------
 
+class _PostError(Exception):
+    """Raised when a POST to the ingestion endpoint fails after retries."""
+    def __init__(self, status_code: int, body_summary: str) -> None:
+        self.status_code = status_code
+        self.body_summary = body_summary
+        super().__init__(
+            f"ingestion endpoint returned {status_code}: {body_summary}"
+        )
+
+
 class HermesEmitter:
     """Thin supervised emitter for Hermes delegate/session lifecycle.
 
@@ -204,16 +221,21 @@ class HermesEmitter:
 
     DEFAULT_ENDPOINT = "http://localhost:8080/api/events/work"
     DEFAULT_HEARTBEAT_S = 60
+    MAX_RETRIES = 3
+    RETRY_BACKOFF_S = 1.0
 
     def __init__(
         self,
         *,
         endpoint: str | None = None,
         ingest_key: str | None = None,
-        heartbeat_s: int | None = None,
+        heartbeat_s: float | int | None = None,
         session_id: str | None = None,
         cwd: str | None = None,
         tenant: str | None = None,
+        client: httpx.AsyncClient | None = None,
+        max_retries: int | None = None,
+        retry_backoff_s: float | None = None,
     ) -> None:
         self.endpoint = endpoint or os.environ.get(
             "AGENTOS_ENDPOINT", self.DEFAULT_ENDPOINT
@@ -223,9 +245,11 @@ class HermesEmitter:
             raise ValueError(
                 "INGEST_KEY is required. Set AGENTOS_INGEST_KEY env or pass ingest_key."
             )
-        self.heartbeat_s = heartbeat_s or int(
+        self.heartbeat_s = float(heartbeat_s) if heartbeat_s is not None else float(
             os.environ.get("AGENTOS_HEARTBEAT_S", self.DEFAULT_HEARTBEAT_S)
         )
+        self.max_retries = max_retries if max_retries is not None else self.MAX_RETRIES
+        self.retry_backoff_s = retry_backoff_s if retry_backoff_s is not None else self.RETRY_BACKOFF_S
         self.session_id = session_id or str(uuid.uuid4())
         self.cwd = cwd or os.getcwd()
         self.tenant = tenant
@@ -236,7 +260,8 @@ class HermesEmitter:
         self._heartbeat_task: asyncio.Task | None = None
         self._started = False
         self._ended = False
-        self._client = httpx.AsyncClient(timeout=10)
+        # Allow injection for testing (e.g. MockTransport clients)
+        self._client = client or httpx.AsyncClient(timeout=10)
 
     # --- internal helpers ---
 
@@ -255,23 +280,66 @@ class HermesEmitter:
     async def _post(self, event: WorkEvent) -> int:
         """POST a work-event to the ingestion endpoint.
 
-        Returns the HTTP status code.
+        Checks status code; logs warnings on non-2xx; retries on 5xx
+        and connection errors with bounded backoff.  Raises ``_PostError``
+        on persistent non-2xx so callers can surface delivery failures.
+
+        Returns the HTTP status code on success (2xx).
         """
         body = event.to_dict()
+        body_json = json.dumps(body)
         headers = {
             "Content-Type": "application/json",
             "X-AgentOS-Ingest-Key": self.ingest_key,
             "Idempotency-Key": event.event_id,
         }
-        try:
-            resp = await self._client.post(
-                self.endpoint, json=body, headers=headers
-            )
-            return resp.status_code
-        except httpx.ConnectError:
-            return 0  # unreachable
-        except Exception:
-            return -1  # other error
+
+        last_status: int = -1
+        for attempt in range(self.max_retries):
+            try:
+                resp = await self._client.post(
+                    self.endpoint,
+                    content=body_json,
+                    headers=headers,
+                )
+                last_status = resp.status_code
+                if 200 <= resp.status_code < 300:
+                    return resp.status_code
+                # Non-2xx — log and decide whether to retry
+                reason = resp.text[:200] if resp.text else "(empty body)"
+                logger.warning(
+                    "agentos.hermes POST %s → %d (attempt %d/%d): %s",
+                    event.kind, resp.status_code,
+                    attempt + 1, self.max_retries, reason,
+                )
+                if resp.status_code >= 500:
+                    # Server error — retry with backoff
+                    await asyncio.sleep(self.retry_backoff_s * (attempt + 1))
+                    continue
+                else:
+                    # 4xx client error — not retryable, surface immediately
+                    raise _PostError(resp.status_code, reason)
+            except httpx.ConnectError:
+                logger.warning(
+                    "agentos.hermes POST %s: connection error (attempt %d/%d)",
+                    event.kind, attempt + 1, self.max_retries,
+                )
+                last_status = 0
+                await asyncio.sleep(self.retry_backoff_s * (attempt + 1))
+                continue
+            except _PostError:
+                raise  # re-raise the 4xx we just raised
+            except Exception as exc:
+                logger.warning(
+                    "agentos.hermes POST %s: unexpected error (attempt %d/%d): %s",
+                    event.kind, attempt + 1, self.max_retries, exc,
+                )
+                last_status = -1
+                await asyncio.sleep(self.retry_backoff_s * (attempt + 1))
+                continue
+
+        # Exhausted retries — raise so callers know delivery failed
+        raise _PostError(last_status, "exhausted retries")
 
     def _detect_git(self) -> None:
         """Detect branch and SHA once (idempotent)."""
@@ -293,6 +361,8 @@ class HermesEmitter:
         """Emit a ``session.start`` event.
 
         Returns the HTTP status code from the ingestion endpoint.
+        Raises ``_PostError`` if the endpoint rejects or is unreachable
+        after retries.
         """
         self._detect_git()
         ev = self._base_event(Kind.SESSION_START.value)
@@ -310,7 +380,8 @@ class HermesEmitter:
     async def heartbeat(self) -> int:
         """Emit a single ``session.heartbeat`` event.
 
-        Returns the HTTP status code.
+        Returns the HTTP status code.  Swallows delivery errors (heartbeats
+        are best-effort liveness probes).
         """
         ev = self._base_event(Kind.SESSION_HEARTBEAT.value)
         ev.status = Status.RUNNING.value
@@ -318,7 +389,15 @@ class HermesEmitter:
         ev.pid = self._pid
         ev.branch = self._branch
         ev.sha = self._sha
-        return await self._post(ev)
+        try:
+            return await self._post(ev)
+        except _PostError:
+            # Heartbeats are best-effort — log and swallow
+            logger.warning(
+                "agentos.hermes heartbeat delivery failed for session %s",
+                self.session_id,
+            )
+            return -1
 
     async def end(
         self,
@@ -330,6 +409,8 @@ class HermesEmitter:
         """Emit a ``session.end`` event with a terminal status.
 
         Returns the HTTP status code.
+        Raises ``_PostError`` if the endpoint rejects or is unreachable
+        after retries — the caller MUST handle this.
         """
         if status not in (Status.DONE.value, Status.FAILED.value, Status.CANCELLED.value):
             raise ValueError(
@@ -389,7 +470,7 @@ class HermesEmitter:
         """Return an async context manager that wraps a supervised session.
 
         Emits session.start on entry, starts heartbeats, emits session.end
-        on exit (done or failed based on whether an exception occurred).
+        on exit (done, cancelled, or failed based on exit conditions).
 
         Example::
 
@@ -429,8 +510,15 @@ class _SupervisedSession:
         await self.emitter._start_heartbeats()
         return self
 
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
+        if exc_type is not None and issubclass(exc_type, asyncio.CancelledError):
+            # CancelledError → emit end("cancelled") and re-raise
+            await self.emitter.end(Status.CANCELLED.value, cost_usd=self.cost_usd)
+            return False  # re-raise CancelledError
         if exc_type is not None:
             await self.emitter.end(Status.FAILED.value, cost_usd=self.cost_usd)
         else:
             await self.emitter.end(Status.DONE.value, cost_usd=self.cost_usd)
+        # Always re-raise exceptions — the emitter recorded the failure but
+        # the caller should see it.
+        return False

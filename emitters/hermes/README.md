@@ -31,6 +31,23 @@ pip install httpx
 
 ## Quick Start
 
+### Runnable entry point (Hermes hook / script)
+
+```bash
+# Dry-run: print events to stderr without posting
+python -m emitters.hermes --dry-run --title "fix auth bug"
+
+# Live: POST to the ingestion endpoint
+export AGENTOS_INGEST_KEY="your-tenant-ingest-key"
+export AGENTOS_ENDPOINT="http://localhost:8080/api/events/work"  # optional
+python -m emitters.hermes --title "fix auth bug"
+```
+
+The entry point wraps a `supervised()` session — emits `session.start`, runs
+heartbeats in the background, and emits `session.end` on completion or
+cancellation.  In a real Hermes integration, the "work" coroutine inside the
+supervised block would be the delegate's actual task.
+
 ### Library usage (async)
 
 ```python
@@ -65,8 +82,18 @@ The supervised context manager handles start, heartbeats, and end automatically:
 async with emitter.supervised(title="fix auth bug"):
     await do_work()  # heartbeats sent every 60s
 # session.end emitted automatically with status "done"
-# (or "failed" if an exception was raised)
+# (or "failed" if an exception was raised, "cancelled" if cancelled)
 ```
+
+## Error handling
+
+`start()` and `end()` raise `_PostError` if the ingestion endpoint rejects
+the event (4xx) or is unreachable after bounded retries (5xx/connect errors).
+`heartbeat()` swallows delivery errors (best-effort liveness probes).
+
+In the `supervised()` context manager, `_PostError` from `start()` or `end()`
+propagates to the caller — the emitter records the failure event but does not
+silently suppress it.
 
 ## Environment Variables
 
@@ -99,6 +126,7 @@ This emitter codes to the frozen [work-event contract v1.1](https://github.com/t
 - Required headers: `X-AgentOS-Ingest-Key` + `Idempotency-Key`
 - Supervised liveness with periodic heartbeats
 - Terminal-only `session.end` statuses (`done`, `failed`, `cancelled`)
+- Non-2xx responses are logged and retried (5xx/connect) or surfaced (4xx)
 - No fabricated fields — omits what it can't determine
 
 ## Running Tests
@@ -111,5 +139,6 @@ python -m pytest emitters/hermes/test_emitter.py -v
 ## Files
 
 - `emitter.py` — the emitter implementation
-- `test_emitter.py` — unit tests (37 tests)
+- `__main__.py` — runnable entry point (`python -m emitters.hermes`)
+- `test_emitter.py` — unit tests
 - `README.md` — this file
