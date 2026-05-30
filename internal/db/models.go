@@ -101,6 +101,18 @@ type PipelineItem struct {
 	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
 }
 
+type Project struct {
+	ID          pgtype.UUID        `json:"id"`
+	Slug        string             `json:"slug"`
+	Name        string             `json:"name"`
+	Tenant      string             `json:"tenant"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	Tracker     string             `json:"tracker"`
+	ExternalRef pgtype.Text        `json:"external_ref"`
+	RepoUrl     pgtype.Text        `json:"repo_url"`
+}
+
 type Skill struct {
 	ID          pgtype.UUID        `json:"id"`
 	Name        string             `json:"name"`
@@ -124,6 +136,30 @@ type Task struct {
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
 	ParentTaskID pgtype.UUID        `json:"parent_task_id"`
+}
+
+type WorkEvent struct {
+	ID            pgtype.UUID        `json:"id"`
+	EventID       pgtype.UUID        `json:"event_id"`
+	SchemaVersion string             `json:"schema_version"`
+	Harness       string             `json:"harness"`
+	SessionID     string             `json:"session_id"`
+	Host          string             `json:"host"`
+	Pid           pgtype.Int4        `json:"pid"`
+	Kind          string             `json:"kind"`
+	Status        pgtype.Text        `json:"status"`
+	LivenessMode  pgtype.Text        `json:"liveness_mode"`
+	ProjectID     pgtype.UUID        `json:"project_id"`
+	Tenant        string             `json:"tenant"`
+	ExternalRef   pgtype.Text        `json:"external_ref"`
+	Branch        pgtype.Text        `json:"branch"`
+	Sha           pgtype.Text        `json:"sha"`
+	Cwd           pgtype.Text        `json:"cwd"`
+	Title         pgtype.Text        `json:"title"`
+	CostUsd       pgtype.Numeric     `json:"cost_usd"`
+	Payload       []byte             `json:"payload"`
+	Ts            pgtype.Timestamptz `json:"ts"`
+	ReceivedAt    pgtype.Timestamptz `json:"received_at"`
 }
 
 type Workflow struct {
