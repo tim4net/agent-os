@@ -638,6 +638,99 @@ class TestHermesEmitter:
         assert status == -1
         await em.close()
 
+    # -----------------------------------------------------------------------
+    # Finding 1 (tick 3): __aexit__ must NOT mask original exceptions
+    # when the terminal session.end POST fails.
+    # -----------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_supervised_work_raises_plus_end_fails_preserves_original(
+        self,
+    ) -> None:
+        """When work raises RuntimeError AND end POST fails,
+        the original RuntimeError propagates (not _PostError)."""
+        call_count = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal call_count
+            call_count += 1
+            # Start succeeds, everything else fails
+            if call_count == 1:
+                return httpx.Response(201, json={"id": "x", "accepted": True},
+                                     request=request)
+            return httpx.Response(422, text="rejected", request=request)
+
+        client = _make_mock_client(handler)
+        em = HermesEmitter(
+            endpoint="http://test/api/events/work",
+            ingest_key="test-key",
+            client=client,
+            max_retries=1,
+        )
+        with pytest.raises(RuntimeError, match="boom"):
+            async with em.supervised(title="compound fail"):
+                raise RuntimeError("boom")
+        await em.close()
+
+    @pytest.mark.asyncio
+    async def test_supervised_cancelled_plus_end_fails_preserves_cancelled(
+        self,
+    ) -> None:
+        """When task is cancelled AND end POST fails,
+        CancelledError still propagates (not _PostError)."""
+        call_count = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return httpx.Response(201, json={"id": "x", "accepted": True},
+                                     request=request)
+            return httpx.Response(503, text="unavailable", request=request)
+
+        client = _make_mock_client(handler)
+        em = HermesEmitter(
+            endpoint="http://test/api/events/work",
+            ingest_key="test-key",
+            client=client,
+            max_retries=1,
+            retry_backoff_s=0.001,
+        )
+
+        async def _work_that_gets_cancelled():
+            async with em.supervised(title="cancel+end-fail"):
+                await asyncio.sleep(10)
+
+        task = asyncio.create_task(_work_that_gets_cancelled())
+        await asyncio.sleep(0.01)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await em.close()
+
+    # -----------------------------------------------------------------------
+    # Finding 2 (tick 3): TransportError cause is retained in _PostError
+    # -----------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_post_error_retains_transport_cause(self) -> None:
+        """After exhausting retries on TransportError, _PostError.cause
+        carries repr of the original transport error."""
+        em = HermesEmitter(
+            endpoint="http://127.0.0.1:1/api/events/work",
+            ingest_key="test-key",
+            max_retries=2,
+            retry_backoff_s=0.001,
+        )
+        with pytest.raises(_PostError) as exc_info:
+            await em.start()
+        # ConnectError sets last_status=0 (connection refused)
+        assert exc_info.value.status_code == 0
+        assert exc_info.value.cause is not None
+        # Cause should contain information about the transport error
+        assert "error" in exc_info.value.cause.lower()
+        await em.close()
+
 
 # ---------------------------------------------------------------------------
 # Contract enum tests
@@ -659,3 +752,38 @@ class TestEnums:
     def test_liveness_mode_values(self) -> None:
         assert LivenessMode.SUPERVISED.value == "supervised"
         assert LivenessMode.BOUNDED.value == "bounded"
+
+
+# ---------------------------------------------------------------------------
+# Finding 3 (tick 3): __main__.py entry point tests
+# ---------------------------------------------------------------------------
+
+class TestEntryPoint:
+    """Tests for the __main__.py entry point."""
+
+    def test_dry_run_captures_start_and_end(self) -> None:
+        """--dry-run captures session.start and session.end events."""
+        from emitters.hermes.__main__ import _run
+        import argparse
+
+        args = argparse.Namespace(
+            title="dry-run test",
+            dry_run=True,
+            heartbeat_s=0,
+        )
+        asyncio.run(_run(args))  # type: ignore[arg-type]
+        # _run in dry-run mode prints events to stderr.
+        # We validate via the _run function completing without error
+        # (the MockTransport inside _run captures events and prints them).
+
+    def test_live_mode_exits_without_ingest_key(self) -> None:
+        """Live mode without AGENTOS_INGEST_KEY calls parser.error."""
+        import os
+        from unittest import mock
+        from emitters.hermes.__main__ import main
+
+        env = {"AGENTOS_INGEST_KEY": "", "AGENTOS_ENDPOINT": "http://test"}
+        with mock.patch.dict(os.environ, env, clear=True), \
+             mock.patch("sys.argv", ["emitters.hermes"]):
+            with pytest.raises(SystemExit):
+                main()

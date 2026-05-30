@@ -204,11 +204,16 @@ def _detect_sha(cwd: str | None = None) -> str | None:
 
 class _PostError(Exception):
     """Raised when a POST to the ingestion endpoint fails after retries."""
-    def __init__(self, status_code: int, body_summary: str) -> None:
+    def __init__(self, status_code: int, body_summary: str,
+                 cause: str | None = None) -> None:
         self.status_code = status_code
         self.body_summary = body_summary
+        self.cause = cause
+        detail = f"{body_summary}"
+        if cause:
+            detail += f" (cause: {cause})"
         super().__init__(
-            f"ingestion endpoint returned {status_code}: {body_summary}"
+            f"ingestion endpoint returned {status_code}: {detail}"
         )
 
 
@@ -295,6 +300,7 @@ class HermesEmitter:
         }
 
         last_status: int = -1
+        last_cause: str | None = None
         for attempt in range(self.max_retries):
             try:
                 resp = await self._client.post(
@@ -319,27 +325,29 @@ class HermesEmitter:
                 else:
                     # 4xx client error — not retryable, surface immediately
                     raise _PostError(resp.status_code, reason)
-            except httpx.ConnectError:
+            except httpx.ConnectError as exc:
+                last_cause = repr(exc)
                 logger.warning(
-                    "agentos.hermes POST %s: connection error (attempt %d/%d)",
-                    event.kind, attempt + 1, self.max_retries,
+                    "agentos.hermes POST %s: connection error (attempt %d/%d): %s",
+                    event.kind, attempt + 1, self.max_retries, last_cause,
                 )
                 last_status = 0
                 await asyncio.sleep(self.retry_backoff_s * (attempt + 1))
                 continue
             except _PostError:
                 raise  # re-raise the 4xx we just raised
-            except Exception as exc:
+            except httpx.TransportError as exc:
+                last_cause = repr(exc)
                 logger.warning(
-                    "agentos.hermes POST %s: unexpected error (attempt %d/%d): %s",
-                    event.kind, attempt + 1, self.max_retries, exc,
+                    "agentos.hermes POST %s: transport error (attempt %d/%d): %s",
+                    event.kind, attempt + 1, self.max_retries, last_cause,
                 )
                 last_status = -1
                 await asyncio.sleep(self.retry_backoff_s * (attempt + 1))
                 continue
 
         # Exhausted retries — raise so callers know delivery failed
-        raise _PostError(last_status, "exhausted retries")
+        raise _PostError(last_status, "exhausted retries", cause=last_cause)
 
     def _detect_git(self) -> None:
         """Detect branch and SHA once (idempotent)."""
@@ -513,10 +521,27 @@ class _SupervisedSession:
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
         if exc_type is not None and issubclass(exc_type, asyncio.CancelledError):
             # CancelledError → emit end("cancelled") and re-raise
-            await self.emitter.end(Status.CANCELLED.value, cost_usd=self.cost_usd)
-            return False  # re-raise CancelledError
+            try:
+                await self.emitter.end(Status.CANCELLED.value, cost_usd=self.cost_usd)
+            except _PostError as post_err:
+                logger.warning(
+                    "agentos.hermes: terminal session.end POST failed "
+                    "after cancellation (%s: %s) — re-raising CancelledError",
+                    post_err.status_code, post_err.body_summary,
+                )
+            return False  # re-raise original CancelledError
         if exc_type is not None:
-            await self.emitter.end(Status.FAILED.value, cost_usd=self.cost_usd)
+            # Work raised an exception — try to emit end("failed") but
+            # NEVER let a delivery failure mask the original exception.
+            try:
+                await self.emitter.end(Status.FAILED.value, cost_usd=self.cost_usd)
+            except _PostError as post_err:
+                logger.warning(
+                    "agentos.hermes: terminal session.end POST failed "
+                    "after work error (%s: %s) — re-raising original: %s",
+                    post_err.status_code, post_err.body_summary,
+                    repr(exc_val),
+                )
         else:
             await self.emitter.end(Status.DONE.value, cost_usd=self.cost_usd)
         # Always re-raise exceptions — the emitter recorded the failure but
