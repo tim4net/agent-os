@@ -1,14 +1,19 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
+	"os"
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/tim4net/agent-os/internal/db"
+	"github.com/tim4net/agent-os/internal/service"
 )
 
 // DelegationRequest is the webhook payload from Hermes.
@@ -107,9 +112,74 @@ func (a *API) CreateDelegation(w http.ResponseWriter, r *http.Request) {
 		"status":           deg.Status,
 	})
 
+	// --- WP-A shim: synthesize work_event from delegation ---
+	go func() {
+		if err := a.synthesizeWorkEvent(deg); err != nil {
+			slog.Default().Warn("failed to synthesize work_event from delegation",
+				"delegation_id", deg.ID.String(),
+				"error", err,
+			)
+		}
+	}()
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(delegationToResponse(deg))
 }
+
+// synthesizeWorkEvent creates a work_event row from a delegation (legacy bridge shim).
+func (a *API) synthesizeWorkEvent(deg db.Delegation) error {
+	// Map delegation status → work_event kind + status
+	var kind, status string
+	switch deg.Status {
+	case "pending", "running":
+		kind = "session.start"
+		status = "running"
+	case "completed":
+		kind = "session.end"
+		status = "done"
+	case "failed":
+		kind = "session.end"
+		status = "failed"
+	case "interrupted":
+		kind = "session.end"
+		status = "cancelled"
+	default:
+		kind = "note"
+		status = ""
+	}
+
+	// Derive session_id from parent_agent_id
+	sessionID := deg.ParentAgentID.String()
+
+	// Timestamp for the synthetic event
+	ts := deg.CreatedAt.Time.Format("2006-01-02T15:04:05Z07:00")
+
+	req := service.WorkEventRequest{
+		Schema:       "agentos.work_event/v1",
+		EventID:      uuid.New().String(),
+		Host:         "bridge",
+		Harness:      "hermes",
+		Kind:         kind,
+		SessionID:    sessionID,
+		Ts:           ts,
+		Status:       status,
+		LivenessMode: "bounded",
+		Title:        deg.TaskGoal,
+		Tenant:       "personal",
+	}
+
+	artifactsPath := os.Getenv("AGENTOS_ARTIFACTS_PATH")
+	if artifactsPath == "" {
+		artifactsPath = "/data/artifacts"
+	}
+	svc := service.NewIngestService(a.queries, a.bus, slog.Default(), artifactsPath)
+
+	ctx := context.Background()
+	_, _, err := svc.Ingest(ctx, req)
+	return err
+}
+
+
 
 // UpdateDelegationStatus handles PATCH /api/delegations/{id} — Hermes fires this on completion/failure.
 func (a *API) UpdateDelegationStatus(w http.ResponseWriter, r *http.Request) {
