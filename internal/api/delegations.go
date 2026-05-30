@@ -17,6 +17,10 @@ import (
 	"github.com/tim4net/agent-os/internal/service"
 )
 
+// bridgeNamespace is a UUID v5 namespace for deterministic bridge event IDs.
+// This ensures the delegation shim produces idempotent event_ids across retries.
+var bridgeNamespace = uuid.MustParse("a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d")
+
 // DelegationRequest is the webhook payload from Hermes.
 type DelegationRequest struct {
 	ParentAgentID  string          `json:"parent_agent_id"`
@@ -115,7 +119,7 @@ func (a *API) CreateDelegation(w http.ResponseWriter, r *http.Request) {
 
 	// FIX (finding #4): Run shim synchronously so errors are surfaced before responding.
 	// FIX (finding #4): Stamp ts = now (server clock) so synthetic events don't trip the ±10min skew rule.
-	if err := a.synthesizeWorkEvent(r.Context(), deg); err != nil {
+	if err := a.synthesizeWorkEvent(r.Context(), deg, ""); err != nil {
 		slog.Default().Warn("failed to synthesize work_event from delegation",
 			"delegation_id", deg.ID.String(),
 			"error", err,
@@ -136,25 +140,49 @@ func (a *API) CreateDelegation(w http.ResponseWriter, r *http.Request) {
 }
 
 // synthesizeWorkEvent creates a work_event row from a delegation (legacy bridge shim).
-func (a *API) synthesizeWorkEvent(ctx context.Context, deg db.Delegation) error {
+// kindOverride, if non-empty, forces a specific kind (used for PATCH terminal synthesis).
+// Otherwise the kind is derived from the delegation status.
+func (a *API) synthesizeWorkEvent(ctx context.Context, deg db.Delegation, kindOverride string) error {
 	// Map delegation status → work_event kind + status
 	var kind, status string
-	switch deg.Status {
-	case "pending", "running":
-		kind = "session.start"
-		status = "running"
-	case "completed":
-		kind = "session.end"
-		status = "done"
-	case "failed":
-		kind = "session.end"
-		status = "failed"
-	case "interrupted":
-		kind = "session.end"
-		status = "cancelled"
-	default:
-		kind = "note"
-		status = ""
+	if kindOverride != "" {
+		kind = kindOverride
+		switch kind {
+		case "session.start":
+			status = "running"
+		case "session.end":
+			// Determine terminal status from delegation status
+			switch deg.Status {
+			case "completed":
+				status = "done"
+			case "failed":
+				status = "failed"
+			case "interrupted":
+				status = "cancelled"
+			default:
+				status = "done"
+			}
+		default:
+			status = ""
+		}
+	} else {
+		switch deg.Status {
+		case "pending", "running":
+			kind = "session.start"
+			status = "running"
+		case "completed":
+			kind = "session.end"
+			status = "done"
+		case "failed":
+			kind = "session.end"
+			status = "failed"
+		case "interrupted":
+			kind = "session.end"
+			status = "cancelled"
+		default:
+			kind = "note"
+			status = ""
+		}
 	}
 
 	// Derive session_id from parent_agent_id
@@ -163,9 +191,13 @@ func (a *API) synthesizeWorkEvent(ctx context.Context, deg db.Delegation) error 
 	// FIX (finding #4): Use server clock (now) so synthetic bridge events don't trip the ±10min skew rule.
 	ts := time.Now().UTC().Format("2006-01-02T15:04:05Z")
 
+	// FIX (finding #3): Deterministic event_id via UUIDv5 so retries dedupe.
+	// The seed is delegation_id + kind, ensuring one work_event per delegation per terminal state.
+	eventID := uuid.NewSHA1(bridgeNamespace, []byte(deg.ID.String()+":"+kind))
+
 	req := service.WorkEventRequest{
 		Schema:       "agentos.work_event/v1",
-		EventID:      uuid.New().String(),
+		EventID:      eventID.String(),
 		Host:         "bridge",
 		Harness:      "hermes",
 		Kind:         kind,
@@ -236,13 +268,18 @@ func (a *API) UpdateDelegationStatus(w http.ResponseWriter, r *http.Request) {
 	// FIX (finding #5): Synthesize a work_event for terminal delegation states via PATCH path.
 	// CreateDelegation already handles the POST path. UpdateDelegationStatus carries
 	// completion/failure, so we must synthesize session.end here too.
+	// FIX (finding #3 rev2): Surface synthesis errors instead of swallowing them.
 	if req.Status == "completed" || req.Status == "failed" || req.Status == "interrupted" {
-		if err := a.synthesizeWorkEvent(r.Context(), deg); err != nil {
-			slog.Default().Warn("failed to synthesize work_event from delegation update",
-				"delegation_id", deg.ID.String(),
-				"error", err,
-			)
-			// Still return success for the delegation update itself, but log the failure
+		if err := a.synthesizeWorkEvent(r.Context(), deg, "session.end"); err != nil {
+			// Surface the error — the delegation update succeeded but synthesis failed.
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusAccepted)
+			json.NewEncoder(w).Encode(map[string]any{
+				"id":               deg.ID.String(),
+				"warning":          "delegation updated but work_event synthesis failed",
+				"synthesis_error":  err.Error(),
+			})
+			return
 		}
 	}
 

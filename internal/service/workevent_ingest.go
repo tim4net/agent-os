@@ -89,9 +89,11 @@ var runningStatuses = map[string]bool{
 	"running": true, "unknown": true,
 }
 
-var validTenants = map[string]bool{
-	"personal": true, "dayjob": true,
-}
+// NOTE: tenant enum validation ("personal", "dayjob", etc.) will be enforced once
+// config.go is wired with the key→allowed-tenant map. Until then, the body tenant
+// field is ignored (overridden by ResolveTenantFromKey) and the server accepts the
+// key-resolved tenant. The contract's "tenant not permitted by ingest key → 403"
+// AC is explicitly deferred to the config.go follow-up. See issue #2 comments.
 
 var externalRefPattern = regexp.MustCompile(`^(SC-\d+|#\d+)$`)
 

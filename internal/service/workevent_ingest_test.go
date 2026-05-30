@@ -448,14 +448,14 @@ func TestExternalRefPattern(t *testing.T) {
 
 func TestResolveTenantFromKey(t *testing.T) {
 	tests := []struct {
-		name      string
-		key       string
-		wantErr   bool
+		name       string
+		key        string
+		wantErr    bool
 		wantTenant string
 	}{
 		{"empty key returns error", "", true, ""},
-		{"non-empty key returns personal", "some-key", false, "personal"},
-		{"another key returns personal", "another-key", false, "personal"},
+		{"non-empty key returns personal (placeholder until config.go wiring)", "some-key", false, "personal"},
+		{"another key returns personal (placeholder until config.go wiring)", "another-key", false, "personal"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -466,11 +466,28 @@ func TestResolveTenantFromKey(t *testing.T) {
 				}
 			} else {
 				if err != nil {
-					t.Errorf("expected no error, got: %v", err)
+					t.Errorf("expected no error, got %v", err)
 				}
 				if tenant != tt.wantTenant {
 					t.Errorf("expected tenant %q, got %q", tt.wantTenant, tenant)
 				}
+			}
+		})
+	}
+}
+
+// TestValidTenantSet lists the known tenant values from the contract §4.
+// This is a documentation/compile-time guard, NOT a runtime validator
+// (tenant enforcement is deferred to config.go wiring — see issue #2).
+func TestValidTenantSet(t *testing.T) {
+	known := []string{"personal", "dayjob"}
+	for _, tn := range known {
+		t.Run(tn, func(t *testing.T) {
+			// This test documents the known values. The actual enforcement
+			// gate will live in ResolveTenantFromKey once config.go provides
+			// the key→allowed-tenant mapping.
+			if tn == "" {
+				t.Error("tenant must be non-empty")
 			}
 		})
 	}

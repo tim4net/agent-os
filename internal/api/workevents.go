@@ -74,8 +74,9 @@ func (a *API) IngestWorkEvent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Override body tenant with key-resolved tenant (finding #3 fix).
-	// The body tenant field is still validated for enum membership (in ValidateWorkEvent)
-	// but the persisted tenant comes from the ingest key resolution.
+	// The body tenant is NOT trusted — the server resolves it from the key.
+	// Full tenant-permission enforcement (key→allowed-tenant 403) is deferred to
+	// the config.go wiring follow-up; currently all non-empty keys resolve to "personal".
 	req.Tenant = resolvedTenant
 
 	// Idempotency-Key header check
