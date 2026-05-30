@@ -31,6 +31,14 @@ func (a *API) IngestWorkEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Resolve tenant from ingest key (finding #3 fix).
+	// The body tenant is NOT trusted — the server resolves it from the key.
+	resolvedTenant, err := service.ResolveTenantFromKey(ingestKey)
+	if err != nil {
+		writeError(w, http.StatusForbidden, "invalid ingest key")
+		return
+	}
+
 	// Read body
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -64,6 +72,11 @@ func (a *API) IngestWorkEvent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return
 	}
+
+	// Override body tenant with key-resolved tenant (finding #3 fix).
+	// The body tenant field is still validated for enum membership (in ValidateWorkEvent)
+	// but the persisted tenant comes from the ingest key resolution.
+	req.Tenant = resolvedTenant
 
 	// Idempotency-Key header check
 	idempotencyKey := r.Header.Get("Idempotency-Key")

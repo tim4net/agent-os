@@ -1,4 +1,5 @@
 -- name: InsertWorkEvent :one
+-- Upsert by event_id: inserts new row, on conflict does nothing and returns nothing (pgx.ErrNoRows).
 INSERT INTO work_events (
     event_id, schema_version, harness, session_id, host, pid,
     kind, status, liveness_mode, project_id, tenant,
@@ -7,7 +8,8 @@ INSERT INTO work_events (
     $1, $2, $3, $4, $5, $6,
     $7, $8, $9, $10, $11,
     $12, $13, $14, $15, $16, $17, $18, $19
-) RETURNING *;
+) ON CONFLICT (event_id) DO NOTHING
+RETURNING *;
 
 -- name: GetWorkEventByEventID :one
 SELECT * FROM work_events WHERE event_id = $1;

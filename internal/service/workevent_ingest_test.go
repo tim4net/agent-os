@@ -153,6 +153,17 @@ func TestValidateWorkEvent(t *testing.T) {
 			mutate:  func(req *WorkEventRequest) { req.Kind = "session.heartbeat"; req.LivenessMode = "bounded" },
 			wantErr: "session.heartbeat requires liveness_mode supervised",
 		},
+		// FIX (finding #2): heartbeat with empty/missing liveness_mode → 400
+		{
+			name:    "session.heartbeat with empty liveness_mode",
+			mutate:  func(req *WorkEventRequest) { req.Kind = "session.heartbeat"; req.LivenessMode = "" },
+			wantErr: "session.heartbeat requires liveness_mode supervised",
+		},
+		{
+			name:    "session.heartbeat with unknown liveness_mode",
+			mutate:  func(req *WorkEventRequest) { req.Kind = "session.heartbeat"; req.LivenessMode = "invalid" },
+			wantErr: "session.heartbeat requires liveness_mode supervised",
+		},
 		{
 			name:    "supervised without pid",
 			mutate:  func(req *WorkEventRequest) { req.Pid = nil },
@@ -206,6 +217,12 @@ func TestValidateWorkEvent(t *testing.T) {
 		{
 			name:    "server.stopped kind with no status is valid",
 			mutate:  func(req *WorkEventRequest) { req.Kind = "server.stopped"; req.Status = ""; req.LivenessMode = ""; req.Pid = nil },
+			wantErr: "",
+		},
+		// FIX (finding #3): well-formed but un-correlatable event is still valid
+		{
+			name:    "well-formed event without external_ref or branch is valid",
+			mutate:  func(req *WorkEventRequest) { req.ExternalRef = ""; req.Branch = ""; req.Sha = "" },
 			wantErr: "",
 		},
 	}
@@ -264,6 +281,44 @@ func TestValidateArtifactPath(t *testing.T) {
 	}
 }
 
+// FIX (minor #7): URL SSRF guard tests
+func TestValidateArtifactURL(t *testing.T) {
+	tests := []struct {
+		name    string
+		url     string
+		wantErr string // empty = expect success
+	}{
+		{"https URL is valid", "https://example.com/file.png", ""},
+		{"http URL is valid", "http://example.com/file.png", ""},
+		{"localhost is rejected", "http://localhost/file.png", "private/link-local"},
+		{"127.0.0.1 is rejected", "http://127.0.0.1/file.png", "private/link-local"},
+		{"10.0.0.1 is rejected", "http://10.0.0.1/file.png", "private/link-local"},
+		{"169.254.1.1 is rejected", "http://169.254.1.1/metadata", "private/link-local"},
+		{"192.168.1.1 is rejected", "http://192.168.1.1/file.png", "private/link-local"},
+		{".local suffix rejected", "http://myhost.local/file.png", "private/link-local"},
+		{".internal suffix rejected", "http://myhost.internal/file.png", "private/link-local"},
+		{"ftp scheme rejected", "ftp://example.com/file.png", "scheme must be http or https"},
+		{"invalid URL", "://bad", "invalid URL"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateArtifactURL(tt.url)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Errorf("expected no error, got: %v", err)
+				}
+			} else {
+				if err == nil {
+					t.Errorf("expected error containing %q, got nil", tt.wantErr)
+				} else if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Errorf("expected error containing %q, got: %v", tt.wantErr, err)
+				}
+			}
+		})
+	}
+}
+
 func TestIsValidUUID(t *testing.T) {
 	tests := []struct {
 		uuid string
@@ -275,7 +330,6 @@ func TestIsValidUUID(t *testing.T) {
 		{"", false},
 		{"b1e2f3a45678-9abc-def0-123456789abc", false}, // missing dash
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.uuid, func(t *testing.T) {
 			if got := isValidUUID(tt.uuid); got != tt.want {
@@ -337,15 +391,24 @@ func TestArtifactsValidation(t *testing.T) {
 			arts:    []ArtifactDescriptor{{Type: "image", Path: "../etc/passwd"}},
 			wantErr: "path must not contain traversal",
 		},
+		// FIX (minor #7): artifact URL SSRF guard
+		{
+			name:    "artifact with localhost URL rejected",
+			arts:    []ArtifactDescriptor{{Type: "image", URL: "http://localhost/file.png"}},
+			wantErr: "private/link-local",
+		},
+		{
+			name:    "artifact with private IP URL rejected",
+			arts:    []ArtifactDescriptor{{Type: "image", URL: "http://192.168.1.1/file.png"}},
+			wantErr: "private/link-local",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := validRequest()
 			req.Artifacts = tt.arts
-
 			err := ValidateWorkEvent(req)
-
 			if tt.wantErr == "" {
 				if err != nil {
 					t.Errorf("expected no error, got: %v", err)
@@ -378,6 +441,36 @@ func TestExternalRefPattern(t *testing.T) {
 			got := externalRefPattern.MatchString(tt.ref)
 			if got != tt.want {
 				t.Errorf("externalRefPattern.MatchString(%q) = %v, want %v", tt.ref, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResolveTenantFromKey(t *testing.T) {
+	tests := []struct {
+		name      string
+		key       string
+		wantErr   bool
+		wantTenant string
+	}{
+		{"empty key returns error", "", true, ""},
+		{"non-empty key returns personal", "some-key", false, "personal"},
+		{"another key returns personal", "another-key", false, "personal"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tenant, err := ResolveTenantFromKey(tt.key)
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("expected error, got nil")
+				}
+			} else {
+				if err != nil {
+					t.Errorf("expected no error, got: %v", err)
+				}
+				if tenant != tt.wantTenant {
+					t.Errorf("expected tenant %q, got %q", tt.wantTenant, tenant)
+				}
 			}
 		})
 	}

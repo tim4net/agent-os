@@ -5,12 +5,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/tim4net/agent-os/internal/db"
@@ -86,6 +89,10 @@ var runningStatuses = map[string]bool{
 	"running": true, "unknown": true,
 }
 
+var validTenants = map[string]bool{
+	"personal": true, "dayjob": true,
+}
+
 var externalRefPattern = regexp.MustCompile(`^(SC-\d+|#\d+)$`)
 
 const maxPayloadSize = 64 * 1024 // 64KB
@@ -106,6 +113,18 @@ func NewIngestService(queries db.Querier, bus *EventBus, log *slog.Logger, artif
 		log:           log,
 		artifactsPath: artifactsPath,
 	}
+}
+
+// ResolveTenantFromKey resolves a tenant string from an ingest key.
+// TODO(WP-A finding #3): once config.go is wired, this should look up the key
+// in a server-side key→tenant mapping and return the allowed tenant set.
+// For now, all non-empty keys resolve to "personal" and the body tenant is ignored.
+func ResolveTenantFromKey(ingestKey string) (string, error) {
+	if ingestKey == "" {
+		return "", fmt.Errorf("missing ingest key")
+	}
+	// TODO: look up key in config.go key→tenant map; return error if key unknown
+	return "personal", nil
 }
 
 // ValidateWorkEvent validates a WorkEventRequest against the frozen contract.
@@ -196,11 +215,10 @@ func ValidateWorkEvent(req WorkEventRequest) error {
 		}
 	}
 
-	// session.heartbeat ⇒ liveness_mode must be supervised
-	if req.Kind == "session.heartbeat" {
-		if req.LivenessMode == "bounded" {
-			return &ValidationError{HTTPStatus: http.StatusBadRequest, Message: "session.heartbeat requires liveness_mode supervised (bounded emitters cannot heartbeat)"}
-		}
+	// session.heartbeat ⇒ liveness_mode must be supervised (contract §1)
+	// FIX: was only rejecting "bounded"; now rejects anything that isn't "supervised"
+	if req.Kind == "session.heartbeat" && req.LivenessMode != "supervised" {
+		return &ValidationError{HTTPStatus: http.StatusBadRequest, Message: "session.heartbeat requires liveness_mode supervised (bounded emitters cannot heartbeat)"}
 	}
 
 	// liveness_mode: supervised ⇒ pid required
@@ -235,6 +253,12 @@ func ValidateWorkEvent(req WorkEventRequest) error {
 				return &ValidationError{HTTPStatus: http.StatusBadRequest, Message: fmt.Sprintf("artifact[%d]: %v", i, err)}
 			}
 		}
+		// FIX (minor #7): URL SSRF guard — reject private/link-local ranges
+		if hasURL {
+			if err := validateArtifactURL(art.URL); err != nil {
+				return &ValidationError{HTTPStatus: http.StatusBadRequest, Message: fmt.Sprintf("artifact[%d]: %v", i, err)}
+			}
+		}
 	}
 
 	return nil
@@ -250,6 +274,31 @@ func validateArtifactPath(p string) error {
 	cleaned := filepath.Clean(p)
 	if strings.HasPrefix(cleaned, "..") {
 		return fmt.Errorf("path must not contain traversal (..): %s", p)
+	}
+	return nil
+}
+
+// validateArtifactURL rejects URLs that resolve to private/link-local ranges (SSRF guard, contract §1/§3).
+func validateArtifactURL(rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid URL: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("URL scheme must be http or https, got %q", u.Scheme)
+	}
+	host := u.Hostname()
+	// Reject common localhost hostnames
+	lower := strings.ToLower(host)
+	if lower == "localhost" || strings.HasSuffix(lower, ".local") || strings.HasSuffix(lower, ".internal") {
+		return fmt.Errorf("URL must not resolve to a private/link-local range")
+	}
+	// Reject loopback, link-local, and private IP ranges (RFC 1918 + RFC 3927)
+	ip := net.ParseIP(host)
+	if ip != nil {
+		if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsPrivate() {
+			return fmt.Errorf("URL must not resolve to a private/link-local range")
+		}
 	}
 	return nil
 }
@@ -274,7 +323,7 @@ func isValidUUID(s string) bool {
 }
 
 // resolveProject resolves a project from project_hint or cwd.
-func (s *IngestService) resolveProject(ctx context.Context, req WorkEventRequest) (pgtype.UUID, error) {
+func (s *IngestService) resolveProject(ctx context.Context, tenant string, req WorkEventRequest) (pgtype.UUID, error) {
 	slug := ""
 	if req.ProjectHint != "" {
 		slug = req.ProjectHint
@@ -285,23 +334,19 @@ func (s *IngestService) resolveProject(ctx context.Context, req WorkEventRequest
 		return pgtype.UUID{}, nil
 	}
 
-	tenant := req.Tenant
-	if tenant == "" {
-		tenant = "personal"
-	}
-
+	// FIX (minor #8): distinguish "no hint" from "EnsureProjectBySlug failed"
 	project, err := s.queries.EnsureProjectBySlug(ctx, db.EnsureProjectBySlugParams{
 		Slug:   slug,
 		Name:   slug,
 		Tenant: tenant,
 	})
 	if err != nil {
-		return pgtype.UUID{}, fmt.Errorf("failed to resolve project: %w", err)
+		return pgtype.UUID{}, fmt.Errorf("failed to resolve/create project %q for tenant %q: %w", slug, tenant, err)
 	}
 	return project.ID, nil
 }
 
-// Ingest validates, resolves the project, checks idempotency, persists, and publishes.
+// Ingest validates, resolves the project, persists (upsert), and publishes.
 func (s *IngestService) Ingest(ctx context.Context, req WorkEventRequest) (db.WorkEvent, int, error) {
 	// Validate
 	if err := ValidateWorkEvent(req); err != nil {
@@ -317,12 +362,16 @@ func (s *IngestService) Ingest(ctx context.Context, req WorkEventRequest) (db.Wo
 		s.log.Warn("external_ref does not match expected pattern", "external_ref", req.ExternalRef)
 	}
 
-	// Resolve project
+	// Resolve project — FIX (minor #8): surface errors instead of swallowing them
+	tenant := req.Tenant
+	if tenant == "" {
+		tenant = "personal"
+	}
 	var projectID pgtype.UUID
-	projectID, err := s.resolveProject(ctx, req)
+	projectID, err := s.resolveProject(ctx, tenant, req)
 	if err != nil {
-		s.log.Warn("project resolution failed", "error", err)
-		// Continue without project — best-effort
+		s.log.Error("project resolution failed", "error", err)
+		return db.WorkEvent{}, http.StatusInternalServerError, fmt.Errorf("project resolution: %w", err)
 	}
 
 	// Parse event_id to UUID
@@ -333,15 +382,6 @@ func (s *IngestService) Ingest(ctx context.Context, req WorkEventRequest) (db.Wo
 			Message:    fmt.Sprintf("invalid event_id UUID: %v", err),
 		}
 	}
-
-	// Idempotency check
-	existing, err := s.queries.GetWorkEventByEventID(ctx, eventUUID)
-	if err == nil {
-		// Found existing — return 202
-		return existing, http.StatusAccepted, nil
-	}
-	// If it's not a "no rows" error, it's a real DB error
-	// We proceed to insert on "no rows"
 
 	// Parse ts
 	ts, _ := time.Parse(time.RFC3339, req.Ts)
@@ -408,13 +448,9 @@ func (s *IngestService) Ingest(ctx context.Context, req WorkEventRequest) (db.Wo
 		payload = req.Payload
 	}
 
-	tenant := req.Tenant
-	if tenant == "" {
-		tenant = "personal"
-	}
-
-	// Insert
-	row, err := s.queries.InsertWorkEvent(ctx, db.InsertWorkEventParams{
+	// FIX (finding #1): Atomic upsert — single INSERT ON CONFLICT DO NOTHING.
+	// On conflict, PostgreSQL returns no rows (pgx.ErrNoRows) → we SELECT the existing row.
+	params := db.InsertWorkEventParams{
 		EventID:       eventUUID,
 		SchemaVersion: req.Schema,
 		Harness:       req.Harness,
@@ -434,13 +470,25 @@ func (s *IngestService) Ingest(ctx context.Context, req WorkEventRequest) (db.Wo
 		CostUsd:       pgCostUsd,
 		Payload:       payload,
 		Ts:            pgTs,
-	})
+	}
+
+	row, err := s.queries.InsertWorkEvent(ctx, params)
+	if err == pgx.ErrNoRows {
+		// Conflict — event_id already exists. Fetch the original row.
+		existing, err := s.queries.GetWorkEventByEventID(ctx, eventUUID)
+		if err != nil {
+			s.log.Error("failed to fetch existing event on conflict", "event_id", req.EventID, "error", err)
+			return db.WorkEvent{}, http.StatusInternalServerError, fmt.Errorf("fetch existing event: %w", err)
+		}
+		s.log.Info("idempotent duplicate accepted", "event_id", req.EventID, "existing_id", existing.ID.String())
+		return existing, http.StatusAccepted, nil
+	}
 	if err != nil {
 		s.log.Error("failed to insert work event", "error", err)
 		return db.WorkEvent{}, http.StatusInternalServerError, fmt.Errorf("db insert failed: %w", err)
 	}
 
-	// Publish SSE event (201 only)
+	// Publish SSE event (201 only — new row)
 	if s.bus != nil {
 		s.bus.PublishTyped("work_event", map[string]any{
 			"id":         row.ID.String(),

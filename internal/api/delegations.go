@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -112,22 +113,30 @@ func (a *API) CreateDelegation(w http.ResponseWriter, r *http.Request) {
 		"status":           deg.Status,
 	})
 
-	// --- WP-A shim: synthesize work_event from delegation ---
-	go func() {
-		if err := a.synthesizeWorkEvent(deg); err != nil {
-			slog.Default().Warn("failed to synthesize work_event from delegation",
-				"delegation_id", deg.ID.String(),
-				"error", err,
-			)
-		}
-	}()
+	// FIX (finding #4): Run shim synchronously so errors are surfaced before responding.
+	// FIX (finding #4): Stamp ts = now (server clock) so synthetic events don't trip the ±10min skew rule.
+	if err := a.synthesizeWorkEvent(r.Context(), deg); err != nil {
+		slog.Default().Warn("failed to synthesize work_event from delegation",
+			"delegation_id", deg.ID.String(),
+			"error", err,
+		)
+		// Surface to caller — 202 since the delegation itself was created
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":             deg.ID.String(),
+			"warning":        "delegation created but work_event synthesis failed",
+			"synthesis_error": err.Error(),
+		})
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(delegationToResponse(deg))
 }
 
 // synthesizeWorkEvent creates a work_event row from a delegation (legacy bridge shim).
-func (a *API) synthesizeWorkEvent(deg db.Delegation) error {
+func (a *API) synthesizeWorkEvent(ctx context.Context, deg db.Delegation) error {
 	// Map delegation status → work_event kind + status
 	var kind, status string
 	switch deg.Status {
@@ -151,8 +160,8 @@ func (a *API) synthesizeWorkEvent(deg db.Delegation) error {
 	// Derive session_id from parent_agent_id
 	sessionID := deg.ParentAgentID.String()
 
-	// Timestamp for the synthetic event
-	ts := deg.CreatedAt.Time.Format("2006-01-02T15:04:05Z07:00")
+	// FIX (finding #4): Use server clock (now) so synthetic bridge events don't trip the ±10min skew rule.
+	ts := time.Now().UTC().Format("2006-01-02T15:04:05Z")
 
 	req := service.WorkEventRequest{
 		Schema:       "agentos.work_event/v1",
@@ -174,12 +183,9 @@ func (a *API) synthesizeWorkEvent(deg db.Delegation) error {
 	}
 	svc := service.NewIngestService(a.queries, a.bus, slog.Default(), artifactsPath)
 
-	ctx := context.Background()
 	_, _, err := svc.Ingest(ctx, req)
 	return err
 }
-
-
 
 // UpdateDelegationStatus handles PATCH /api/delegations/{id} — Hermes fires this on completion/failure.
 func (a *API) UpdateDelegationStatus(w http.ResponseWriter, r *http.Request) {
@@ -226,6 +232,19 @@ func (a *API) UpdateDelegationStatus(w http.ResponseWriter, r *http.Request) {
 		"task_goal":        deg.TaskGoal,
 		"status":           deg.Status,
 	})
+
+	// FIX (finding #5): Synthesize a work_event for terminal delegation states via PATCH path.
+	// CreateDelegation already handles the POST path. UpdateDelegationStatus carries
+	// completion/failure, so we must synthesize session.end here too.
+	if req.Status == "completed" || req.Status == "failed" || req.Status == "interrupted" {
+		if err := a.synthesizeWorkEvent(r.Context(), deg); err != nil {
+			slog.Default().Warn("failed to synthesize work_event from delegation update",
+				"delegation_id", deg.ID.String(),
+				"error", err,
+			)
+			// Still return success for the delegation update itself, but log the failure
+		}
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(delegationToResponse(deg))
