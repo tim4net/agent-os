@@ -255,6 +255,53 @@ func TestIntegrationProjectResolution(t *testing.T) {
 	}
 }
 
+// --- TestIntegrationProjectResolutionCreatesNew ---
+// AC5 "resolves-or-creates": prove the CREATE half when no pre-existing project.
+func TestIntegrationProjectResolutionCreatesNew(t *testing.T) {
+	pool := getTestDB(t)
+	queries := db.New(pool)
+	bus := NewEventBus()
+	svc := NewIngestService(queries, bus, slog.Default(), "/tmp/aos-artifacts")
+
+	// Ensure the project does NOT already exist (teardown from prior runs)
+	_, _ = pool.Exec(context.Background(), "DELETE FROM projects WHERE slug = 'create-test-project'")
+
+	eventID := uuid.NewString()
+	req := validIngestRequest(eventID)
+	req.ProjectHint = "create-test-project"
+
+	row, httpStatus, err := svc.Ingest(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Ingest error: %v", err)
+	}
+	if httpStatus != 201 {
+		t.Fatalf("expected 201, got %d", httpStatus)
+	}
+
+	// Verify the project was CREATED (not just resolved)
+	var slug, tenant, tracker string
+	err = pool.QueryRow(context.Background(),
+		"SELECT slug, tenant, tracker FROM projects WHERE slug = 'create-test-project'",
+	).Scan(&slug, &tenant, &tracker)
+	if err != nil {
+		t.Fatalf("project was not created by EnsureProjectBySlug: %v", err)
+	}
+	if slug != "create-test-project" {
+		t.Fatalf("expected slug 'create-test-project', got %q", slug)
+	}
+	if tracker != "agent_os_native" {
+		t.Fatalf("expected default tracker 'agent_os_native', got %q", tracker)
+	}
+
+	// Verify work_event references the new project
+	if !row.ProjectID.Valid {
+		t.Fatal("expected work_event.project_id to be set")
+	}
+
+	// Teardown
+	_, _ = pool.Exec(context.Background(), "DELETE FROM projects WHERE slug = 'create-test-project'")
+}
+
 // --- TestIntegrationProjectResolutionFromCwd ---
 // AC: cwd extracts basename as project slug and resolves-or-creates.
 func TestIntegrationProjectResolutionFromCwd(t *testing.T) {
