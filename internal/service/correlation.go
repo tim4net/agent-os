@@ -7,12 +7,13 @@ import (
 	"github.com/tim4net/agent-os/internal/db"
 )
 
-// WorkUnit is the correlated (or uncorrelated) grouping of work-events that share the
-// correlation key (project_id, external_ref, branch, sha) — contract §7, ADR-001 D6.
-// A unit with Correlated=false is the bucket of events that carry no key part; it is
-// always surfaced, never dropped (ADR-001 F3).
+// WorkUnit is the correlated (or uncorrelated) grouping of work-events sharing the
+// correlation key (tenant, project_id, external_ref, branch, sha) — contract §7 + ADR-002.
+// Correlated=false means the group carries no code/tracker anchor (external_ref/branch/sha);
+// such units are still surfaced (grouped by tenant+project), never dropped (ADR-001 F3).
 type WorkUnit struct {
-	ProjectKey   string    `json:"project_key"`
+	Tenant       string    `json:"tenant,omitempty"`
+	ProjectKey   string    `json:"project_key,omitempty"`
 	ExternalRef  string    `json:"external_ref,omitempty"`
 	Branch       string    `json:"branch,omitempty"`
 	Sha          string    `json:"sha,omitempty"`
@@ -23,12 +24,15 @@ type WorkUnit struct {
 	Correlated   bool      `json:"correlated"`
 }
 
-// WorkUnitLister is the subset of db.Queries the correlation engine needs. Declaring it
-// here (consumer-side interface) keeps the engine testable with a fake — DIP.
+// WorkUnitLister is the consumer-side subset of db.Queries the engine needs (DIP),
+// keeping the engine unit-testable with a fake.
 type WorkUnitLister interface {
 	ListWorkUnits(ctx context.Context, arg db.ListWorkUnitsParams) ([]db.ListWorkUnitsRow, error)
 	CountWorkUnits(ctx context.Context) (int64, error)
 }
+
+// maxWorkUnitLimit caps a single page to bound query/memory cost (DoS guard).
+const maxWorkUnitLimit = 200
 
 // CorrelationEngine groups work-events into work-units.
 type CorrelationEngine struct {
@@ -41,15 +45,18 @@ func NewCorrelationEngine(q WorkUnitLister) *CorrelationEngine {
 }
 
 // ListWorkUnits returns one WorkUnit per correlation group, newest activity first.
-// limit<=0 defaults to 50; offset<0 clamps to 0.
-func (e *CorrelationEngine) ListWorkUnits(ctx context.Context, limit, offset int32) ([]WorkUnit, error) {
+// limit<=0 defaults to 50 and is hard-capped at maxWorkUnitLimit; offset<0 clamps to 0.
+func (e *CorrelationEngine) ListWorkUnits(ctx context.Context, limit, offset int) ([]WorkUnit, error) {
 	if limit <= 0 {
 		limit = 50
+	}
+	if limit > maxWorkUnitLimit {
+		limit = maxWorkUnitLimit
 	}
 	if offset < 0 {
 		offset = 0
 	}
-	rows, err := e.q.ListWorkUnits(ctx, db.ListWorkUnitsParams{Limit: limit, Offset: offset})
+	rows, err := e.q.ListWorkUnits(ctx, db.ListWorkUnitsParams{Limit: int32(limit), Offset: int32(offset)})
 	if err != nil {
 		return nil, err
 	}
@@ -68,6 +75,7 @@ func (e *CorrelationEngine) Count(ctx context.Context) (int64, error) {
 // rowToWorkUnit maps a generated row to the domain type, normalizing pgtype wrappers.
 func rowToWorkUnit(r db.ListWorkUnitsRow) WorkUnit {
 	u := WorkUnit{
+		Tenant:       r.Tenant,
 		ProjectKey:   r.ProjectKey,
 		ExternalRef:  r.ExternalRef,
 		Branch:       r.Branch,

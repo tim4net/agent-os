@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"strconv"
 
@@ -28,32 +29,45 @@ func (a *API) WorkUnitRoutes() http.Handler {
 // ListWorkUnits handles GET /api/work-units?limit=50&offset=0 — correlated + uncorrelated
 // groupings of work-events (ADR-001 D6/F3). Uncorrelated events are surfaced, never dropped.
 func (a *API) ListWorkUnits(w http.ResponseWriter, r *http.Request) {
+	// Parse as int64 then bound BEFORE narrowing, so a huge value can't wrap (DoS guard).
 	limit := 50
 	offset := 0
 	if l := r.URL.Query().Get("limit"); l != "" {
-		if n, err := strconv.Atoi(l); err == nil && n > 0 {
-			limit = n
+		if n, err := strconv.ParseInt(l, 10, 64); err == nil && n > 0 {
+			if n > 1_000_000 { // engine hard-caps to 200; this just prevents absurd inputs
+				n = 1_000_000
+			}
+			limit = int(n)
 		}
 	}
 	if o := r.URL.Query().Get("offset"); o != "" {
-		if n, err := strconv.Atoi(o); err == nil && n >= 0 {
-			offset = n
+		if n, err := strconv.ParseInt(o, 10, 64); err == nil && n >= 0 {
+			if n > 1_000_000_000 {
+				n = 1_000_000_000
+			}
+			offset = int(n)
 		}
 	}
 
 	engine := service.NewCorrelationEngine(a.queries)
-	units, err := engine.ListWorkUnits(r.Context(), int32(limit), int32(offset))
+	units, err := engine.ListWorkUnits(r.Context(), limit, offset)
 	if err != nil {
-		http.Error(w, "failed to list work units: "+err.Error(), http.StatusInternalServerError)
+		log.Printf("work-units: list failed: %v", err)
+		http.Error(w, "failed to list work units", http.StatusInternalServerError)
 		return
 	}
 	total, err := engine.Count(r.Context())
 	if err != nil {
-		http.Error(w, "failed to count work units: "+err.Error(), http.StatusInternalServerError)
+		log.Printf("work-units: count failed: %v", err)
+		http.Error(w, "failed to count work units", http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	// reflect the actual cap the engine applied
+	if limit > 200 {
+		limit = 200
+	}
 	json.NewEncoder(w).Encode(WorkUnitsResponse{
 		WorkUnits: units,
 		Total:     total,
