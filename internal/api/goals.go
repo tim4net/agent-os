@@ -259,7 +259,7 @@ func (a *API) BreakdownGoal(w http.ResponseWriter, r *http.Request) {
 	}
 
 	chatReq := chatRequest{
-		Model: "free-fast",
+		Model: a.llmModel,
 		Messages: []chatMessage{
 			{Role: "system", Content: "You are a project planner. Break this goal into 5-10 specific actionable tasks. Return as JSON array of {title, description, priority(1-5)}. Return ONLY the JSON array, no other text."},
 			{Role: "user", Content: goalText},

@@ -112,7 +112,7 @@ func main() {
 		"gemini":     cfg.GeminiAPIKey,
 		"fal":        cfg.FALKey,
 	}
-	a := api.NewAPI(queries, pool, harness.DefaultRegistry, bus, feed, cfg.LiteLLMURL, cfg.ArtifactsPath, cfg.ObsidianPath, cfg.HermesSkillsPath, apiKeys, cfg.HermesAPIKey, cfg.ZAIAPIKey, cfg.OpenRouterAPIKey)
+	a := api.NewAPI(queries, pool, harness.DefaultRegistry, bus, feed, cfg.LiteLLMURL, cfg.ArtifactsPath, cfg.ObsidianPath, cfg.HermesSkillsPath, apiKeys, cfg.HermesAPIKey, cfg.ZAIAPIKey, cfg.OpenRouterAPIKey, cfg.LLMModel)
 	r.Mount("/api", a.Router())
 
 	// Start background title worker (hourly re-summarization of active conversations)

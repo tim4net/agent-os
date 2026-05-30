@@ -165,7 +165,7 @@ func (a *API) ConversationSummary(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(summaryResponse{Summaries: summaries})
 }
 
-// generateSummary produces a one-line summary using LiteLLM proxy (free-fast model).
+// generateSummary produces a one-line summary using LiteLLM proxy.
 // Falls back to OpenRouter direct if LiteLLM is not configured.
 func (a *API) generateSummary(ctx context.Context, conversationText string) (string, error) {
 	var url, apiKey string
@@ -175,7 +175,7 @@ func (a *API) generateSummary(ctx context.Context, conversationText string) (str
 	if a.litellmURL != "" {
 		// Prefer LiteLLM proxy — follows summarization instructions well
 		url = a.litellmURL + "/v1/chat/completions"
-		model = "free-fast"
+		model = a.llmModel
 		headers = map[string]string{}
 	} else if a.openrouterAPIKey != "" {
 		// Fallback to OpenRouter directly

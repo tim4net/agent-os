@@ -282,7 +282,7 @@ func (a *API) GeneratePipelineContent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	chatReq := chatRequest{
-		Model: "free-fast",
+		Model: a.llmModel,
 		Messages: []chatMessage{
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: userContent},

@@ -359,7 +359,7 @@ func (a *API) RunWorkflow(w http.ResponseWriter, r *http.Request) {
 		}
 
 		chatReq := chatRequest{
-			Model: "free-fast",
+			Model: a.llmModel,
 			Messages: []chatMessage{
 				{Role: "system", Content: "You are an AI assistant executing workflow steps. Provide concise, actionable output."},
 				{Role: "user", Content: prompt},

@@ -25,14 +25,16 @@ type MemoryAPI struct {
 	queries      *db.Queries
 	obsidianPath string
 	litellmURL   string
+	llmModel     string
 }
 
 // NewMemoryAPI creates a new MemoryAPI.
-func NewMemoryAPI(queries *db.Queries, obsidianPath string, litellmURL string) *MemoryAPI {
+func NewMemoryAPI(queries *db.Queries, obsidianPath string, litellmURL string, llmModel string) *MemoryAPI {
 	return &MemoryAPI{
 		queries:      queries,
 		obsidianPath: obsidianPath,
 		litellmURL:   litellmURL,
+		llmModel:     llmModel,
 	}
 }
 
@@ -398,7 +400,7 @@ func (m *MemoryAPI) Synthesize(w http.ResponseWriter, r *http.Request) {
 	)
 
 	chatReq := chatRequest{
-		Model: "free-fast",
+		Model: m.llmModel,
 		Messages: []chatMessage{
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: allContent.String()},

@@ -24,13 +24,14 @@ type API struct {
 	hermesAPIKey     string
 	zaiAPIKey        string
 	openrouterAPIKey string
+	llmModel         string
 	artifacts        *ArtifactAPI
 	memory           *MemoryAPI
 	studio           *StudioAPI
 }
 
 // NewAPI creates a new API instance with the given dependencies.
-func NewAPI(queries *db.Queries, pool *pgxpool.Pool, registry *harness.Registry, bus *service.EventBus, feed *service.ActivityFeed, litellmURL string, artifactsPath string, obsidianPath string, hermesSkillsPath string, apiKeys map[string]string, hermesAPIKey string, zaiAPIKey string, openrouterAPIKey string) *API {
+func NewAPI(queries *db.Queries, pool *pgxpool.Pool, registry *harness.Registry, bus *service.EventBus, feed *service.ActivityFeed, litellmURL string, artifactsPath string, obsidianPath string, hermesSkillsPath string, apiKeys map[string]string, hermesAPIKey string, zaiAPIKey string, openrouterAPIKey string, llmModel string) *API {
 	return &API{
 		queries:          queries,
 		pool:             pool,
@@ -43,8 +44,9 @@ func NewAPI(queries *db.Queries, pool *pgxpool.Pool, registry *harness.Registry,
 		hermesAPIKey:     hermesAPIKey,
 		zaiAPIKey:        zaiAPIKey,
 		openrouterAPIKey: openrouterAPIKey,
+		llmModel:         llmModel,
 		artifacts:        NewArtifactAPI(queries, artifactsPath),
-		memory:           NewMemoryAPI(queries, obsidianPath, litellmURL),
+		memory:           NewMemoryAPI(queries, obsidianPath, litellmURL, llmModel),
 		studio:           NewStudioAPI(queries, artifactsPath, apiKeys),
 	}
 }

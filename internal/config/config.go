@@ -15,6 +15,7 @@ type Config struct {
 	FALKey            string
 	ZAIAPIKey         string
 	HermesAPIKey      string
+	LLMModel          string
 	Port              string
 }
 
@@ -32,6 +33,7 @@ func Load() *Config {
 		FALKey:            getEnv("FAL_KEY", ""),
 		ZAIAPIKey:         getEnv("ZAI_API_KEY", ""),
 		HermesAPIKey:      getEnv("HERMES_API_KEY", ""),
+		LLMModel:          getEnv("LLM_MODEL", "local-qwen"),
 		Port:              getEnv("PORT", "8080"),
 	}
 }
