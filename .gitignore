@@ -33,3 +33,7 @@ agent-os-web.tar.gz
 # Built binaries
 agent-os
 agent-os-server
+
+# local autonomy control state (never commit)
+.autonomy-mode
+.autonomy-halt
