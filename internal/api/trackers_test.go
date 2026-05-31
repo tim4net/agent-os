@@ -331,12 +331,16 @@ func TestTrackerSync_FailureReturns500(t *testing.T) {
 	a, pool, _ := newTestAPIWithDB(t)
 	defer pool.Close()
 
-	// Use a valid-looking project UUID that has no Shortcut project configured,
-	// which will cause Sync to fail (no matching project with shortcut tracker).
-	projectID := uuid.NewString()
+	tenant := fmt.Sprintf("sync-fail-%s", uuid.NewString()[:8])
+	t.Cleanup(func() { cleanupProjects(t, pool, tenant) })
+
+	// Seed a REAL project with a valid tracker but no external_ref.
+	// Sync will proceed past the project lookup (no 404) but fail inside
+	// ShortcutSource because no shortcut external_ref is configured → 500.
+	projectID := seedProject(t, pool, "shortcut", "")
 
 	rec := trackerRequest(a, "GET", "/sync/"+projectID, map[string]string{
-		"tenant": fmt.Sprintf("sync-fail-%s", uuid.NewString()[:8]),
+		"tenant": tenant,
 	})
 
 	if rec.Code != 500 {
