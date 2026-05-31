@@ -176,7 +176,8 @@ def _detect_branch(cwd: str | None = None) -> str | None:
             cwd=cwd or os.getcwd(),
         )
         if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip()
+            branch = result.stdout.strip()
+            return None if branch == "HEAD" else branch
     except Exception:
         pass
     return None

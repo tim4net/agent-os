@@ -206,6 +206,28 @@ class TestHelpers:
         sha = _detect_sha(str(tmp_path))
         assert sha is not None and len(sha) >= 7
 
+    def test_detect_branch_in_detached_head_returns_none(self, tmp_path: object) -> None:
+        """Regression: detached-HEAD must return None, not the literal 'HEAD'."""
+        import subprocess
+        subprocess.run(["git", "init"], cwd=str(tmp_path), check=True,
+                       capture_output=True)
+        readme = tmp_path / "README.md"  # type: ignore
+        readme.write_text("init")
+        subprocess.run(["git", "add", "."], cwd=str(tmp_path), check=True,
+                       capture_output=True)
+        subprocess.run(["git", "-c", "user.name=test", "-c",
+                        "user.email=t@t", "commit", "-m", "init"],
+                       cwd=str(tmp_path), check=True, capture_output=True)
+        # Detach HEAD by checking out the commit SHA
+        sha_out = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=str(tmp_path),
+            check=True, capture_output=True, text=True,
+        )
+        subprocess.run(["git", "checkout", sha_out.stdout.strip()],
+                       cwd=str(tmp_path), check=True, capture_output=True)
+        branch = _detect_branch(str(tmp_path))
+        assert branch is None, f"Expected None in detached HEAD, got {branch!r}"
+
 
 # ---------------------------------------------------------------------------
 # Emitter tests (using httpx.MockTransport — Finding 2)
