@@ -151,6 +151,12 @@ func (a *API) Router() http.Handler {
 	// Delegation routes (webhook from Hermes)
 	r.Mount("/delegations", a.DelegationRoutes())
 
+	// Work-event ingestion (WP-A, contract v1.1 §1 → POST /api/events/work).
+	// Registered as a direct route rather than r.Mount("/events", …) because the
+	// SSE bus already owns GET /events (below); a direct POST /events/work keeps
+	// both intents without a chi mount collision.
+	r.Post("/events/work", a.IngestWorkEvent)
+
 	// Work units (correlation) routes
 	r.Mount("/work-units", a.WorkUnitRoutes())
 

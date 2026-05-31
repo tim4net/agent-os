@@ -59,11 +59,15 @@ type Querier interface {
 	GetProjectBySlug(ctx context.Context, slug string) (Project, error)
 	GetSkill(ctx context.Context, id pgtype.UUID) (Skill, error)
 	GetTask(ctx context.Context, id pgtype.UUID) (Task, error)
+	GetWorkEventByEventID(ctx context.Context, eventID pgtype.UUID) (WorkEvent, error)
+	GetWorkEventsBySession(ctx context.Context, arg GetWorkEventsBySessionParams) ([]WorkEvent, error)
 	// All events in one group (drill-down). Matches the same 5-part key as ListWorkUnits,
 	// NULL-safe so the uncorrelated buckets match rows with NULL key parts.
 	GetWorkUnitEvents(ctx context.Context, arg GetWorkUnitEventsParams) ([]WorkEvent, error)
 	GetWorkflow(ctx context.Context, id pgtype.UUID) (Workflow, error)
 	GetWorkflowRun(ctx context.Context, id pgtype.UUID) (WorkflowRun, error)
+	// Upsert by event_id: inserts new row, on conflict does nothing and returns nothing (pgx.ErrNoRows).
+	InsertWorkEvent(ctx context.Context, arg InsertWorkEventParams) (WorkEvent, error)
 	ListAgents(ctx context.Context) ([]Agent, error)
 	ListArtifacts(ctx context.Context, arg ListArtifactsParams) ([]Artifact, error)
 	ListConversations(ctx context.Context, dollar_1 pgtype.UUID) ([]Conversation, error)
