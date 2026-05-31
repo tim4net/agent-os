@@ -38,6 +38,33 @@ all `internal/db/*.sql.go` aggregates.
 ## Pre-assigned migration number(s)
 <e.g. 000017, or "none">
 
+## UI work packages (REQUIRED if this WP creates/changes anything under `web/src/`)
+<!-- Mockup-first, in-place, auto-merge. This is the project's UI contract. -->
+- **Owner:** `lead` (UI is Lead-built — best design skills, per the standing decision).
+- **Mockup-first (do BEFORE coding):**
+  1. Check for an existing mockup. The Observe/SPOG surfaces have one:
+     `/home/tim/Obsidian/projects/agent-os/spog-ui-mockup.md` (+ `spog-ui-mockup.html`).
+     If a directionally-correct mockup exists, build against it — don't re-derive pixels.
+  2. If none exists, build a mockup (real aurora-theme tokens from
+     `web/public/themes/aurora.css`; the exact data shape the API returns) and get Tim's
+     explicit sign-off on the mockup BEFORE implementing. Design discussion stays in
+     discussion mode until he approves a direction.
+- **In-place, no fork:** reuse `glass-card`, the CSS-var tokens (`--bg-card`, `--accent-*`,
+  `--radius-*`, `--glass-blur`), Tailwind utilities, and the Material `Icon` component, so it
+  auto-themes across aurora/daylight/noir. No new color system; match the existing app shell.
+- **Honesty in the UI:** never render a stored flag as live truth — derive status from the
+  data the server provides (F10). A card that lies about a dead agent being alive is worse
+  than no card.
+- **Verify the BUILT result, not just the mockup:** after the deploy gate, load the deployed
+  UI in the browser and confirm it renders real data correctly (both happy + empty states);
+  fold any vision nits. Component/route tests per the Test plan still apply.
+- **MERGE POLICY (Tim's decision 2026-05-31): auto-merge COVERS UI for agent-os.** Once the
+  3 gates + green-baseline + hpms1 deploy gate pass, Lead merges without a separate
+  human visual-OK-before-PR hold. NOTE: this intentionally DEVIATES from the Rewst/Riftwing
+  `riftwing-ui-mockup-workflow` Gate 4 (which holds visual PRs for Tim's OK). That gate is a
+  dayjob convention; this is Tim's private tool and he granted autonomous UI merge here. Do
+  not import Gate 4 into this project.
+
 ## Acceptance criteria (must all pass before review request)
 - [ ] <behavioral criterion 1 — concrete, testable>
 - [ ] <criterion 2>
