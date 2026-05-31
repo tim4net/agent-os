@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"log/slog"
 	"net/http"
@@ -15,12 +16,24 @@ import (
 )
 
 // TrackerRoutes returns a Chi router for tracker item endpoints.
-// All endpoints are read-only (contract §8, ADR-001 D4/D5).
+// All list endpoints are read-only (contract §8, ADR-001 D4/D5).
+// The sync endpoint triggers a write (upsert) through the TrackerSyncer interface.
 func (a *API) TrackerRoutes() http.Handler {
 	r := chi.NewRouter()
 	r.Get("/", a.ListTrackerItems)
 	r.Get("/sync/{projectID}", a.SyncTrackerItems)
 	return r
+}
+
+// clampLimit ensures the pagination limit is within [1, MaxTrackerItemLimit].
+func clampLimit(n int) int {
+	if n <= 0 {
+		return 50
+	}
+	if n > service.MaxTrackerItemLimit {
+		return service.MaxTrackerItemLimit
+	}
+	return n
 }
 
 // ListTrackerItems handles GET /api/trackers/items?project_id=...&tenant=...&limit=50&offset=0
@@ -31,9 +44,6 @@ func (a *API) ListTrackerItems(w http.ResponseWriter, r *http.Request) {
 
 	if l := r.URL.Query().Get("limit"); l != "" {
 		if n, err := strconv.ParseInt(l, 10, 64); err == nil && n > 0 {
-			if n > 1_000_000 {
-				n = 1_000_000
-			}
 			limit = int(n)
 		}
 	}
@@ -45,6 +55,9 @@ func (a *API) ListTrackerItems(w http.ResponseWriter, r *http.Request) {
 			offset = int(n)
 		}
 	}
+
+	// Clamp limit BEFORE any query (DoS guard — Finding #5).
+	limit = clampLimit(limit)
 
 	projectIDStr := r.URL.Query().Get("project_id")
 	tenant := r.URL.Query().Get("tenant")
@@ -63,11 +76,7 @@ func (a *API) ListTrackerItems(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "failed to list tracker items", http.StatusInternalServerError)
 			return
 		}
-		if limit > 200 {
-			limit = 200
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(service.TrackerItemListResponse{
+		writeJSON(w, http.StatusOK, service.TrackerItemListResponse{
 			Items:  items,
 			Total:  int64(len(items)),
 			Limit:  limit,
@@ -104,12 +113,8 @@ func (a *API) ListTrackerItems(w http.ResponseWriter, r *http.Request) {
 	for _, row := range rows {
 		items = append(items, service.TrackerItemFromDB(row))
 	}
-	if limit > 200 {
-		limit = 200
-	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(service.TrackerItemListResponse{
+	writeJSON(w, http.StatusOK, service.TrackerItemListResponse{
 		Items:  items,
 		Total:  total,
 		Limit:  limit,
@@ -119,7 +124,7 @@ func (a *API) ListTrackerItems(w http.ResponseWriter, r *http.Request) {
 
 // SyncTrackerItems handles GET /api/trackers/items/sync/{projectID}?tenant=...
 // Triggers a one-shot sync of Shortcut stories for the given project.
-// Returns the count of items synced.
+// Returns SyncResult with synced/failed counts.
 func (a *API) SyncTrackerItems(w http.ResponseWriter, r *http.Request) {
 	projectIDStr := chi.URLParam(r, "projectID")
 	tenant := r.URL.Query().Get("tenant")
@@ -135,15 +140,21 @@ func (a *API) SyncTrackerItems(w http.ResponseWriter, r *http.Request) {
 	}
 
 	src := service.NewShortcutSource(a.queries, slog.Default().WithGroup("shortcut"))
-	count, err := src.Sync(r.Context(), projectID, tenant)
+	result, err := src.Sync(r.Context(), projectID, tenant)
 	if err != nil {
 		log.Printf("trackers: sync failed: %v", err)
-		http.Error(w, "failed to sync tracker items", http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("failed to sync tracker items: %v", err), http.StatusInternalServerError)
 		return
 	}
 
+	writeJSON(w, http.StatusOK, result)
+}
+
+// writeJSON encodes v as JSON and writes to w. Logs on encode error (Finding #8).
+func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
-		"synced": count,
-	})
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		log.Printf("trackers: json encode error: %v", err)
+	}
 }

@@ -20,7 +20,7 @@ type TrackerItemEntry struct {
 	Title        string    `json:"title"`
 	Status       string    `json:"status"`
 	ItemType     string    `json:"item_type"`              // story|bug|chore|task|feature
-	CanonicalURL string    `json:"canonical_url,omitempty"` // link back to source
+	CanonicalURL string    `json:"canonical_url"`         // link back to source (empty string if absent)
 	Tenant       string    `json:"tenant"`
 	SyncedAt     time.Time `json:"synced_at"`
 	CreatedAt    time.Time `json:"created_at"`
@@ -45,10 +45,22 @@ type TrackerSource interface {
 
 	// Get fetches a single tracker item by project + external_ref.
 	Get(ctx context.Context, projectID pgtype.UUID, externalRef string) (*TrackerItemEntry, error)
+}
 
+// TrackerSyncer is the write/sync interface for pluggable tracker backends.
+// Sync performs DB upserts, so it is separated from the read-only TrackerSource
+// to prevent a holder of the read-only interface from triggering writes.
+type TrackerSyncer interface {
 	// Sync fetches latest state from the external tracker and upserts into DB.
-	// Returns the number of items synced.
-	Sync(ctx context.Context, projectID pgtype.UUID, tenant string) (int, error)
+	// Returns the number of items synced and a count of failures.
+	// Returns a non-nil error if any item failed to upsert.
+	Sync(ctx context.Context, projectID pgtype.UUID, tenant string) (SyncResult, error)
+}
+
+// SyncResult captures the outcome of a Sync operation.
+type SyncResult struct {
+	Synced int
+	Failed int
 }
 
 // TrackerItemFromDB maps a generated db.TrackerItem row to the domain TrackerItemEntry.

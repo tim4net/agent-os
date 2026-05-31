@@ -20,9 +20,9 @@ WHERE project_id = $1 AND external_ref = $2;
 
 -- name: ListTrackerItemsByProject :many
 SELECT * FROM tracker_items
-WHERE project_id = $1
+WHERE project_id = $1 AND tenant = $2
 ORDER BY synced_at DESC
-LIMIT $2 OFFSET $3;
+LIMIT $3 OFFSET $4;
 
 -- name: ListTrackerItemsByTenant :many
 SELECT * FROM tracker_items

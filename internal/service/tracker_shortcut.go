@@ -18,8 +18,9 @@ import (
 
 const shortcutBaseURL = "https://app.shortcut.com/api/v3"
 
-// maxTrackerItemLimit caps pagination for tracker item listings (DoS guard).
-const maxTrackerItemLimit = 200
+// MaxTrackerItemLimit caps pagination for tracker item listings (DoS guard).
+// Exported so the API layer can use the same constant.
+const MaxTrackerItemLimit = 200
 
 // ShortcutStory is the deserialized shape of a Shortcut API story response.
 type ShortcutStory struct {
@@ -38,6 +39,7 @@ type ShortcutStory struct {
 type ShortcutClient struct {
 	apiToken string
 	client   *http.Client
+	baseURL  string // overridable for testing
 	log      *slog.Logger
 }
 
@@ -47,6 +49,7 @@ func NewShortcutClient(log *slog.Logger) *ShortcutClient {
 	return &ShortcutClient{
 		apiToken: token,
 		client:   &http.Client{Timeout: 30 * time.Second},
+		baseURL:  shortcutBaseURL,
 		log:      log,
 	}
 }
@@ -68,7 +71,7 @@ func (c *ShortcutClient) listStories(ctx context.Context, shortcutProjectID int6
 	cursor := ""
 
 	for {
-		url := fmt.Sprintf("%s/projects/%d/stories", shortcutBaseURL, shortcutProjectID)
+		url := fmt.Sprintf("%s/projects/%d/stories", c.baseURL, shortcutProjectID)
 		if cursor != "" {
 			url += "?next=" + cursor
 		}
@@ -120,7 +123,7 @@ type TrackerQuerier interface {
 	GetTrackerProjects(ctx context.Context, arg db.GetTrackerProjectsParams) ([]db.Project, error)
 }
 
-// ShortcutSource implements TrackerSource for Shortcut (WP-E).
+// ShortcutSource implements TrackerSource + TrackerSyncer for Shortcut (WP-E).
 // Read-only: only GET calls to the Shortcut REST API. No writes.
 type ShortcutSource struct {
 	client *ShortcutClient
@@ -137,13 +140,22 @@ func NewShortcutSource(q TrackerQuerier, log *slog.Logger) *ShortcutSource {
 	}
 }
 
-// List returns tracker items for a project from the DB (already synced).
+// NewShortcutSourceWithClient creates a ShortcutSource with an injected client (for testing).
+func NewShortcutSourceWithClient(q TrackerQuerier, client *ShortcutClient, log *slog.Logger) *ShortcutSource {
+	return &ShortcutSource{
+		client: client,
+		q:      q,
+		log:    log,
+	}
+}
+
+// List returns tracker items for a project from the DB (already synced), tenant-scoped.
 func (s *ShortcutSource) List(ctx context.Context, projectID pgtype.UUID, tenant string, limit, offset int) ([]TrackerItemEntry, error) {
 	if limit <= 0 {
 		limit = 50
 	}
-	if limit > maxTrackerItemLimit {
-		limit = maxTrackerItemLimit
+	if limit > MaxTrackerItemLimit {
+		limit = MaxTrackerItemLimit
 	}
 	if offset < 0 {
 		offset = 0
@@ -151,6 +163,7 @@ func (s *ShortcutSource) List(ctx context.Context, projectID pgtype.UUID, tenant
 
 	rows, err := s.q.ListTrackerItemsByProject(ctx, db.ListTrackerItemsByProjectParams{
 		ProjectID: projectID,
+		Tenant:    tenant,
 		Limit:     int32(limit),
 		Offset:    int32(offset),
 	})
@@ -179,15 +192,16 @@ func (s *ShortcutSource) Get(ctx context.Context, projectID pgtype.UUID, externa
 }
 
 // Sync fetches stories from Shortcut and upserts them into tracker_items.
-// Returns the number of items synced. Only uses GET requests to Shortcut (F5 gate).
-func (s *ShortcutSource) Sync(ctx context.Context, projectID pgtype.UUID, tenant string) (int, error) {
+// Returns SyncResult with synced/failed counts.
+// Returns a non-nil error if any upsert failed (Finding #4: never silently drop).
+func (s *ShortcutSource) Sync(ctx context.Context, projectID pgtype.UUID, tenant string) (SyncResult, error) {
 	// Find the shortcut project's external_ref to know which Shortcut project to poll.
 	projects, err := s.q.GetTrackerProjects(ctx, db.GetTrackerProjectsParams{
 		Tracker: "shortcut",
 		Tenant:  tenant,
 	})
 	if err != nil {
-		return 0, fmt.Errorf("shortcut: get projects: %w", err)
+		return SyncResult{}, fmt.Errorf("shortcut: get projects: %w", err)
 	}
 
 	// Find the matching project — the external_ref holds the Shortcut numeric project ID.
@@ -199,22 +213,24 @@ func (s *ShortcutSource) Sync(ctx context.Context, projectID pgtype.UUID, tenant
 		}
 	}
 	if shortcutProjectRef == "" {
-		return 0, fmt.Errorf("shortcut: project %s has no shortcut external_ref configured", projectID.String())
+		return SyncResult{}, fmt.Errorf("shortcut: project %s has no shortcut external_ref configured", projectID.String())
 	}
 
 	// Parse the Shortcut project numeric ID from external_ref.
 	var shortcutProjectID int64
 	if _, err := fmt.Sscanf(shortcutProjectRef, "%d", &shortcutProjectID); err != nil {
-		return 0, fmt.Errorf("shortcut: invalid external_ref %q (expected numeric Shortcut project ID)", shortcutProjectRef)
+		return SyncResult{}, fmt.Errorf("shortcut: invalid external_ref %q (expected numeric Shortcut project ID)", shortcutProjectRef)
 	}
 
 	// Fetch stories from Shortcut (read-only GET only).
 	stories, err := s.client.listStories(ctx, shortcutProjectID)
 	if err != nil {
-		return 0, fmt.Errorf("shortcut: fetch stories: %w", err)
+		return SyncResult{}, fmt.Errorf("shortcut: fetch stories: %w", err)
 	}
 
-	count := 0
+	synced := 0
+	failed := 0
+	var firstErr error
 	for _, story := range stories {
 		externalRef := fmt.Sprintf("SC-%d", story.Num)
 		itemType := normalizeItemType(story.EntityType)
@@ -229,6 +245,10 @@ func (s *ShortcutSource) Sync(ctx context.Context, projectID pgtype.UUID, tenant
 		})
 		if err != nil {
 			s.log.Warn("shortcut: failed to marshal story payload", "external_ref", externalRef, "error", err)
+			failed++
+			if firstErr == nil {
+				firstErr = fmt.Errorf("marshal payload for %s: %w", externalRef, err)
+			}
 			continue
 		}
 
@@ -246,13 +266,28 @@ func (s *ShortcutSource) Sync(ctx context.Context, projectID pgtype.UUID, tenant
 		})
 		if err != nil {
 			s.log.Warn("shortcut: failed to upsert item", "external_ref", externalRef, "error", err)
+			failed++
+			if firstErr == nil {
+				firstErr = fmt.Errorf("upsert %s: %w", externalRef, err)
+			}
 			continue
 		}
-		count++
+		synced++
 	}
 
-	s.log.Info("shortcut: sync complete", "project", projectID.String(), "items", count)
-	return count, nil
+	result := SyncResult{Synced: synced, Failed: failed}
+
+	if failed > 0 {
+		s.log.Warn("shortcut: sync completed with failures",
+			"project", projectID.String(),
+			"synced", synced,
+			"failed", failed,
+		)
+		return result, fmt.Errorf("shortcut: sync had %d failure(s); first: %w", failed, firstErr)
+	}
+
+	s.log.Info("shortcut: sync complete", "project", projectID.String(), "items", synced)
+	return result, nil
 }
 
 // normalizeItemType maps Shortcut entity types to the canonical item_type vocabulary.
