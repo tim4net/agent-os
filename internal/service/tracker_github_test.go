@@ -397,6 +397,53 @@ func TestGitHubSync_InvalidExternalRef(t *testing.T) {
 	}
 }
 
+// TestGitHubSync_SkipsPullRequests verifies that pull requests returned by the
+// GitHub /issues endpoint are NOT mirrored as tracker_items. GitHub's endpoint
+// returns both issues and PRs; PRs include a non-nil "pull_request" JSON key.
+// This is a regression test for the dogfood AC violation.
+func TestGitHubSync_SkipsPullRequests(t *testing.T) {
+	// Build a mixed page: one real issue + one pull request.
+	issue := testGitHubIssue(42, "A real issue", "open", "https://github.com/tim4net/agent-os/issues/42")
+
+	prEnv := testGitHubIssue(16, "WP-F: GitHub Issues tracker", "open", "https://github.com/tim4net/agent-os/pull/16")
+	prRaw := json.RawMessage(`{"url":"https://api.github.com/repos/tim4net/agent-os/pulls/16","html_url":"https://github.com/tim4net/agent-os/pull/16","diff_url":"https://github.com/tim4net/agent-os/pull/16.diff","patch_url":"https://github.com/tim4net/agent-os/pull/16.patch"}`)
+	prEnv.PullRequest = &prRaw
+
+	mixed := []githubIssueEnvelope{issue, prEnv}
+
+	srv := stubGitHubServer(mixed)
+	defer srv.Close()
+
+	fake := newFakeGitHubTrackerQuerier()
+	log := slog.Default()
+
+	src := NewGitHubSourceWithClient(fake, &GitHubClient{
+		apiToken: "test-token",
+		client:   srv.Client(),
+		baseURL:  srv.URL,
+		log:      log,
+	}, log)
+
+	result, err := src.Sync(context.Background(), testProjectUUID, "dayjob")
+	if err != nil {
+		t.Fatalf("Sync returned unexpected error: %v", err)
+	}
+
+	// Only the issue should have been upserted; the PR must be skipped.
+	if result.Synced != 1 {
+		t.Errorf("Synced=%d, want 1 (PR should have been skipped)", result.Synced)
+	}
+	if result.Failed != 0 {
+		t.Errorf("Failed=%d, want 0", result.Failed)
+	}
+	if len(fake.upserted) != 1 {
+		t.Fatalf("upserted=%d, want 1 — PR leaked into tracker_items", len(fake.upserted))
+	}
+	if fake.upserted[0].ExternalRef != "#42" {
+		t.Errorf("upserted[0].ExternalRef=%q, want %q (the issue, not the PR)", fake.upserted[0].ExternalRef, "#42")
+	}
+}
+
 // TestGitHubList_TenantIsolation verifies that List scoped to a tenant only returns
 // items for that tenant, even when another tenant has items in the same project.
 func TestGitHubList_TenantIsolation(t *testing.T) {
@@ -472,9 +519,9 @@ func TestGitHubList_Pagination(t *testing.T) {
 	fake := newFakeGitHubTrackerQuerier()
 	log := slog.Default()
 
-	// Seed 5 items.
+	// Seed MaxTrackerItemLimit+1 (201) items to actually exercise boundary conditions.
 	testPK := fmt.Sprintf("%s:test", testProjectUUID.String())
-	for i := 0; i < 5; i++ {
+	for i := 0; i < MaxTrackerItemLimit+1; i++ {
 		item := db.TrackerItem{
 			ProjectID: testProjectUUID,
 			ExternalRef: fmt.Sprintf("#%d", i+1),
@@ -494,26 +541,26 @@ func TestGitHubList_Pagination(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List returned error: %v", err)
 	}
-	if len(items) != 5 {
-		t.Errorf("List(limit=0) returned %d items, want 5", len(items))
+	if len(items) != 50 {
+		t.Errorf("List(limit=0) returned %d items, want 50 (default)", len(items))
 	}
 
-	// limit > MaxTrackerItemLimit is clamped.
+	// limit > MaxTrackerItemLimit is clamped to MaxTrackerItemLimit (200).
 	items, err = src.List(context.Background(), testProjectUUID, "test", 999, 0)
 	if err != nil {
 		t.Fatalf("List returned error: %v", err)
 	}
-	if len(items) != 5 {
-		t.Errorf("List(limit=999) returned %d items, want 5", len(items))
+	if len(items) != MaxTrackerItemLimit {
+		t.Errorf("List(limit=999) returned %d items, want %d (MaxTrackerItemLimit clamped)", len(items), MaxTrackerItemLimit)
 	}
 
-	// offset=2, limit=2 returns 2 items starting from the 3rd.
-	items, err = src.List(context.Background(), testProjectUUID, "test", 2, 2)
+	// offset=150, limit=200 returns 51 items (201 total - 150 offset).
+	items, err = src.List(context.Background(), testProjectUUID, "test", 200, 150)
 	if err != nil {
 		t.Fatalf("List returned error: %v", err)
 	}
-	if len(items) != 2 {
-		t.Errorf("List(limit=2,offset=2) returned %d items, want 2", len(items))
+	if len(items) != 51 {
+		t.Errorf("List(limit=200,offset=150) returned %d items, want 51", len(items))
 	}
 }
 

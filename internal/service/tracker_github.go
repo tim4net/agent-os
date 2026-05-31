@@ -47,6 +47,11 @@ type GitHubIssue struct {
 }
 
 // githubIssueEnvelope wraps the raw GitHub API issue response (with label objects).
+// GitHub's /repos/{owner}/{repo}/issues endpoint returns BOTH issues and pull
+// requests. Pull requests include a non-nil "pull_request" key; issues omit it.
+// We must skip envelopes where PullRequest is non-nil to avoid mirroring PRs
+// as tracker_items (violates the dogfood AC — this repo's PRs must not pollute
+// the issue mirror).
 type githubIssueEnvelope struct {
 	Number    int       `json:"number"`
 	Title     string    `json:"title"`
@@ -58,8 +63,9 @@ type githubIssueEnvelope struct {
 	Milestone *struct {
 		Title string `json:"title"`
 	} `json:"milestone,omitempty"`
-	User   *githubUser  `json:"user,omitempty"`
-	Labels []githubLabel `json:"labels,omitempty"`
+	User        *githubUser       `json:"user,omitempty"`
+	Labels      []githubLabel     `json:"labels,omitempty"`
+	PullRequest *json.RawMessage  `json:"pull_request,omitempty"`
 }
 
 // toGitHubIssue flattens the raw envelope into our simplified struct, extracting label names.
@@ -150,6 +156,12 @@ func (c *GitHubClient) listIssues(ctx context.Context, owner, repo string) ([]Gi
 		}
 
 		for _, env := range envelopes {
+			// Skip pull requests — the /issues endpoint returns both issues
+			// and PRs; PRs have a non-nil pull_request key. Mirroring PRs
+			// as tracker_items violates the dogfood AC.
+			if env.PullRequest != nil {
+				continue
+			}
 			allIssues = append(allIssues, env.toGitHubIssue())
 		}
 
@@ -341,15 +353,8 @@ func (s *GitHubSource) Sync(ctx context.Context, projectID pgtype.UUID, tenant s
 }
 
 // githubStateToItemType maps GitHub issue states to the canonical item_type vocabulary.
-// GitHub has no entity types like Shortcut — issues are just issues, so we
-// use heuristics from labels to infer type, defaulting to "bug" or "task".
+// GitHub issues have no entity types like Shortcut stories/bugs/chores — every
+// issue is normalized to "task" regardless of state or labels.
 func githubStateToItemType(state string) string {
-	// GitHub issues don't have entity types like Shortcut stories/bugs/chores.
-	// We normalize to "task" for open issues and leave status as the state field.
-	switch strings.ToLower(state) {
-	case "open", "closed":
-		return "task"
-	default:
-		return "task"
-	}
+	return "task"
 }
