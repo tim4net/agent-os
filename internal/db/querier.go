@@ -17,8 +17,8 @@ type Querier interface {
 	CountSubtasks(ctx context.Context, parentTaskID pgtype.UUID) (int64, error)
 	CountTrackerItemsByProject(ctx context.Context, arg CountTrackerItemsByProjectParams) (int64, error)
 	CountTrackerItemsByTenant(ctx context.Context, tenant string) (int64, error)
-	// Consistent with ListWorkUnits grouping (same key) so pagination Total matches.
-	CountWorkUnits(ctx context.Context) (int64, error)
+	// Consistent with ListWorkUnits grouping (same key + same tenant filter) so Total matches.
+	CountWorkUnits(ctx context.Context, tenant string) (int64, error)
 	CreateAgent(ctx context.Context, arg CreateAgentParams) (Agent, error)
 	CreateArtifact(ctx context.Context, arg CreateArtifactParams) (Artifact, error)
 	CreateConversation(ctx context.Context, arg CreateConversationParams) (Conversation, error)
@@ -97,6 +97,15 @@ type Querier interface {
 	// Events sharing no code/tracker anchor are surfaced as `correlated=false` units, grouped
 	// by their (tenant, project) context — NEVER dropped (ADR-001 F3). The no-drop invariant:
 	// SUM(event_count) over all units == COUNT(*) of work_events.
+	// Two-level aggregation so liveness is honest (review findings B1/B2/B5):
+	//   1. session_state: collapse each (key, harness, session_id) to ONE session, taking its
+	//      latest LIFECYCLE status (only session.start/heartbeat/end drive status — a later
+	//      artifact.created/note with status='unknown' must NOT mask a terminal session: B1).
+	//   2. session_live: derive per-session liveness from the SERVER clock NOW() (contract §4:
+	//      received_at is the only liveness clock — so we compute it here, not on the browser).
+	//   3. outer: aggregate sessions into the unit with precedence failed>running>stale>done (B2),
+	//      and SUM per-session cost (cumulative per session) for a correct unit total (B5).
+	// Optional tenant filter (B3): @tenant = '' returns all tenants; otherwise scopes to one.
 	ListWorkUnits(ctx context.Context, arg ListWorkUnitsParams) ([]ListWorkUnitsRow, error)
 	ListWorkflowRuns(ctx context.Context, workflowID pgtype.UUID) ([]WorkflowRun, error)
 	ListWorkflows(ctx context.Context) ([]Workflow, error)

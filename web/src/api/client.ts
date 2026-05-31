@@ -772,9 +772,9 @@ export function getTimeline(limit?: number, offset?: number): Promise<TimelineRe
 
 // --- Observe (SPOG): work-units + trackers ---
 
-/** A correlated work-unit from GET /api/work-units. Shape verified against the
- *  live hpms1 response 2026-05-31. A unit groups events by
- *  (project · external_ref · branch · sha · tenant). */
+/** A correlated work-unit from GET /api/work-units. Liveness is derived SERVER-SIDE
+ *  (per-session, from received_at — the only liveness clock, contract §4) and aggregated
+ *  with precedence failed>running>stale>done. The UI renders `liveness` directly. */
 export interface WorkUnit {
   tenant: string
   external_ref: string | null
@@ -785,13 +785,12 @@ export interface WorkUnit {
   first_event_at: string
   last_event_at: string
   correlated: boolean
-  // Optional enrichments the API may add; tolerated if absent.
+  liveness: 'running' | 'done' | 'stale' | 'failed' | ''
+  active_session_count: number
+  latest_kind?: string
   title?: string
   harnesses?: string[]
-  latest_status?: string
-  latest_kind?: string
   cost_usd?: number
-  liveness_mode?: string
 }
 
 export interface WorkUnitsResponse {
@@ -801,8 +800,13 @@ export interface WorkUnitsResponse {
   offset: number
 }
 
-export function getWorkUnits(limit = 50, offset = 0): Promise<WorkUnitsResponse> {
-  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
+/** List work-units. tenant scopes server-side (ADR-002); omit/'' for all tenants. */
+export function getWorkUnits(opts: { tenant?: string; limit?: number; offset?: number } = {}): Promise<WorkUnitsResponse> {
+  const params = new URLSearchParams({
+    limit: String(opts.limit ?? 50),
+    offset: String(opts.offset ?? 0),
+  })
+  if (opts.tenant) params.set('tenant', opts.tenant)
   return request<WorkUnitsResponse>(`/api/work-units?${params.toString()}`)
 }
 

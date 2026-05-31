@@ -14,13 +14,14 @@ import (
 const countWorkUnits = `-- name: CountWorkUnits :one
 SELECT COUNT(*) FROM (
     SELECT 1 FROM work_events
+    WHERE ($1::text = '' OR tenant = $1::text)
     GROUP BY tenant, project_id, external_ref, branch, sha
 ) g
 `
 
-// Consistent with ListWorkUnits grouping (same key) so pagination Total matches.
-func (q *Queries) CountWorkUnits(ctx context.Context) (int64, error) {
-	row := q.db.QueryRow(ctx, countWorkUnits)
+// Consistent with ListWorkUnits grouping (same key + same tenant filter) so Total matches.
+func (q *Queries) CountWorkUnits(ctx context.Context, tenant string) (int64, error) {
+	row := q.db.QueryRow(ctx, countWorkUnits, tenant)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -97,60 +98,89 @@ func (q *Queries) GetWorkUnitEvents(ctx context.Context, arg GetWorkUnitEventsPa
 
 const listWorkUnits = `-- name: ListWorkUnits :many
 
+WITH session_state AS (
+    SELECT
+        tenant, project_id, external_ref, branch, sha, harness, session_id,
+        COUNT(*)                          AS sess_events,
+        MIN(received_at)                  AS sess_first,
+        MAX(received_at)                  AS sess_last,
+        (array_agg(status ORDER BY received_at DESC)
+            FILTER (WHERE status IS NOT NULL
+                    AND kind IN ('session.start', 'session.heartbeat', 'session.end')))[1] AS sess_status,
+        (array_agg(title ORDER BY received_at DESC)
+            FILTER (WHERE title IS NOT NULL AND title <> ''))[1] AS sess_title,
+        (array_agg(kind ORDER BY received_at DESC))[1] AS sess_kind,
+        MAX(cost_usd)                     AS sess_cost
+    FROM work_events
+    WHERE ($3::text = '' OR tenant = $3::text)
+    GROUP BY tenant, project_id, external_ref, branch, sha, harness, session_id
+),
+session_live AS (
+    SELECT tenant, project_id, external_ref, branch, sha, harness, session_id, sess_events, sess_first, sess_last, sess_status, sess_title, sess_kind, sess_cost,
+        CASE
+            WHEN sess_status = 'failed'              THEN 'failed'
+            WHEN sess_status IN ('done', 'cancelled') THEN 'done'
+            WHEN NOW() - sess_last > interval '5 minutes' THEN 'stale'
+            ELSE 'running'
+        END AS sess_liveness
+    FROM session_state
+)
 SELECT
     COALESCE(tenant, '')                  AS tenant,
     COALESCE(project_id::text, '')::text  AS project_key,
     COALESCE(external_ref, '')            AS external_ref,
     COALESCE(branch, '')                  AS branch,
     COALESCE(sha, '')                     AS sha,
-    COUNT(*)                              AS event_count,
-    COUNT(DISTINCT (harness || ':' || session_id)) AS session_count,
-    MIN(received_at)::timestamptz         AS first_event_at,
-    MAX(received_at)::timestamptz         AS last_event_at,
+    SUM(sess_events)::bigint              AS event_count,
+    COUNT(*)::bigint                      AS session_count,
+    MIN(sess_first)::timestamptz          AS first_event_at,
+    MAX(sess_last)::timestamptz           AS last_event_at,
     (external_ref IS NOT NULL OR branch IS NOT NULL OR sha IS NOT NULL) AS correlated,
-    -- Latest status drives liveness honestly (F10): the status of the most recent
-    -- event in the group, ignoring rows that carry no status (e.g. artifact.created).
-    -- COALESCE to '' so a group of only status-less events scans cleanly (not NULL).
-    COALESCE((array_agg(status ORDER BY received_at DESC) FILTER (WHERE status IS NOT NULL))[1], '')::text AS latest_status,
-    -- Latest event kind (for the drill-down / uncorrelated label).
-    COALESCE((array_agg(kind ORDER BY received_at DESC))[1], '')::text AS latest_kind,
-    -- Most recent non-empty title.
-    COALESCE((array_agg(title ORDER BY received_at DESC) FILTER (WHERE title IS NOT NULL AND title <> ''))[1], '')::text AS title,
-    -- Distinct harnesses that contributed (for the harness pills).
+    -- Unit liveness with precedence (B2). Computed from the server clock.
+    CASE
+        WHEN bool_or(sess_liveness = 'failed')  THEN 'failed'
+        WHEN bool_or(sess_liveness = 'running') THEN 'running'
+        WHEN bool_or(sess_liveness = 'stale')   THEN 'stale'
+        ELSE 'done'
+    END::text                             AS liveness,
+    -- Sessions still alive (running or stale) — lets the card show "N active" honestly.
+    COUNT(*) FILTER (WHERE sess_liveness IN ('running', 'stale'))::bigint AS active_session_count,
+    COALESCE((array_agg(sess_title ORDER BY sess_last DESC) FILTER (WHERE sess_title IS NOT NULL))[1], '')::text AS title,
+    COALESCE((array_agg(sess_kind ORDER BY sess_last DESC))[1], '')::text AS latest_kind,
     (array_agg(DISTINCT harness))::text[] AS harnesses,
-    -- cost_usd is cumulative per session (contract §6); MAX is exact for a single-session
-    -- unit. Multi-session units may undercount — acceptable for v1 display. NULL when no
-    -- event carried a cost; stays nullable so the UI can omit it rather than show $0.00.
-    (MAX(cost_usd))::numeric AS cost_usd
-FROM work_events
+    -- SUM of per-session final cost (cumulative per session, contract §6) = correct unit total.
+    (SUM(sess_cost))::numeric             AS cost_usd
+FROM session_live
 GROUP BY tenant, project_id, external_ref, branch, sha
-ORDER BY MAX(received_at) DESC,
+ORDER BY MAX(sess_last) DESC,
          COALESCE(tenant,''), COALESCE(project_id::text,''),
          COALESCE(external_ref,''), COALESCE(branch,''), COALESCE(sha,'')
-LIMIT $1 OFFSET $2
+LIMIT $2 OFFSET $1
 `
 
 type ListWorkUnitsParams struct {
-	Limit  int32 `json:"limit"`
-	Offset int32 `json:"offset"`
+	Off    int32  `json:"off"`
+	Lim    int32  `json:"lim"`
+	Tenant string `json:"tenant"`
 }
 
 type ListWorkUnitsRow struct {
-	Tenant       string             `json:"tenant"`
-	ProjectKey   string             `json:"project_key"`
-	ExternalRef  string             `json:"external_ref"`
-	Branch       string             `json:"branch"`
-	Sha          string             `json:"sha"`
-	EventCount   int64              `json:"event_count"`
-	SessionCount int64              `json:"session_count"`
-	FirstEventAt pgtype.Timestamptz `json:"first_event_at"`
-	LastEventAt  pgtype.Timestamptz `json:"last_event_at"`
-	Correlated   pgtype.Bool        `json:"correlated"`
-	LatestStatus string             `json:"latest_status"`
-	LatestKind   string             `json:"latest_kind"`
-	Title        string             `json:"title"`
-	Harnesses    []string           `json:"harnesses"`
-	CostUsd      pgtype.Numeric     `json:"cost_usd"`
+	Tenant             string             `json:"tenant"`
+	ProjectKey         string             `json:"project_key"`
+	ExternalRef        string             `json:"external_ref"`
+	Branch             string             `json:"branch"`
+	Sha                string             `json:"sha"`
+	EventCount         int64              `json:"event_count"`
+	SessionCount       int64              `json:"session_count"`
+	FirstEventAt       pgtype.Timestamptz `json:"first_event_at"`
+	LastEventAt        pgtype.Timestamptz `json:"last_event_at"`
+	Correlated         pgtype.Bool        `json:"correlated"`
+	Liveness           string             `json:"liveness"`
+	ActiveSessionCount int64              `json:"active_session_count"`
+	Title              string             `json:"title"`
+	LatestKind         string             `json:"latest_kind"`
+	Harnesses          []string           `json:"harnesses"`
+	CostUsd            pgtype.Numeric     `json:"cost_usd"`
 }
 
 // WP-B correlation engine. Groups work_events into work_units by the correlation key.
@@ -160,8 +190,18 @@ type ListWorkUnitsRow struct {
 // Events sharing no code/tracker anchor are surfaced as `correlated=false` units, grouped
 // by their (tenant, project) context — NEVER dropped (ADR-001 F3). The no-drop invariant:
 // SUM(event_count) over all units == COUNT(*) of work_events.
+// Two-level aggregation so liveness is honest (review findings B1/B2/B5):
+//  1. session_state: collapse each (key, harness, session_id) to ONE session, taking its
+//     latest LIFECYCLE status (only session.start/heartbeat/end drive status — a later
+//     artifact.created/note with status='unknown' must NOT mask a terminal session: B1).
+//  2. session_live: derive per-session liveness from the SERVER clock NOW() (contract §4:
+//     received_at is the only liveness clock — so we compute it here, not on the browser).
+//  3. outer: aggregate sessions into the unit with precedence failed>running>stale>done (B2),
+//     and SUM per-session cost (cumulative per session) for a correct unit total (B5).
+//
+// Optional tenant filter (B3): @tenant = ” returns all tenants; otherwise scopes to one.
 func (q *Queries) ListWorkUnits(ctx context.Context, arg ListWorkUnitsParams) ([]ListWorkUnitsRow, error) {
-	rows, err := q.db.Query(ctx, listWorkUnits, arg.Limit, arg.Offset)
+	rows, err := q.db.Query(ctx, listWorkUnits, arg.Off, arg.Lim, arg.Tenant)
 	if err != nil {
 		return nil, err
 	}
@@ -180,9 +220,10 @@ func (q *Queries) ListWorkUnits(ctx context.Context, arg ListWorkUnitsParams) ([
 			&i.FirstEventAt,
 			&i.LastEventAt,
 			&i.Correlated,
-			&i.LatestStatus,
-			&i.LatestKind,
+			&i.Liveness,
+			&i.ActiveSessionCount,
 			&i.Title,
+			&i.LatestKind,
 			&i.Harnesses,
 			&i.CostUsd,
 		); err != nil {

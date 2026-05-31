@@ -14,27 +14,29 @@ const DEFAULT_TENANT = 'personal'
 export function ObserveView() {
   const [sub, setSub] = useState<SubView>('activity')
   const [tenant, setTenant] = useState(DEFAULT_TENANT)
-  const { units, loading, error, now } = useWorkUnits(100)
+  // Tenant scoping happens SERVER-SIDE (ADR-002 — the API filters + paginates by tenant,
+  // so another tenant's data never reaches the browser and pagination is correct).
+  const { units, loading, error } = useWorkUnits(tenant, 100)
 
-  // tenant-scope client-side (the work-units API returns all tenants; the wall is
-  // visual here + server-enforced on tracker reads). Personal is the default lens.
-  const scoped = useMemo(() => units.filter((u) => u.tenant === tenant), [units, tenant])
-  const correlated = useMemo(() => scoped.filter((u) => u.correlated), [scoped])
-  const uncorrelated = useMemo(() => scoped.filter((u) => !u.correlated), [scoped])
+  const correlated = useMemo(() => units.filter((u) => u.correlated), [units])
+  const uncorrelated = useMemo(() => units.filter((u) => !u.correlated), [units])
+
+  // Tenant choices: the configured set the user can switch between. (When a server-side
+  // "authorized tenants" endpoint lands, source this from it; for now personal + the
+  // walled dayjob tenant.)
   const tenants = useMemo(() => {
-    const set = new Set<string>([DEFAULT_TENANT, ...units.map((u) => u.tenant)])
+    const set = new Set<string>([DEFAULT_TENANT, 'dayjob', tenant])
     return Array.from(set)
-  }, [units])
+  }, [tenant])
 
   const stats = useMemo(() => {
-    const activeSessions = correlated.filter((u) => {
-      const s = (u.latest_status || '').toLowerCase()
-      return s !== 'done' && s !== 'failed' && s !== 'cancelled'
-    }).length
-    const events = scoped.reduce((n, u) => n + (u.event_count || 0), 0)
-    const spend = scoped.reduce((n, u) => n + (u.cost_usd || 0), 0)
+    // Active = sessions still alive (running or stale), summed across units — using the
+    // server-derived active_session_count, NOT a client guess. (review finding B2)
+    const activeSessions = units.reduce((n, u) => n + (u.active_session_count || 0), 0)
+    const events = units.reduce((n, u) => n + (u.event_count || 0), 0)
+    const spend = units.reduce((n, u) => n + (u.cost_usd || 0), 0)
     return { activeSessions, events, spend, uncorrelated: uncorrelated.length }
-  }, [correlated, scoped, uncorrelated])
+  }, [units, uncorrelated])
 
   return (
     <div className="flex flex-col h-full">
@@ -112,7 +114,7 @@ export function ObserveView() {
 
             <div className="flex flex-col gap-3">
               {correlated.map((u, i) => (
-                <WorkUnitCard key={`${u.external_ref}-${u.branch}-${u.sha}-${i}`} unit={u} now={now} />
+                <WorkUnitCard key={`${u.external_ref}-${u.branch}-${u.sha}-${i}`} unit={u} />
               ))}
             </div>
 

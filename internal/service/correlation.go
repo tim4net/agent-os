@@ -22,21 +22,22 @@ type WorkUnit struct {
 	FirstEventAt time.Time `json:"first_event_at"`
 	LastEventAt  time.Time `json:"last_event_at"`
 	Correlated   bool      `json:"correlated"`
-	// Honest aggregates derived from the events (not stored flags) — power the UI
-	// liveness/labels (F10). LatestStatus is the status of the most recent status-bearing
-	// event; it is what distinguishes done/failed/running.
-	LatestStatus string   `json:"latest_status,omitempty"`
-	LatestKind   string   `json:"latest_kind,omitempty"`
-	Title        string   `json:"title,omitempty"`
-	Harnesses    []string `json:"harnesses,omitempty"`
-	CostUsd      *float64 `json:"cost_usd,omitempty"`
+	// Liveness is derived SERVER-SIDE (contract §4: received_at is the only liveness clock)
+	// per-session then aggregated with precedence failed>running>stale>done. The UI renders
+	// this directly — it does NOT recompute liveness from a browser clock (F10 honesty).
+	Liveness           string   `json:"liveness,omitempty"`
+	ActiveSessionCount int64    `json:"active_session_count"`
+	LatestKind         string   `json:"latest_kind,omitempty"`
+	Title              string   `json:"title,omitempty"`
+	Harnesses          []string `json:"harnesses,omitempty"`
+	CostUsd            *float64 `json:"cost_usd,omitempty"`
 }
 
 // WorkUnitLister is the consumer-side subset of db.Queries the engine needs (DIP),
 // keeping the engine unit-testable with a fake.
 type WorkUnitLister interface {
 	ListWorkUnits(ctx context.Context, arg db.ListWorkUnitsParams) ([]db.ListWorkUnitsRow, error)
-	CountWorkUnits(ctx context.Context) (int64, error)
+	CountWorkUnits(ctx context.Context, tenant string) (int64, error)
 }
 
 // maxWorkUnitLimit caps a single page to bound query/memory cost (DoS guard).
@@ -54,7 +55,9 @@ func NewCorrelationEngine(q WorkUnitLister) *CorrelationEngine {
 
 // ListWorkUnits returns one WorkUnit per correlation group, newest activity first.
 // limit<=0 defaults to 50 and is hard-capped at maxWorkUnitLimit; offset<0 clamps to 0.
-func (e *CorrelationEngine) ListWorkUnits(ctx context.Context, limit, offset int) ([]WorkUnit, error) {
+// tenant=="" returns all tenants; a non-empty tenant scopes the result server-side
+// (ADR-002 — tenant filtering belongs in SQL, not the browser).
+func (e *CorrelationEngine) ListWorkUnits(ctx context.Context, tenant string, limit, offset int) ([]WorkUnit, error) {
 	if limit <= 0 {
 		limit = 50
 	}
@@ -64,7 +67,7 @@ func (e *CorrelationEngine) ListWorkUnits(ctx context.Context, limit, offset int
 	if offset < 0 {
 		offset = 0
 	}
-	rows, err := e.q.ListWorkUnits(ctx, db.ListWorkUnitsParams{Limit: int32(limit), Offset: int32(offset)})
+	rows, err := e.q.ListWorkUnits(ctx, db.ListWorkUnitsParams{Lim: int32(limit), Off: int32(offset), Tenant: tenant})
 	if err != nil {
 		return nil, err
 	}
@@ -75,25 +78,27 @@ func (e *CorrelationEngine) ListWorkUnits(ctx context.Context, limit, offset int
 	return units, nil
 }
 
-// Count returns the total number of work-unit groups (for pagination).
-func (e *CorrelationEngine) Count(ctx context.Context) (int64, error) {
-	return e.q.CountWorkUnits(ctx)
+// Count returns the total number of work-unit groups for the tenant scope (for pagination).
+// tenant=="" counts across all tenants.
+func (e *CorrelationEngine) Count(ctx context.Context, tenant string) (int64, error) {
+	return e.q.CountWorkUnits(ctx, tenant)
 }
 
 // rowToWorkUnit maps a generated row to the domain type, normalizing pgtype wrappers.
 func rowToWorkUnit(r db.ListWorkUnitsRow) WorkUnit {
 	u := WorkUnit{
-		Tenant:       r.Tenant,
-		ProjectKey:   r.ProjectKey,
-		ExternalRef:  r.ExternalRef,
-		Branch:       r.Branch,
-		Sha:          r.Sha,
-		EventCount:   r.EventCount,
-		SessionCount: r.SessionCount,
-		LatestStatus: r.LatestStatus,
-		LatestKind:   r.LatestKind,
-		Title:        r.Title,
-		Harnesses:    r.Harnesses,
+		Tenant:             r.Tenant,
+		ProjectKey:         r.ProjectKey,
+		ExternalRef:        r.ExternalRef,
+		Branch:             r.Branch,
+		Sha:                r.Sha,
+		EventCount:         r.EventCount,
+		SessionCount:       r.SessionCount,
+		Liveness:           r.Liveness,
+		ActiveSessionCount: r.ActiveSessionCount,
+		LatestKind:         r.LatestKind,
+		Title:              r.Title,
+		Harnesses:          r.Harnesses,
 	}
 	if r.Correlated.Valid {
 		u.Correlated = r.Correlated.Bool

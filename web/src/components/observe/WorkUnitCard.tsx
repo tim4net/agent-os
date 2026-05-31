@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { WorkUnit } from '../../api/client'
-import { deriveLiveness } from '../../hooks/useWorkUnits'
+import { livenessOf } from '../../hooks/useWorkUnits'
 import { Icon } from '../Icon'
 import { TrackerBadge, LivenessDot, StatusPill } from './TrackerBadge'
 
@@ -12,10 +12,10 @@ const harnessColor: Record<string, string> = {
   generic: 'var(--color-text-muted)',
 }
 
-function relTime(iso: string, now: number): string {
+function relTime(iso: string): string {
   const t = Date.parse(iso)
   if (Number.isNaN(t)) return '—'
-  const s = Math.max(0, Math.round((now - t) / 1000))
+  const s = Math.max(0, Math.round((Date.now() - t) / 1000))
   if (s < 60) return `${s}s ago`
   const m = Math.round(s / 60)
   if (m < 60) return `${m}m ago`
@@ -34,9 +34,9 @@ function duration(firstIso: string, lastIso: string): string {
   return `${h}h ${m % 60}m`
 }
 
-export function WorkUnitCard({ unit, now }: { unit: WorkUnit; now: number }) {
+export function WorkUnitCard({ unit }: { unit: WorkUnit }) {
   const [open, setOpen] = useState(false)
-  const state = deriveLiveness(unit, now)
+  const state = livenessOf(unit)
   const title = unit.title || unit.branch || unit.external_ref || '(uncorrelated work)'
   const harnesses = unit.harnesses ?? []
   const cost = typeof unit.cost_usd === 'number' ? `$${unit.cost_usd.toFixed(2)}` : null
@@ -75,7 +75,7 @@ export function WorkUnitCard({ unit, now }: { unit: WorkUnit; now: number }) {
         </span>
         <span className="inline-flex items-center gap-1.5 text-[var(--color-text-muted)]">
           <Icon name="schedule" size={13} />
-          {state === 'running' ? `started ${relTime(unit.first_event_at, now)}` : duration(unit.first_event_at, unit.last_event_at)}
+          {state === 'running' ? `started ${relTime(unit.first_event_at)}` : duration(unit.first_event_at, unit.last_event_at)}
         </span>
         {cost && <span className="ml-auto font-semibold text-[var(--color-text-secondary)]">{cost}</span>}
       </div>
@@ -87,12 +87,12 @@ export function WorkUnitCard({ unit, now }: { unit: WorkUnit; now: number }) {
           <DetailRow label="external_ref" value={unit.external_ref || '—'} />
           <DetailRow label="branch" value={unit.branch || '—'} />
           <DetailRow label="sha" value={unit.sha || '—'} />
-          <DetailRow label="first event" value={`${relTime(unit.first_event_at, now)} (${unit.first_event_at})`} />
-          <DetailRow label="last event" value={`${relTime(unit.last_event_at, now)} (${unit.last_event_at})`} />
+          <DetailRow label="first event" value={`${relTime(unit.first_event_at)} (${unit.first_event_at})`} />
+          <DetailRow label="last event" value={`${relTime(unit.last_event_at)} (${unit.last_event_at})`} />
           {unit.latest_kind && <DetailRow label="latest kind" value={unit.latest_kind} />}
-          {unit.liveness_mode && <DetailRow label="liveness mode" value={unit.liveness_mode} />}
+          <DetailRow label="sessions" value={`${unit.session_count} total · ${unit.active_session_count} active`} />
           <p className="text-[10px] text-[var(--color-text-muted)] italic mt-1">
-            Status derived from the event stream + server clock (5-min heartbeat window), never a stored flag.
+            Liveness is computed server-side per session from received_at (the only liveness clock), aggregated failed&gt;running&gt;stale&gt;done. Never a stored flag.
           </p>
         </div>
       )}
