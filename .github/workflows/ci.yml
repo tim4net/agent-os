@@ -1,0 +1,136 @@
+# Agent OS CI — self-hosted runner (zero GitHub-hosted minutes).
+#
+# This workflow is INERT until a self-hosted runner labelled "linux" is
+# registered under Settings → Actions → Runners.  The local 3-gate loop +
+# post-merge green baseline (ADR-005 D6) cover regression defense until then.
+#
+# Setup: on the runner host, install Go 1.26, sqlc v1.31.1, and podman 5+.
+#        Generate a runner token at Settings → Actions → Runners → New
+#        self-hosted runner and follow the config/run instructions.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-vet-test:
+    name: Build · Vet · Test (PG17)
+    runs-on: [self-hosted, linux]
+
+    env:
+      POSTGRES_USER: aos_test
+      POSTGRES_PASSWORD: aos_test_pw
+      POSTGRES_DB: aos_test
+      PGHOST: 127.0.0.1
+      PGPORT: 55434
+
+    steps:
+      # ── Checkout ──────────────────────────────────────────────────────
+      - uses: actions/checkout@v4
+
+      # ── Go toolchain (runner MUST have Go 1.26+ pre-installed) ────────
+      - name: Verify Go version
+        run: |
+          go version
+          GO_VERSION=$(go version | grep -oP 'go\K[0-9]+\.[0-9]+')
+          MAJOR=$(echo "$GO_VERSION" | cut -d. -f1)
+          MINOR=$(echo "$GO_VERSION" | cut -d. -f2)
+          if [ "$MAJOR" -lt 1 ] || { [ "$MAJOR" -eq 1 ] && [ "$MINOR" -lt 26 ]; }; then
+            echo "::error::Go >= 1.26 required, found $(go version)"
+            exit 1
+          fi
+
+      # ── sqlc (runner MUST have sqlc v1.31.1 pre-installed) ────────────
+      - name: Verify sqlc version
+        run: |
+          PATH="$HOME/go/bin:$PATH"
+          sqlc version || { echo "::error::sqlc not found — install sqlc v1.31.1"; exit 1; }
+
+      # ── Code generation ───────────────────────────────────────────────
+      - name: sqlc generate
+        run: |
+          PATH="$HOME/go/bin:$PATH"
+          sqlc generate
+
+      # ── Build ─────────────────────────────────────────────────────────
+      - name: go build ./...
+        run: go build ./...
+
+      # ── Vet ──────────────────────────────────────────────────────────
+      - name: go vet ./...
+        run: go vet ./...
+
+      # ── Postgres 17 via podman ───────────────────────────────────────
+      - name: Start Postgres 17 (podman)
+        run: |
+          # Kill any prior CI container to avoid port clashes
+          podman rm -f aos-ci-pg 2>/dev/null || true
+          podman run -d \
+            --name aos-ci-pg \
+            -e POSTGRES_USER="$POSTGRES_USER" \
+            -e POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
+            -e POSTGRES_DB="$POSTGRES_DB" \
+            -p 127.0.0.1:"$PGPORT":5432 \
+            docker.io/postgres:17
+
+          # Wait until Postgres is accepting connections
+          MAX_WAIT=60
+          for i in $(seq 1 $MAX_WAIT); do
+            if PGPASSWORD="$POSTGRES_PASSWORD" psql -h "$PGHOST" -p "$PGPORT" -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c 'SELECT 1' >/dev/null 2>&1; then
+              echo "Postgres ready after ${i}s"
+              break
+            fi
+            if [ "$i" -eq "$MAX_WAIT" ]; then
+              echo "::error::Postgres did not become ready within ${MAX_WAIT}s"
+              podman logs aos-ci-pg
+              exit 1
+            fi
+            sleep 1
+          done
+
+      # ── Migrate ───────────────────────────────────────────────────────
+      - name: Run up-migrations (numeric order)
+        run: |
+          export PGHOST="$PGHOST" PGPORT="$PGPORT"
+          export PGUSER="$POSTGRES_USER" PGPASSWORD="$POSTGRES_PASSWORD" PGDATABASE="$POSTGRES_DB"
+          for f in $(ls internal/migrations/*.up.sql | sort); do
+            echo "applying $f"
+            psql -f "$f"
+            if [ $? -ne 0 ]; then
+              echo "::error::migration $f failed"
+              exit 1
+            fi
+          done
+          echo "all migrations applied successfully"
+
+      # ── Tests (integration MUST run, not skip) ───────────────────────
+      - name: go test ./...
+        run: |
+          # The integration test suite must actually RUN when AOS_TEST_DSN
+          # is set.  A skipped integration suite is treated as a failure.
+                    export AOS_TEST_DSN="postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${PGHOST}:${PGPORT}/${POSTGRES_DB}?sslmode=disable"
+          OUTPUT=$(go test -v ./... 2>&1) || {
+            echo "$OUTPUT"
+            echo "::error::tests failed"
+            exit 1
+          }
+          echo "$OUTPUT"
+          # Detect skipped integration tests — if the keyword appears
+          # alongside "AOS_TEST_DSN not set", that means the test was
+          # misconfigured or the env var wasn't picked up.
+          if echo "$OUTPUT" | grep -qi "AOS_TEST_DSN not set"; then
+            echo "::error::Integration tests skipped despite AOS_TEST_DSN being set — this is a failure"
+            exit 1
+          fi
+
+      # ── Cleanup ──────────────────────────────────────────────────────
+      - name: Stop Postgres container
+        if: always()
+        run: podman rm -f aos-ci-pg 2>/dev/null || true
