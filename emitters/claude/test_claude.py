@@ -379,6 +379,8 @@ class TestClaudeSubprocessPath:
                 pass  # start-emit failure is fine
 
             end_events = [p for p in posted if p["kind"] == "session.end"]
-            if end_events:
-                assert end_events[0]["status"] == "cancelled"
+            assert len(end_events) == 1, (
+                f"expected exactly 1 session.end, got {len(end_events)}"
+            )
+            assert end_events[0]["status"] == "cancelled"
             await em.close()

@@ -258,6 +258,9 @@ async def post_event(
                 continue
     finally:
         if _owns_client:
-            await client.aclose()
+            try:
+                await client.aclose()
+            except Exception:
+                pass  # prevent masking in-flight exceptions
 
     raise _PostError(last_status, "exhausted retries", cause=last_cause)

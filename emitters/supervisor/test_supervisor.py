@@ -363,38 +363,65 @@ class TestSupervisorSubprocessPath:
 
     @pytest.mark.asyncio
     async def test_supervised_signal_cancelled_maps_negative_code(self) -> None:
-        """A subprocess killed by SIGINT (returncode=-2) maps to cancelled."""
+        """run_supervised maps SIGINT-killed child to status=cancelled.
+
+        This is an e2e regression test that exercises the REAL
+        run_supervised path — the cancelled verdict must come from
+        run_supervised's own mapping, not test-side logic.
+        Would FAIL on the old {130} mapping since asyncio returns -2.
+        """
         em, posted, _ = _make_supervisor(heartbeat_s=60)
 
-        # Launch a long-sleeping process and kill it with SIGINT
-        proc = await asyncio.create_subprocess_exec(
-            sys.executable, "-c", "import time; time.sleep(60)",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+        # Launch run_supervised against a child that installs SIG_DFL
+        # for SIGINT (so the process is actually killed, not ignored).
+        child_script = (
+            "import time, signal\n"
+            "signal.signal(signal.SIGINT, signal.SIG_DFL)\n"
+            "time.sleep(60)\n"
         )
-        pid = proc.pid
 
-        # Emit start manually, then send SIGINT
-        sid = str(uuid.uuid4())
-        await em.emit_start(session_id=sid, pid=pid, title="signal test")
-        await em._start_heartbeats(sid, pid)
+        # Track the spawned pid so we can signal it
+        captured_pid: list[int] = []
+        orig_post = em._post
 
-        await asyncio.sleep(0.05)
-        proc.send_signal(signal.SIGINT)
-        await proc.wait()
-        exit_code = proc.returncode
+        async def _capture_pid_post(event):
+            result = await orig_post(event)
+            if event.kind == "session.start":
+                captured_pid.append(event.pid or 0)
+            return result
+        em._post = _capture_pid_post  # type: ignore[method-assign]
 
-        # Manually emit end with the signal exit code
-        if exit_code in {-signal.SIGINT, -signal.SIGTERM, 130, 143}:
-            await em.emit_end(session_id=sid, pid=pid, status="cancelled",
-                              payload={"exit_code": exit_code, "duration_s": 0.1})
-        else:
-            await em.emit_end(session_id=sid, pid=pid, status="failed",
-                              payload={"exit_code": exit_code, "duration_s": 0.1})
+        async def _send_signal_after_start():
+            """Wait for the child PID to appear, then SIGINT it."""
+            for _ in range(100):  # up to 1s polling
+                if captured_pid:
+                    await asyncio.sleep(0.1)  # let child start + install handler
+                    os.kill(captured_pid[0], signal.SIGINT)
+                    return
+                await asyncio.sleep(0.01)
 
-        end_ev = [p for p in posted if p["kind"] == "session.end"][0]
-        if exit_code in {-signal.SIGINT, -signal.SIGTERM, 130, 143}:
-            assert end_ev["status"] == "cancelled"
+        signal_task = asyncio.create_task(_send_signal_after_start())
+        try:
+            exit_code = await em.run_supervised(
+                [sys.executable, "-c", child_script],
+                title="signal regression",
+            )
+        finally:
+            await asyncio.gather(signal_task, return_exceptions=True)
+
+        end_events = [p for p in posted if p["kind"] == "session.end"]
+        assert len(end_events) == 1, (
+            f"expected exactly 1 session.end, got {len(end_events)}"
+        )
+        end_ev = end_events[0]
+        assert end_ev["status"] == "cancelled", (
+            f"expected status=cancelled, got {end_ev['status']!r} "
+            f"(exit_code={exit_code})"
+        )
+        assert end_ev["payload"]["exit_code"] < 0, (
+            f"expected negative exit_code for signal kill, "
+            f"got {end_ev['payload']['exit_code']}"
+        )
         await em.close()
 
     @pytest.mark.asyncio

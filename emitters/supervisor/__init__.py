@@ -242,10 +242,12 @@ class SupervisedEmitter:
         Returns the command's exit code.
         """
         work_cwd = cwd or self.cwd
+        self._ended = False  # reset for instance reuse
         session_id = str(uuid.uuid4())
         effective_title = title or " ".join(cmd[:3])
 
         # Launch the subprocess
+        run_start = time.monotonic()
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
@@ -273,7 +275,6 @@ class SupervisedEmitter:
         await self._start_heartbeats(session_id, child_pid)
 
         # Wait for process to exit
-        run_start = time.monotonic()
         stdout_bytes, stderr_bytes = await proc.communicate()
         duration = time.monotonic() - run_start
         exit_code = proc.returncode or 0
