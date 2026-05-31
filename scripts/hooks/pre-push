@@ -42,10 +42,18 @@ echo "pre-push: go build ./..."
 go build ./... || fail "go build failed"
 
 echo "pre-push: go vet ./..."
-go vet ./... 2>&1 | grep -v '^#' | grep . && fail "go vet reported issues" || true
+vet_out="$(go vet ./... 2>&1 | grep -v '^#' || true)"
+if [ -n "$vet_out" ]; then
+  echo "$vet_out" >&2
+  fail "go vet reported issues"
+fi
 
 echo "pre-push: go test -short ./..."
-go test -short ./... || fail "unit tests failed"
+# Capture exit code directly; pipefail + grep chains here previously caused false
+# failures when run inside git's hook environment. Run plainly and check rc.
+if ! go test -short ./... ; then
+  fail "unit tests failed"
+fi
 
 echo "pre-push: OK (authoritative gate is hpms1 — deployments/deploy.sh)"
 exit 0
