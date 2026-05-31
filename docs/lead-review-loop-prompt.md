@@ -78,4 +78,31 @@ STEP 5 — CAPTURE FINDINGS AS DATA (ADR-006 D2, mandatory every tick). Append o
 - Set `root_cause=spec` when the gap is actually contract/issue ambiguity (then ALSO note it for a contract/issue fix, not just an agent fix).
 Then check the ledger: if any `class` now has ≥3 occurrences for the same agent/WP-type, OUTPUT a one-line note "📈 guardrail candidate: <class> recurred N× — promote to loop prompt" so Tim/Lead promotes it (ADR-006 D3). Do NOT auto-edit loop prompts in a tick (that is a deliberate, reviewed step).
 
+STEP 6 — NOTIFY TIM ONLY ON ACTIONABLE EVENTS (push-on-exception). Tim does not watch this loop;
+the run-log + findings-ledger are the pull-detail. So you must PROACTIVELY push a Telegram message
+ONLY for the events that genuinely need him, and stay SILENT otherwise. Use:
+`send_message(target="telegram:Tim Fournet (dm)", message="<one line, lead with the emoji + PR/issue id + inline description>")`.
+
+SEND a Telegram ping for (these and only these):
+  - 🛑 **Anything that halts the fleet or blocks the pipeline:** an `autonomy:halt` issue was opened
+    (e.g. green-baseline couldn't auto-revert), the hpms1 deploy gate FAILED/rolled back (main green
+    but undeployable), or a destructive-migration / live-infra mutation is required (fail-closed —
+    needs Tim's explicit go).
+  - 🔁→🔁→🔁 **A 3-strikes stall:** the SAME PR has now been bounced 3× on the same core finding
+    (check the run-log history for that PR before sending). This is the "it's thrashing, look" signal.
+  - ⚠️ **Gate-3 DEGRADED on a HIGH-RISK PR** (Opus wrapper unavailable → can't merge until restored):
+    Tim may need to fix the claude-api login/token.
+  - 🎨 **A UI work-package is ready to start but has no approved mockup** — Tim owns the design
+    direction; surface it and wait (do not let Roux improvise design).
+  - 📈 **A guardrail crossed the ≥3 promotion threshold** AND is not already satisfied by an existing
+    rule — a one-line heads-up that the loop wants a prompt change.
+
+Do NOT Telegram-ping for (these stay in the run-log only — pinging them would be noise):
+  - a routine single bounce (changes-requested, strikes 1–2),
+  - a clean merge + deploy (🚀 happy path),
+  - gate discrimination calls, ledger rows, migration-number bookkeeping, batch WP filing.
+
+Keep each ping to ONE line, Tim-actionable, with the id + inline description (never a bare "#29").
+If nothing actionable happened this tick, send NOTHING — silence is the correct state.
+
 HARD RULES: one PR per tick; never schedule cron jobs; never push to main except the gated squash-merge; high-risk (WP-B/WP-E/correlation/tracker/security) in notify or auto-safe mode → escalate, do not auto-merge (only mode=auto merges high-risk, and only after the independent reviewer passes). Append every action to /home/tim/Obsidian/projects/agent-os/autonomous-run-log.md AND every finding to findings-ledger.md.
