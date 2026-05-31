@@ -96,8 +96,22 @@ GUARDRAILS (promoted from recurring review findings — ADR-006 D3; obey pre-emp
     actually execute the real code path and FAIL if the behavior breaks (run the loop, hit a
     real/fake transport, assert the emitted body) — not call the function once and assert it
     returned.
+  - **Route-level tests for every HTTP handler** (promoted 2026-05-31, `layer-mismatch`/
+    `mock-only-proof` recurred across WP-A + WP-E ×2): if your WP adds or changes an HTTP
+    handler (anything mounted in `internal/api/`), ship a `*_test.go` in `internal/api/` that
+    exercises the route through the real chi router via `httptest` against real PG17 — model it
+    on `internal/api/workevents_test.go`. Assert at the HTTP boundary: success status + body
+    shape, each error status (400/403/404/500), tenant isolation if the handler reads
+    tenant-scoped data, and the failure path returns non-2xx (a handler that returns 200 on an
+    internal error is a silent-failure bug). Service-layer + integration tests do NOT substitute
+    for this — handler wiring (status codes, header checks, JSON encoding, query-param parsing)
+    keeps shipping unproven without a route test. A WP that adds a handler with no route test is
+    a Gate-2 FAIL.
 
-CURRENT WORK QUEUE (Wave 1, all assigned to you):
-  - Issue #2  WP-A  Generic work-event ingestion   → worktree /home/tim/work/agent-os/wp-a  (do FIRST — foundational)
-  - Issue #4  WP-E  Shortcut reader (read-only)     → worktree /home/tim/work/agent-os/wp-e
-  - Issue #3  WP-C  Hermes emitter                  → worktree /home/tim/work/agent-os/wp-c
+CURRENT WORK QUEUE — authoritative source is GitHub, not this list. Each tick, run
+`gh issue list --label "agent:roux,status:todo" --state open` and take the lowest-numbered.
+Do NOT trust a static list here; it goes stale as PRs merge. As of 2026-05-31:
+  - Issue #4  WP-E  Shortcut reader (read-only)   → worktree /home/tim/work/agent-os/wp-e  (in its review/fix cycle)
+  - Issue #13 WP-D  Claude + Antigravity emitters → make a worktree off fresh main
+  - Issue #14 WP-F  GitHub Issues tracker source  → make a worktree off fresh main (impl of WP-E's TrackerSource iface)
+  (MERGED, do not touch: WP-0, WP-B, WP-A #2, WP-C #3.)
