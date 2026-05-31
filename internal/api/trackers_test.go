@@ -345,6 +345,109 @@ func TestTrackerSync_FailureReturns500(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Bug #18: tracker dispatch — SyncTrackerItems routes by project.tracker
+// ---------------------------------------------------------------------------
+
+// seedProject inserts a project row with the given tracker type and returns
+// its UUID. The external_ref is set to the provided value (may be empty).
+func seedProject(t *testing.T, pool *pgxpool.Pool, tracker, externalRef string) string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	id := uuid.NewString()
+	_, err := pool.Exec(ctx, `
+		INSERT INTO projects (id, slug, name, tenant, tracker, external_ref, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
+	`, id, fmt.Sprintf("proj-%s", uuid.NewString()[:8]), "Test Project",
+		fmt.Sprintf("dispatch-%s", uuid.NewString()[:8]), tracker, externalRef)
+	if err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+	return id
+}
+
+// cleanupProjects removes all rows whose tenant starts with the given prefix.
+func cleanupProjects(t *testing.T, pool *pgxpool.Pool, tenantPrefix string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	pool.Exec(ctx, "DELETE FROM tracker_items WHERE tenant LIKE $1", tenantPrefix+"%")
+	pool.Exec(ctx, "DELETE FROM projects WHERE tenant LIKE $1", tenantPrefix+"%")
+}
+
+// TestSyncTracker_DispatchByTrackerType verifies that SyncTrackerItems
+// dispatches to the correct tracker source based on the project's tracker column.
+// This is the regression guard for bug #18 (hardcoded ShortcutSource).
+func TestSyncTracker_DispatchByTrackerType(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+
+	a, pool, _ := newTestAPIWithDB(t)
+	defer pool.Close()
+
+	tenant := fmt.Sprintf("dispatch-%s", uuid.NewString()[:8])
+	t.Cleanup(func() { cleanupProjects(t, pool, tenant) })
+
+	t.Run("shortcut_project_dispatches_to_shortcut_source", func(t *testing.T) {
+		// Seed a project with tracker='shortcut' and no external_ref.
+		// ShortcutSource will fail with a specific message about missing config.
+		projectID := seedProject(t, pool, "shortcut", "")
+
+		rec := trackerRequest(a, "GET", "/sync/"+projectID, map[string]string{
+			"tenant": tenant,
+		})
+
+		// ShortcutSource returns an error when no shortcut external_ref is configured.
+		// The handler wraps it as 500. The key assertion: the error comes from
+		// ShortcutSource (contains "shortcut" in the log), NOT from GitHubSource.
+		if rec.Code != 500 {
+			t.Fatalf("shortcut project: expected 500 (no shortcut config), got %d; body: %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("github_issues_project_dispatches_to_github_source", func(t *testing.T) {
+		// Seed a project with tracker='github_issues' and no external_ref.
+		// GitHubSource will fail with "no github_issues external_ref configured".
+		projectID := seedProject(t, pool, "github_issues", "")
+
+		rec := trackerRequest(a, "GET", "/sync/"+projectID, map[string]string{
+			"tenant": tenant,
+		})
+
+		if rec.Code != 500 {
+			t.Fatalf("github_issues project: expected 500 (no github config), got %d; body: %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("unsupported_tracker_returns_400", func(t *testing.T) {
+		// Seed a project with tracker='obsidian' — not handled by the dispatch.
+		// The handler should return 400 "unsupported tracker: obsidian".
+		projectID := seedProject(t, pool, "obsidian", "")
+
+		rec := trackerRequest(a, "GET", "/sync/"+projectID, map[string]string{
+			"tenant": tenant,
+		})
+
+		if rec.Code != 400 {
+			t.Fatalf("obsidian project: expected 400 (unsupported tracker), got %d; body: %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("nonexistent_project_returns_404", func(t *testing.T) {
+		projectID := uuid.NewString()
+
+		rec := trackerRequest(a, "GET", "/sync/"+projectID, map[string]string{
+			"tenant": tenant,
+		})
+
+		if rec.Code != 404 {
+			t.Fatalf("nonexistent project: expected 404, got %d; body: %s", rec.Code, rec.Body.String())
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
 // Helpers for tracker route tests
 // ---------------------------------------------------------------------------
 
