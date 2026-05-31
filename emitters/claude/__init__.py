@@ -244,8 +244,8 @@ class ClaudeEmitter:
         # Determine terminal status from exit code
         if result.exit_code == 0:
             terminal_status = Status.DONE.value
-        elif result.exit_code == 130:
-            # SIGINT — Ctrl+C
+        elif result.exit_code in {-signal.SIGINT, -signal.SIGTERM, 130, 143}:
+            # SIGINT/SIGTERM — asyncio returns negative, shell uses 128+N
             terminal_status = Status.CANCELLED.value
         else:
             terminal_status = Status.FAILED.value
@@ -299,6 +299,8 @@ class ClaudeEmitter:
 
         logger.debug("claude command: %s", " ".join(cmd))
 
+        start = time.monotonic()
+
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
@@ -309,9 +311,7 @@ class ClaudeEmitter:
         stdout_bytes, stderr_bytes = await proc.communicate()
         stdout = stdout_bytes.decode("utf-8", errors="replace")
         stderr = stderr_bytes.decode("utf-8", errors="replace")
-        duration = time.monotonic() - getattr(
-            self, "_claude_start", time.monotonic()
-        )
+        duration = time.monotonic() - start
 
         # Parse JSON output
         output_json: dict[str, Any] | None = None

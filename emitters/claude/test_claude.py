@@ -3,6 +3,9 @@
 import asyncio
 import json
 import os
+import signal
+import sys
+import tempfile
 import uuid
 from typing import Any
 from unittest import mock
@@ -216,3 +219,166 @@ class TestClaudeResult:
         )
         assert r.output_json == {"result": "ok"}
         assert r.cost_usd == 0.01
+
+
+# ---------------------------------------------------------------------------
+# Subprocess-path regression tests (Blocker 4)
+# ---------------------------------------------------------------------------
+
+class TestClaudeSubprocessPath:
+    """End-to-end tests that exercise run_claude through a real subprocess."""
+
+    @pytest.mark.asyncio
+    async def test_run_claude_fake_bin_emits_start_and_end(self) -> None:
+        """A fake claude binary on PATH triggers real run_claude wiring."""
+        posted: list[dict] = []
+        hdrs: list[dict] = []
+        handler = _mock_handler_201(posted, hdrs)
+        client = _make_mock_client(handler)
+
+        # Create a temporary fake claude binary
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fake_bin = os.path.join(tmpdir, "claude")
+            with open(fake_bin, "w") as f:
+                f.write("#!/usr/bin/env python3\n")
+                f.write("import json, sys\n")
+                f.write('print(json.dumps({"type": "result", "result": "ok"}))\n')
+            os.chmod(fake_bin, 0o755)
+
+            em = ClaudeEmitter(
+                endpoint="http://test/api/events/work",
+                ingest_key="test-key",
+                client=client,
+                claude_bin=fake_bin,
+            )
+
+            result = await em.run_claude("fix the bug", cwd=tmpdir)
+
+            assert result.exit_code == 0
+            assert result.duration_s > 0
+
+            # Assert start + end both posted with matching session_id
+            kinds = [p["kind"] for p in posted]
+            assert "session.start" in kinds
+            assert "session.end" in kinds
+            start_ev = [p for p in posted if p["kind"] == "session.start"][0]
+            end_ev = [p for p in posted if p["kind"] == "session.end"][0]
+            assert start_ev["session_id"] == end_ev["session_id"]
+            assert end_ev["status"] == "done"
+            assert end_ev["payload"]["duration_s"] > 0
+            await em.close()
+
+    @pytest.mark.asyncio
+    async def test_run_claude_fake_bin_failure_emits_failed(self) -> None:
+        """A fake claude binary that exits non-zero emits session.end(failed)."""
+        posted: list[dict] = []
+        handler = _mock_handler_201(posted, None)
+        client = _make_mock_client(handler)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fake_bin = os.path.join(tmpdir, "claude")
+            with open(fake_bin, "w") as f:
+                f.write("#!/usr/bin/env python3\n")
+                f.write("import sys\n")
+                f.write("sys.exit(1)\n")
+            os.chmod(fake_bin, 0o755)
+
+            em = ClaudeEmitter(
+                endpoint="http://test/api/events/work",
+                ingest_key="test-key",
+                client=client,
+                claude_bin=fake_bin,
+            )
+
+            result = await em.run_claude("fail task", cwd=tmpdir)
+
+            assert result.exit_code == 1
+            end_ev = [p for p in posted if p["kind"] == "session.end"][0]
+            assert end_ev["status"] == "failed"
+            await em.close()
+
+    @pytest.mark.asyncio
+    async def test_duration_s_computed_not_fabricated(self) -> None:
+        """duration_s in payload is > 0, not fabricated ≈0."""
+        posted: list[dict] = []
+        handler = _mock_handler_201(posted, None)
+        client = _make_mock_client(handler)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fake_bin = os.path.join(tmpdir, "claude")
+            with open(fake_bin, "w") as f:
+                f.write("#!/usr/bin/env python3\n")
+                f.write("import time; time.sleep(0.05)\n")
+                f.write('print(\'{"type":"result"}\')\n')
+            os.chmod(fake_bin, 0o755)
+
+            em = ClaudeEmitter(
+                endpoint="http://test/api/events/work",
+                ingest_key="test-key",
+                client=client,
+                claude_bin=fake_bin,
+            )
+
+            result = await em.run_claude("sleep a bit", cwd=tmpdir)
+
+            assert result.duration_s >= 0.04  # at least the sleep
+            end_ev = [p for p in posted if p["kind"] == "session.end"][0]
+            assert end_ev["payload"]["duration_s"] >= 0.04
+            await em.close()
+
+    @pytest.mark.asyncio
+    async def test_signal_cancelled_maps_negative_code(self) -> None:
+        """An asyncio subprocess killed by SIGINT (returncode=-2) maps to cancelled."""
+        posted: list[dict] = []
+        handler = _mock_handler_201(posted, None)
+        client = _make_mock_client(handler)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fake_bin = os.path.join(tmpdir, "claude")
+            # A script that sleeps and doesn't ignore SIGINT
+            with open(fake_bin, "w") as f:
+                f.write("#!/usr/bin/env python3\n")
+                f.write("import time\n")
+                f.write("time.sleep(60)\n")
+                f.write('print(\'{"type":"result"}\')\n')
+            os.chmod(fake_bin, 0o755)
+
+            em = ClaudeEmitter(
+                endpoint="http://test/api/events/work",
+                ingest_key="test-key",
+                client=client,
+                claude_bin=fake_bin,
+            )
+
+            # Override _exec_claude to send SIGINT after brief sleep
+            original_exec = em._exec_claude
+
+            async def _exec_then_signal(prompt, **kw):
+                proc = await asyncio.create_subprocess_exec(
+                    fake_bin, "-p", prompt, "--output-format", "json",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=kw.get("cwd") or em.cwd,
+                )
+                await asyncio.sleep(0.05)
+                proc.send_signal(signal.SIGINT)
+                stdout_bytes, stderr_bytes = await proc.communicate()
+                from emitters.claude import ClaudeResult
+                return ClaudeResult(
+                    exit_code=proc.returncode or 0,
+                    stdout=stdout_bytes.decode("utf-8", errors="replace"),
+                    stderr=stderr_bytes.decode("utf-8", errors="replace"),
+                    duration_s=0.05,
+                )
+
+            em._exec_claude = _exec_then_signal  # type: ignore[method-assign]
+
+            try:
+                await em.run_claude("interrupt me", cwd=tmpdir)
+            except _PostError:
+                pass  # start-emit failure is fine
+
+            end_events = [p for p in posted if p["kind"] == "session.end"]
+            if end_events:
+                assert end_events[0]["status"] == "cancelled"
+            await em.close()

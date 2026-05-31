@@ -21,6 +21,7 @@ import asyncio
 import json
 import logging
 import os
+import signal
 import socket
 import sys
 import time
@@ -215,7 +216,7 @@ class AntigravityEmitter:
 
         if result.exit_code == 0:
             terminal_status = Status.DONE.value
-        elif result.exit_code == 130:
+        elif result.exit_code in {-signal.SIGINT, -signal.SIGTERM, 130, 143}:
             terminal_status = Status.CANCELLED.value
         else:
             terminal_status = Status.FAILED.value
@@ -258,6 +259,8 @@ class AntigravityEmitter:
 
         logger.debug("agy command: %s", " ".join(cmd))
 
+        start = time.monotonic()
+
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
@@ -268,9 +271,7 @@ class AntigravityEmitter:
         stdout_bytes, stderr_bytes = await proc.communicate()
         stdout = stdout_bytes.decode("utf-8", errors="replace")
         stderr = stderr_bytes.decode("utf-8", errors="replace")
-        duration = time.monotonic() - getattr(
-            self, "_agy_start", time.monotonic()
-        )
+        duration = time.monotonic() - start
 
         output_json: dict[str, Any] | None = None
         try:

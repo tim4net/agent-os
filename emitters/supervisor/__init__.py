@@ -51,7 +51,9 @@ __all__ = ["SupervisedEmitter"]
 logger = logging.getLogger("agentos.supervisor")
 
 # Exit code → status mapping
-_CANCELLED_CODES = {130}  # SIGINT
+# asyncio subprocess terminated by signal returns negative codes
+# (SIGINT → -2, SIGTERM → -15). Shell convention is 128+signal (130 for SIGINT).
+_CANCELLED_CODES = {-signal.SIGINT, -signal.SIGTERM, 130, 143}
 
 
 class SupervisedEmitter:
@@ -219,7 +221,10 @@ class SupervisedEmitter:
     async def close(self) -> None:
         await self._stop_heartbeats()
         if self._client is not None:
-            await self._client.aclose()
+            try:
+                await self._client.aclose()
+            except Exception:
+                pass  # prevent masking in-flight exceptions
 
     # --- run a command under supervision ---
 
@@ -250,19 +255,27 @@ class SupervisedEmitter:
         child_pid = proc.pid
 
         # Emit session.start with the child PID
-        await self.emit_start(
-            session_id=session_id,
-            pid=child_pid,
-            title=effective_title,
-            project_hint=project_hint or os.path.basename(work_cwd),
-            external_ref=external_ref,
-        )
+        try:
+            await self.emit_start(
+                session_id=session_id,
+                pid=child_pid,
+                title=effective_title,
+                project_hint=project_hint or os.path.basename(work_cwd),
+                external_ref=external_ref,
+            )
+        except Exception:
+            # Orphan prevention: terminate child if start-emit fails
+            proc.terminate()
+            await proc.wait()
+            raise
 
         # Start heartbeat loop
         await self._start_heartbeats(session_id, child_pid)
 
         # Wait for process to exit
+        run_start = time.monotonic()
         stdout_bytes, stderr_bytes = await proc.communicate()
+        duration = time.monotonic() - run_start
         exit_code = proc.returncode or 0
 
         # Determine terminal status
@@ -281,7 +294,7 @@ class SupervisedEmitter:
                 status=terminal_status,
                 payload={
                     "exit_code": exit_code,
-                    "duration_s": 0,  # not tracked here
+                    "duration_s": round(duration, 3),
                 },
             )
         except Exception as post_err:

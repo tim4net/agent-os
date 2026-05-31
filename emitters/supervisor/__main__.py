@@ -28,6 +28,10 @@ async def _run(args: argparse.Namespace) -> None:
     endpoint = os.environ.get("AGENTOS_ENDPOINT")
     cmd = args.command
 
+    # argparse.REMAINDER keeps the literal "--"; strip it
+    if cmd and cmd[0] == "--":
+        cmd = cmd[1:]
+
     if not cmd:
         print("ERROR: must specify a command to supervise", file=sys.stderr)
         sys.exit(1)

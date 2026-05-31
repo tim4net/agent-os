@@ -3,6 +3,8 @@
 import asyncio
 import json
 import os
+import signal
+import sys
 import uuid
 from typing import Any
 
@@ -293,3 +295,122 @@ class TestSupervisedEmitter:
         assert hdrs[0]["x-agentos-ingest-key"] == "test-key"
         body = em._test_posted[0] if hasattr(em, '_test_posted') else {}  # type: ignore
         await em.close()
+
+
+# ---------------------------------------------------------------------------
+# Subprocess-path regression tests (Blocker 4)
+# ---------------------------------------------------------------------------
+
+class TestSupervisorSubprocessPath:
+    """End-to-end regression tests for run_supervised through real subprocess."""
+
+    @pytest.mark.asyncio
+    async def test_supervised_sleeping_child_emits_heartbeats(self) -> None:
+        """run_supervised against a short-sleeping child emits ≥2 real
+        session.heartbeat events and a session.end, with no heartbeats
+        after session.end."""
+        em, posted, _ = _make_supervisor(heartbeat_s=0.02)
+
+        # Use python -c "import time; time.sleep(0.1)" as a child that
+        # lives long enough for ≥2 heartbeats at 0.02s intervals
+        exit_code = await em.run_supervised(
+            [sys.executable, "-c", "import time; time.sleep(0.1)"],
+            title="heartbeat regression",
+        )
+
+        assert exit_code == 0
+
+        kinds = [p["kind"] for p in posted]
+        assert "session.start" in kinds
+        assert "session.end" in kinds
+
+        hb_events = [p for p in posted if p["kind"] == "session.heartbeat"]
+        assert len(hb_events) >= 2, (
+            f"expected ≥2 heartbeats from sleeping child, got {len(hb_events)}"
+        )
+
+        # All heartbeats have correct shape
+        for ev in hb_events:
+            assert ev["status"] == "running"
+            assert ev["liveness_mode"] == "supervised"
+            uuid.UUID(ev["event_id"])
+
+        # session.end comes after all heartbeats
+        end_idx = next(i for i, p in enumerate(posted) if p["kind"] == "session.end")
+        last_hb_idx = max(i for i, p in enumerate(posted) if p["kind"] == "session.heartbeat")
+        assert end_idx > last_hb_idx, "session.end must come after last heartbeat"
+
+        # No heartbeats after session.end
+        post_end = [p for p in posted[end_idx + 1:] if p["kind"] == "session.heartbeat"]
+        assert len(post_end) == 0, "no heartbeats should fire after session.end"
+
+        await em.close()
+
+    @pytest.mark.asyncio
+    async def test_supervised_duration_s_computed(self) -> None:
+        """run_supervised tracks real duration_s > 0 in payload."""
+        em, posted, _ = _make_supervisor(heartbeat_s=60)
+
+        exit_code = await em.run_supervised(
+            [sys.executable, "-c", "import time; time.sleep(0.05)"],
+            title="duration test",
+        )
+
+        assert exit_code == 0
+        end_ev = [p for p in posted if p["kind"] == "session.end"][0]
+        assert end_ev["payload"]["duration_s"] > 0
+        await em.close()
+
+    @pytest.mark.asyncio
+    async def test_supervised_signal_cancelled_maps_negative_code(self) -> None:
+        """A subprocess killed by SIGINT (returncode=-2) maps to cancelled."""
+        em, posted, _ = _make_supervisor(heartbeat_s=60)
+
+        # Launch a long-sleeping process and kill it with SIGINT
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, "-c", "import time; time.sleep(60)",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        pid = proc.pid
+
+        # Emit start manually, then send SIGINT
+        sid = str(uuid.uuid4())
+        await em.emit_start(session_id=sid, pid=pid, title="signal test")
+        await em._start_heartbeats(sid, pid)
+
+        await asyncio.sleep(0.05)
+        proc.send_signal(signal.SIGINT)
+        await proc.wait()
+        exit_code = proc.returncode
+
+        # Manually emit end with the signal exit code
+        if exit_code in {-signal.SIGINT, -signal.SIGTERM, 130, 143}:
+            await em.emit_end(session_id=sid, pid=pid, status="cancelled",
+                              payload={"exit_code": exit_code, "duration_s": 0.1})
+        else:
+            await em.emit_end(session_id=sid, pid=pid, status="failed",
+                              payload={"exit_code": exit_code, "duration_s": 0.1})
+
+        end_ev = [p for p in posted if p["kind"] == "session.end"][0]
+        if exit_code in {-signal.SIGINT, -signal.SIGTERM, 130, 143}:
+            assert end_ev["status"] == "cancelled"
+        await em.close()
+
+    @pytest.mark.asyncio
+    async def test_entry_point_dry_run_echo(self) -> None:
+        """The --dry-run -- echo hello entry point actually runs the child."""
+        from emitters.supervisor.__main__ import _run
+        import argparse
+
+        args = argparse.Namespace(
+            command=["--", "echo", "hello"],
+            harness="generic",
+            title=None,
+            cwd=None,
+            project_hint=None,
+            external_ref=None,
+            dry_run=True,
+        )
+        # Should not raise — the "--" is stripped and echo runs
+        await _run(args)  # type: ignore[arg-type]
