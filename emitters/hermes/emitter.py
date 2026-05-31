@@ -263,6 +263,9 @@ class HermesEmitter:
         self._host = socket.gethostname()
         self._branch: str | None = None
         self._sha: str | None = None
+        self._title: str | None = None
+        self._project_hint: str | None = None
+        self._external_ref: str | None = None
         self._heartbeat_task: asyncio.Task | None = None
         self._started = False
         self._ended = False
@@ -280,6 +283,9 @@ class HermesEmitter:
             kind=kind,
             cwd=self.cwd,
             tenant=self.tenant,
+            title=self._title,
+            project_hint=self._project_hint,
+            external_ref=self._external_ref,
         )
         return ev
 
@@ -374,13 +380,15 @@ class HermesEmitter:
         after retries.
         """
         self._detect_git()
+        # Persist correlation hints before building the event
+        # so _base_event() can include them on all events (start, heartbeat, end).
+        self._title = title
+        self._project_hint = project_hint
+        self._external_ref = external_ref
         ev = self._base_event(Kind.SESSION_START.value)
         ev.status = Status.RUNNING.value
         ev.liveness_mode = liveness_mode
         ev.pid = self._pid
-        ev.title = title
-        ev.project_hint = project_hint
-        ev.external_ref = external_ref
         ev.branch = self._branch
         ev.sha = self._sha
         self._started = True

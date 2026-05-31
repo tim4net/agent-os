@@ -731,6 +731,42 @@ class TestHermesEmitter:
         await em.close()
 
     # -----------------------------------------------------------------------
+    # Minor 2: external_ref/project_hint carried onto heartbeat/end
+    # -----------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_correlation_hints_carried_to_heartbeat_and_end(self) -> None:
+        """project_hint and external_ref from start() appear on heartbeat/end."""
+        posted: list[dict] = []
+        handler = _mock_handler_201(posted)
+        client = _make_mock_client(handler)
+        em = HermesEmitter(
+            endpoint="http://test/api/events/work",
+            ingest_key="test-key",
+            heartbeat_s=0.01,
+            client=client,
+        )
+
+        async with em.supervised(
+            title="correlation test",
+            project_hint="agent-os",
+            external_ref="SC-42",
+        ):
+            await asyncio.sleep(0.02)  # let ≥1 heartbeat fire
+
+        for ev in posted:
+            assert ev.get("project_hint") == "agent-os", (
+                f"{ev['kind']} missing project_hint"
+            )
+            assert ev.get("external_ref") == "SC-42", (
+                f"{ev['kind']} missing external_ref"
+            )
+            assert ev.get("title") == "correlation test", (
+                f"{ev['kind']} missing title"
+            )
+        await em.close()
+
+    # -----------------------------------------------------------------------
     # Finding 2 (tick 3): TransportError cause is retained in _PostError
     # -----------------------------------------------------------------------
 
@@ -787,16 +823,21 @@ class TestEntryPoint:
         """--dry-run captures session.start and session.end events."""
         from emitters.hermes.__main__ import _run
         import argparse
+        import io
 
         args = argparse.Namespace(
             title="dry-run test",
             dry_run=True,
             heartbeat_s=0,
         )
-        asyncio.run(_run(args))  # type: ignore[arg-type]
-        # _run in dry-run mode prints events to stderr.
-        # We validate via the _run function completing without error
-        # (the MockTransport inside _run captures events and prints them).
+        captured = io.StringIO()
+        with mock.patch("sys.stderr", captured):
+            asyncio.run(_run(args))  # type: ignore[arg-type]
+
+        output = captured.getvalue()
+        assert "session.start" in output, "dry-run must emit session.start to stderr"
+        assert "session.end" in output, "dry-run must emit session.end to stderr"
+        assert "done" in output, "dry-run end event must have status=done"
 
     def test_live_mode_exits_without_ingest_key(self) -> None:
         """Live mode without AGENTOS_INGEST_KEY calls parser.error."""
