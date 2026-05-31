@@ -2,6 +2,7 @@ package workflowlint
 
 import (
 	"os"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -9,16 +10,16 @@ import (
 
 // workflow represents the subset of GitHub Actions YAML we care to validate.
 type workflow struct {
-	Name string                   `yaml:"name"`
-	On   map[string]interface{}   `yaml:"on"`
-	Jobs map[string]job           `yaml:"jobs"`
+	Name string                 `yaml:"name"`
+	On   map[string]interface{} `yaml:"on"`
+	Jobs map[string]job         `yaml:"jobs"`
 }
 
 type job struct {
-	Name    string              `yaml:"name"`
-	RunsOn  interface{}         `yaml:"runs-on"` // can be string or []string
-	Env     map[string]string   `yaml:"env"`
-	Steps   []map[string]interface{} `yaml:"steps"`
+	Name   string                   `yaml:"name"`
+	RunsOn interface{}              `yaml:"runs-on"` // can be string or []string
+	Env    map[string]string        `yaml:"env"`
+	Steps  []map[string]interface{} `yaml:"steps"`
 }
 
 // TestCIWorkflowStructure validates the ci.yml shape matches all acceptance
@@ -99,16 +100,15 @@ func TestCIWorkflowStructure(t *testing.T) {
 	// ── AC3: required steps present ──────────────────────────────────────
 	for _, job := range wf.Jobs {
 		stepChecks := map[string]bool{
-			"go build ./...":  false,
-			"go vet ./...":    false,
-			"sqlc generate":  false,
+			"go build ./...": false,
+			"go vet ./...":   false,
+			"sqlc generate": false,
 		}
 		for _, step := range job.Steps {
 			run, _ := step["run"].(string)
 			if run != "" {
 				for key := range stepChecks {
-					// Match if the run block contains the key substring.
-					if containsSubstring(run, key) {
+					if strings.Contains(strings.ToLower(run), strings.ToLower(key)) {
 						stepChecks[key] = true
 					}
 				}
@@ -121,29 +121,56 @@ func TestCIWorkflowStructure(t *testing.T) {
 		}
 	}
 
-	// ── AC4: Postgres step present + AOS_TEST_DSN + migration + skip detection ─
+	// ── AC3b: sqlc version pinned to v1.31.1 ──────────────────────────────
+	for _, job := range wf.Jobs {
+		for _, step := range job.Steps {
+			run, _ := step["run"].(string)
+			if run != "" && strings.Contains(strings.ToLower(run), "verify sqlc version") {
+				if !strings.Contains(run, "v1.31.1") {
+					t.Error("sqlc version step must pin to v1.31.1 (exact match)")
+				}
+			}
+		}
+	}
+
+	// ── AC4: Postgres step + BOTH DSN env vars + migration + GENERIC skip detection ─
+	//
+	// The real contract: the workflow must export BOTH AOS_TEST_DSN and
+	// AOS_TEST_DATABASE_URL because the repo's integration suites read two
+	// different env-var names.  The skip-gate must be generic (catch any
+	// "not set — skipping" pattern), not a single literal.
 	for _, job := range wf.Jobs {
 		hasPodman := false
 		hasMigrate := false
 		hasAOSTestDSN := false
-		hasSkipDetect := false
+		hasAOSTestDBURL := false
+		hasGenericSkipDetect := false
+
 		for _, step := range job.Steps {
 			run, _ := step["run"].(string)
-			if run != "" {
-				if containsSubstring(run, "podman run") {
-					hasPodman = true
-				}
-				if containsSubstring(run, "migrations") || containsSubstring(run, "*.up.sql") {
-					hasMigrate = true
-				}
-				if containsSubstring(run, "AOS_TEST_DSN") {
-					hasAOSTestDSN = true
-				}
-				if containsSubstring(run, "AOS_TEST_DSN not set") {
-					hasSkipDetect = true
-				}
+			if run == "" {
+				continue
+			}
+			runLower := strings.ToLower(run)
+			if strings.Contains(runLower, "podman run") {
+				hasPodman = true
+			}
+			if strings.Contains(runLower, "migrations") || strings.Contains(run, "*.up.sql") {
+				hasMigrate = true
+			}
+			if strings.Contains(run, "export AOS_TEST_DSN=") {
+				hasAOSTestDSN = true
+			}
+			if strings.Contains(run, "export AOS_TEST_DATABASE_URL=") {
+				hasAOSTestDBURL = true
+			}
+			// The skip-gate must be generic — matches any "not set … skipping"
+			// pattern, not the single literal "AOS_TEST_DSN not set".
+			if strings.Contains(runLower, "not set") && strings.Contains(runLower, "skipping") {
+				hasGenericSkipDetect = true
 			}
 		}
+
 		if !hasPodman {
 			t.Error("missing podman step to start Postgres")
 		}
@@ -153,8 +180,13 @@ func TestCIWorkflowStructure(t *testing.T) {
 		if !hasAOSTestDSN {
 			t.Error("missing AOS_TEST_DSN export in test step")
 		}
-		if !hasSkipDetect {
-			t.Error("missing skip-detection gate (AOS_TEST_DSN not set check)")
+		if !hasAOSTestDBURL {
+			t.Error("missing AOS_TEST_DATABASE_URL export in test step — " +
+				"integration suites read this var, not just AOS_TEST_DSN")
+		}
+		if !hasGenericSkipDetect {
+			t.Error("missing generic skip-detection gate (must catch any " +
+				"\"not set — skipping\" pattern, not a single literal)")
 		}
 	}
 
@@ -176,10 +208,10 @@ func TestCIWorkflowStructure(t *testing.T) {
 		for i, step := range job.Steps {
 			run, _ := step["run"].(string)
 			if run != "" {
-				if containsSubstring(run, "sqlc generate") {
+				if strings.Contains(strings.ToLower(run), "sqlc generate") {
 					sqlcIdx = i
 				}
-				if containsSubstring(run, "go build ./...") {
+				if strings.Contains(strings.ToLower(run), "go build ./...") {
 					buildIdx = i
 				}
 			}
@@ -215,37 +247,4 @@ func flattenStringSlice(v interface{}) []string {
 		return val
 	}
 	return nil
-}
-
-func containsSubstring(s, sub string) bool {
-	// Simple case-insensitive check.
-	return len(s) >= len(sub) && (s == sub || len(s) > 0 && containsFold(s, sub))
-}
-
-func containsFold(s, sub string) bool {
-	for i := 0; i <= len(s)-len(sub); i++ {
-		if foldEq(s[i:i+len(sub)], sub) {
-			return true
-		}
-	}
-	return false
-}
-
-func foldEq(a, b string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := 0; i < len(a); i++ {
-		if toLower(a[i]) != toLower(b[i]) {
-			return false
-		}
-	}
-	return true
-}
-
-func toLower(c byte) byte {
-	if c >= 'A' && c <= 'Z' {
-		return c + ('a' - 'A')
-	}
-	return c
 }

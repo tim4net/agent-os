@@ -51,7 +51,7 @@ jobs:
       - name: Verify sqlc version
         run: |
           PATH="$HOME/go/bin:$PATH"
-          sqlc version || { echo "::error::sqlc not found — install sqlc v1.31.1"; exit 1; }
+          sqlc version | grep -q 'v1\.31\.1' || { echo "::error::need sqlc v1.31.1 — found $(sqlc version)"; exit 1; }
 
       # ── Code generation ───────────────────────────────────────────────
       - name: sqlc generate
@@ -113,20 +113,19 @@ jobs:
       # ── Tests (integration MUST run, not skip) ───────────────────────
       - name: go test ./...
         run: |
-          # The integration test suite must actually RUN when AOS_TEST_DSN
-          # is set.  A skipped integration suite is treated as a failure.
-                    export AOS_TEST_DSN="postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${PGHOST}:${PGPORT}/${POSTGRES_DB}?sslmode=disable"
+          # Both DSN env-var names are used across integration suites.
+          # Export both so NO integration test silently skips.
+          export AOS_TEST_DSN="postgres://${POSTGRES_USER}:***@${PGHOST}:${PGPORT}/${POSTGRES_DB}?sslmode=disable"
+          export AOS_TEST_DATABASE_URL="$AOS_TEST_DSN"
           OUTPUT=$(go test -v ./... 2>&1) || {
             echo "$OUTPUT"
             echo "::error::tests failed"
             exit 1
           }
           echo "$OUTPUT"
-          # Detect skipped integration tests — if the keyword appears
-          # alongside "AOS_TEST_DSN not set", that means the test was
-          # misconfigured or the env var wasn't picked up.
-          if echo "$OUTPUT" | grep -qi "AOS_TEST_DSN not set"; then
-            echo "::error::Integration tests skipped despite AOS_TEST_DSN being set — this is a failure"
+          # Generic skip gate: ANY "not set — skipping" line is a failure.
+          if echo "$OUTPUT" | grep -Eqi "not set . skipping"; then
+            echo "::error::Integration suite skipped — DSN env var not picked up"
             exit 1
           fi
 
