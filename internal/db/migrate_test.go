@@ -394,10 +394,10 @@ func TestMigrateDirtyOnRealFailure(t *testing.T) {
 		t.Fatalf("set search_path: %v", err)
 	}
 
-	// Create the tracking table and pre-apply migrations 1–14 successfully
-	// so only 15 and 16 are pending. Then sabotage migration 15 by creating
-	// the constraint it tries to add (projects_tracker_check), which will
-	// cause a "constraint already exists" error on the ALTER TABLE.
+	// Create the tracking table and pre-apply migrations 1–15 successfully
+	// so only 16 is pending. Then sabotage migration 16 by pre-creating
+	// the tracker_items table, which will cause a "relation already exists"
+	// error when the migration tries CREATE TABLE tracker_items.
 	_, err = pool.Exec(ctx, fmt.Sprintf(`
 		CREATE TABLE %s.schema_migrations (version bigint PRIMARY KEY, dirty boolean NOT NULL DEFAULT false);
 	`, schema))
@@ -405,14 +405,14 @@ func TestMigrateDirtyOnRealFailure(t *testing.T) {
 		t.Fatalf("create schema_migrations: %v", err)
 	}
 
-	// Apply all migrations up through 14 in the test schema so only 15–16 are pending.
+	// Apply all migrations up through 15 in the test schema so only 16 is pending.
 	allFiles, err := parseMigrations()
 	if err != nil {
 		t.Fatalf("parseMigrations: %v", err)
 	}
 	var preUp []MigrationFile
 	for _, f := range allFiles {
-		if f.Version <= 14 && strings.HasSuffix(f.Name, ".up.sql") {
+		if f.Version <= 15 && strings.HasSuffix(f.Name, ".up.sql") {
 			preUp = append(preUp, f)
 		}
 	}
@@ -430,24 +430,21 @@ func TestMigrateDirtyOnRealFailure(t *testing.T) {
 		}
 	}
 
-	// Sabotage migration 15: it adds a CHECK constraint "projects_tracker_check".
-	// Pre-create it so the ALTER TABLE fails.
-	sabotageSQL := fmt.Sprintf(
-		`ALTER TABLE %s.projects ADD CONSTRAINT projects_tracker_check CHECK (tracker IN ('shortcut'))`,
-		schema,
-	)
+	// Sabotage migration 16: it does CREATE TABLE tracker_items.
+	// Pre-create it so the CREATE TABLE fails with "relation already exists".
+	sabotageSQL := fmt.Sprintf(`CREATE TABLE %s.tracker_items (id int)`, schema)
 	if _, err := pool.Exec(ctx, sabotageSQL); err != nil {
-		t.Fatalf("sabotage pre-create constraint: %v", err)
+		t.Fatalf("sabotage pre-create table: %v", err)
 	}
 
-	// Run MigrateUp — migration 15 should fail and be marked dirty.
+	// Run MigrateUp — migration 16 should fail and be marked dirty.
 	_, err = MigrateUp(ctx, pool)
 	if err == nil {
-		t.Fatal("expected MigrateUp to fail on sabotaged migration 15")
+		t.Fatal("expected MigrateUp to fail on sabotaged migration 16")
 	}
 	t.Logf("MigrateUp error (expected): %v", err)
 
-	// Assert (a): schema_migrations actually contains a dirty=true row for version 15.
+	// Assert (a): schema_migrations actually contains a dirty=true row for version 16.
 	var dirtyVersion int64
 	var dirty bool
 	err = pool.QueryRow(ctx, fmt.Sprintf(
@@ -459,8 +456,8 @@ func TestMigrateDirtyOnRealFailure(t *testing.T) {
 	if !dirty {
 		t.Fatal("expected dirty=true, got false")
 	}
-	if dirtyVersion != 15 {
-		t.Errorf("expected dirty version 15, got %d", dirtyVersion)
+	if dirtyVersion != 16 {
+		t.Errorf("expected dirty version 16, got %d", dirtyVersion)
 	}
 	t.Logf("confirmed: version %d is persisted as dirty=true ✓", dirtyVersion)
 
@@ -473,8 +470,8 @@ func TestMigrateDirtyOnRealFailure(t *testing.T) {
 	if !regexp.MustCompile(`dirty`).MatchString(errMsg) {
 		t.Errorf("second MigrateUp error should mention 'dirty', got: %v", err)
 	}
-	if !regexp.MustCompile(`15`).MatchString(errMsg) {
-		t.Errorf("second MigrateUp error should mention version 15, got: %v", err)
+	if !regexp.MustCompile(`16`).MatchString(errMsg) {
+		t.Errorf("second MigrateUp error should mention version 16, got: %v", err)
 	}
 	t.Logf("second MigrateUp correctly aborted on dirty state: %v", err)
 }
