@@ -22,6 +22,14 @@ type WorkUnit struct {
 	FirstEventAt time.Time `json:"first_event_at"`
 	LastEventAt  time.Time `json:"last_event_at"`
 	Correlated   bool      `json:"correlated"`
+	// Honest aggregates derived from the events (not stored flags) — power the UI
+	// liveness/labels (F10). LatestStatus is the status of the most recent status-bearing
+	// event; it is what distinguishes done/failed/running.
+	LatestStatus string   `json:"latest_status,omitempty"`
+	LatestKind   string   `json:"latest_kind,omitempty"`
+	Title        string   `json:"title,omitempty"`
+	Harnesses    []string `json:"harnesses,omitempty"`
+	CostUsd      *float64 `json:"cost_usd,omitempty"`
 }
 
 // WorkUnitLister is the consumer-side subset of db.Queries the engine needs (DIP),
@@ -82,6 +90,10 @@ func rowToWorkUnit(r db.ListWorkUnitsRow) WorkUnit {
 		Sha:          r.Sha,
 		EventCount:   r.EventCount,
 		SessionCount: r.SessionCount,
+		LatestStatus: r.LatestStatus,
+		LatestKind:   r.LatestKind,
+		Title:        r.Title,
+		Harnesses:    r.Harnesses,
 	}
 	if r.Correlated.Valid {
 		u.Correlated = r.Correlated.Bool
@@ -91,6 +103,11 @@ func rowToWorkUnit(r db.ListWorkUnitsRow) WorkUnit {
 	}
 	if r.LastEventAt.Valid {
 		u.LastEventAt = r.LastEventAt.Time
+	}
+	if r.CostUsd.Valid {
+		if f, err := r.CostUsd.Float64Value(); err == nil && f.Valid {
+			u.CostUsd = &f.Float64
+		}
 	}
 	return u
 }

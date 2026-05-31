@@ -21,6 +21,7 @@ import { PipelineBoard } from './components/pipeline/PipelineBoard'
 import { WorkflowList } from './components/workflows/WorkflowList'
 import { TimelineView } from './components/timeline/TimelineView'
 import { SkillsList } from './components/skills/SkillsList'
+import { ObserveView } from './components/observe/ObserveView'
 
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { StatusFooter } from './components/StatusFooter'
@@ -34,10 +35,11 @@ const tabMeta: Record<string, string> = {
   Build: 'view_kanban',
   Knowledge: 'psychology',
   Automate: 'bolt',
+  Observe: 'radar',
   Settings: 'settings',
 }
 
-const tabs = ['Chat', 'Create', 'Build', 'Knowledge', 'Automate', 'Settings'] as const
+const tabs = ['Chat', 'Create', 'Build', 'Knowledge', 'Automate', 'Observe', 'Settings'] as const
 type Tab = (typeof tabs)[number]
 
 /** Reusable segmented toggle for sub-views within a tab */
@@ -358,6 +360,13 @@ function App() {
           </ErrorBoundary>
         )
       }
+
+      case 'Observe':
+        return (
+          <ErrorBoundary name="Observe">
+            <ObserveView />
+          </ErrorBoundary>
+        )
 
       case 'Settings':
         return (
