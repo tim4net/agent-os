@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/tim4net/agent-os/internal/db"
 	"github.com/tim4net/agent-os/internal/service"
@@ -27,6 +28,7 @@ func TestHTTPDelegation_POSTSynthesizesWorkEvent(t *testing.T) {
 	defer pool.Close()
 
 	parentID := uuid.NewString()
+	seedTestAgent(t, pool, parentID)
 	taskGoal := "do the thing"
 	payload := map[string]string{
 		"parent_agent_id":  parentID,
@@ -86,6 +88,9 @@ func TestHTTPDelegation_PATCHTerminalSynthesizesSessionEnd(t *testing.T) {
 
 	parentID := uuid.NewString()
 	taskGoal := "complete this task"
+
+	// Seed the parent agent so the FK constraint is satisfied.
+	seedTestAgent(t, pool, parentID)
 
 	// Step 1: POST to create delegation
 	postBody := map[string]string{
@@ -148,6 +153,9 @@ func TestHTTPDelegation_PATCHNonTerminalNoSynthesis(t *testing.T) {
 
 	parentID := uuid.NewString()
 	taskGoal := "do the thing"
+
+	// Seed the parent agent so the FK constraint is satisfied.
+	seedTestAgent(t, pool, parentID)
 
 	// POST to create
 	postBody := map[string]string{
@@ -227,6 +235,21 @@ func parseTimestamp(s string) pgtype.Timestamptz {
 		}
 	}
 	return pgtype.Timestamptz{Time: t, Valid: true}
+}
+
+// seedTestAgent inserts a minimal agents row with the given ID so the delegations
+// FK constraint is satisfied. Uses the pool directly because CreateAgent
+// auto-generates IDs (we need a deterministic one).
+func seedTestAgent(t *testing.T, pool *pgxpool.Pool, id string) {
+	t.Helper()
+	ctx := context.Background()
+	_, err := pool.Exec(ctx,
+		"INSERT INTO agents (id, name, display_name, harness, base_url) VALUES ($1, $2, $3, $4, $5)",
+		id, "test-parent-"+id[:8], "Test Parent Agent", "test", "http://localhost",
+	)
+	if err != nil {
+		t.Fatalf("seed agent: %v", err)
+	}
 }
 
 // Suppress unused import warnings

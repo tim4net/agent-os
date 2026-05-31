@@ -119,7 +119,7 @@ func TestHTTPWorkEvent_UnknownKeys_Returns400(t *testing.T) {
 	a, pool, _ := newTestAPIWithDB(t)
 	defer pool.Close()
 
-	body := `{"schema":"agentos.work_event/v1","event_id":"` + uuid.NewString() + `","host":"h","harness":"hermes","kind":"session.start","session_id":"` + uuid.NewString() + `","ts":"2026-05-30T12:00:00Z","status":"running","liveness_mode":"supervised","made_up_key":true}`
+	body := `{"schema":"agentos.work_event/v1","event_id":"` + uuid.NewString() + `","host":"h","harness":"hermes","kind":"session.start","session_id":"` + uuid.NewString() + `","ts":"` + time.Now().UTC().Format(time.RFC3339) + `","status":"running","liveness_mode":"supervised","made_up_key":true}`
 
 	req := httptest.NewRequest("POST", "/work", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -280,17 +280,17 @@ func TestHTTPWorkEvent_ValidationError_Returns400(t *testing.T) {
 	}{
 		{
 			name:       "missing event_id",
-			body:       `{"schema":"agentos.work_event/v1","host":"h","harness":"hermes","kind":"session.start","session_id":"` + uuid.NewString() + `","ts":"2026-05-30T12:00:00Z","status":"running","liveness_mode":"supervised"}`,
+			body:       `{"schema":"agentos.work_event/v1","host":"h","harness":"hermes","kind":"session.start","session_id":"` + uuid.NewString() + `","ts":"` + time.Now().UTC().Format(time.RFC3339) + `","status":"running","liveness_mode":"supervised"}`,
 			wantSubstr: "event_id is required",
 		},
 		{
 			name:       "session.end with running status",
-			body:       `{"schema":"agentos.work_event/v1","event_id":"` + uuid.NewString() + `","host":"h","harness":"hermes","kind":"session.end","session_id":"` + uuid.NewString() + `","ts":"2026-05-30T12:00:00Z","status":"running","liveness_mode":"supervised"}`,
+			body:       `{"schema":"agentos.work_event/v1","event_id":"` + uuid.NewString() + `","host":"h","harness":"hermes","kind":"session.end","session_id":"` + uuid.NewString() + `","ts":"` + time.Now().UTC().Format(time.RFC3339) + `","status":"running","liveness_mode":"supervised"}`,
 			wantSubstr: "status for session.end must be one of",
 		},
 		{
 			name:       "heartbeat with bounded liveness_mode",
-			body:       `{"schema":"agentos.work_event/v1","event_id":"` + uuid.NewString() + `","host":"h","harness":"hermes","kind":"session.heartbeat","session_id":"` + uuid.NewString() + `","ts":"2026-05-30T12:00:00Z","status":"running","liveness_mode":"bounded"}`,
+			body:       `{"schema":"agentos.work_event/v1","event_id":"` + uuid.NewString() + `","host":"h","harness":"hermes","kind":"session.heartbeat","session_id":"` + uuid.NewString() + `","ts":"` + time.Now().UTC().Format(time.RFC3339) + `","status":"running","liveness_mode":"bounded"}`,
 			wantSubstr: "session.heartbeat requires liveness_mode supervised",
 		},
 	}
