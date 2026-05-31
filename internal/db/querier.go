@@ -15,6 +15,8 @@ type Querier interface {
 	CountArtifacts(ctx context.Context, dollar_1 string) (int64, error)
 	CountDelegations(ctx context.Context, arg CountDelegationsParams) (int64, error)
 	CountSubtasks(ctx context.Context, parentTaskID pgtype.UUID) (int64, error)
+	CountTrackerItemsByProject(ctx context.Context, arg CountTrackerItemsByProjectParams) (int64, error)
+	CountTrackerItemsByTenant(ctx context.Context, tenant string) (int64, error)
 	// Consistent with ListWorkUnits grouping (same key) so pagination Total matches.
 	CountWorkUnits(ctx context.Context) (int64, error)
 	CreateAgent(ctx context.Context, arg CreateAgentParams) (Agent, error)
@@ -59,6 +61,9 @@ type Querier interface {
 	GetProjectBySlug(ctx context.Context, slug string) (Project, error)
 	GetSkill(ctx context.Context, id pgtype.UUID) (Skill, error)
 	GetTask(ctx context.Context, id pgtype.UUID) (Task, error)
+	GetTrackerItem(ctx context.Context, arg GetTrackerItemParams) (TrackerItem, error)
+	// Returns all projects configured with a given tracker type, scoped to a tenant.
+	GetTrackerProjects(ctx context.Context, arg GetTrackerProjectsParams) ([]Project, error)
 	GetWorkEventByEventID(ctx context.Context, eventID pgtype.UUID) (WorkEvent, error)
 	GetWorkEventsBySession(ctx context.Context, arg GetWorkEventsBySessionParams) ([]WorkEvent, error)
 	// All events in one group (drill-down). Matches the same 5-part key as ListWorkUnits,
@@ -82,6 +87,8 @@ type Querier interface {
 	ListSkillsByAgent(ctx context.Context, agentID pgtype.UUID) ([]Skill, error)
 	ListSubtasks(ctx context.Context, parentTaskID pgtype.UUID) ([]Task, error)
 	ListTasks(ctx context.Context, arg ListTasksParams) ([]Task, error)
+	ListTrackerItemsByProject(ctx context.Context, arg ListTrackerItemsByProjectParams) ([]TrackerItem, error)
+	ListTrackerItemsByTenant(ctx context.Context, arg ListTrackerItemsByTenantParams) ([]TrackerItem, error)
 	ListVisibleAgents(ctx context.Context) ([]Agent, error)
 	// WP-B correlation engine. Groups work_events into work_units by the correlation key.
 	// Per contract §7 the key is (project_id, external_ref, branch, sha); we ALSO group by
@@ -110,6 +117,8 @@ type Querier interface {
 	UpdateWorkflowRun(ctx context.Context, arg UpdateWorkflowRunParams) (WorkflowRun, error)
 	UpsertMemory(ctx context.Context, arg UpsertMemoryParams) (MemoryIndex, error)
 	UpsertSkill(ctx context.Context, arg UpsertSkillParams) (Skill, error)
+	// Upsert a tracker item on (project_id, external_ref). Updates title/status/type/url/payload and bumps synced_at.
+	UpsertTrackerItem(ctx context.Context, arg UpsertTrackerItemParams) (TrackerItem, error)
 }
 
 var _ Querier = (*Queries)(nil)

@@ -138,6 +138,21 @@ type Task struct {
 	ParentTaskID pgtype.UUID        `json:"parent_task_id"`
 }
 
+type TrackerItem struct {
+	ID           pgtype.UUID        `json:"id"`
+	ProjectID    pgtype.UUID        `json:"project_id"`
+	ExternalRef  string             `json:"external_ref"`
+	Title        string             `json:"title"`
+	Status       string             `json:"status"`
+	ItemType     string             `json:"item_type"`
+	CanonicalUrl pgtype.Text        `json:"canonical_url"`
+	Payload      []byte             `json:"payload"`
+	Tenant       string             `json:"tenant"`
+	SyncedAt     pgtype.Timestamptz `json:"synced_at"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+}
+
 type WorkEvent struct {
 	ID            pgtype.UUID        `json:"id"`
 	EventID       pgtype.UUID        `json:"event_id"`

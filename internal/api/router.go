@@ -160,6 +160,9 @@ func (a *API) Router() http.Handler {
 	// Work units (correlation) routes
 	r.Mount("/work-units", a.WorkUnitRoutes())
 
+	// Tracker routes (WP-E, read-only Shortcut reader, contract §8, ADR-001 D4/D5).
+	r.Mount("/trackers", a.TrackerRoutes())
+
 	// Timeline routes
 	r.Mount("/timeline", a.TimelineRoutes())
 
