@@ -40,30 +40,39 @@ all `internal/db/*.sql.go` aggregates.
 
 ## UI work packages (REQUIRED if this WP creates/changes anything under `web/src/`)
 <!-- Mockup-first, in-place, auto-merge. This is the project's UI contract. -->
-- **Owner:** `lead` (UI is Lead-built — best design skills, per the standing decision).
-- **Mockup-first (do BEFORE coding):**
+- **Owner:** `lead` OR `roux` — but ONLY against a Lead-authored/approved mockup (see below).
+  Tim's decision 2026-05-31: Roux MAY implement UI if a precise mockup + tokens exist and Lead
+  is confident the design won't be botched. Lead ALWAYS owns the design (the mockup); Roux may
+  own the labor. When in doubt, or for a net-new surface with no mockup, Lead builds it.
+- **Mockup-first (do BEFORE coding) — this IS the design-ownership step:**
   1. Check for an existing mockup. The Observe/SPOG surfaces have one:
      `/home/tim/Obsidian/projects/agent-os/spog-ui-mockup.md` (+ `spog-ui-mockup.html`).
      If a directionally-correct mockup exists, build against it — don't re-derive pixels.
-  2. If none exists, build a mockup (real aurora-theme tokens from
-     `web/public/themes/aurora.css`; the exact data shape the API returns) and get Tim's
-     explicit sign-off on the mockup BEFORE implementing. Design discussion stays in
-     discussion mode until he approves a direction.
+  2. If none exists, **Lead** builds a mockup (real aurora-theme tokens from
+     `web/public/themes/aurora.css`; the exact data shape the API returns) and gets Tim's
+     explicit sign-off BEFORE implementation is dispatched. A UI WP assigned to Roux MUST link
+     an approved mockup in its body; without one, it stays Lead-owned. Design discussion stays
+     in discussion mode until Tim approves a direction — Roux never improvises design.
 - **In-place, no fork:** reuse `glass-card`, the CSS-var tokens (`--bg-card`, `--accent-*`,
   `--radius-*`, `--glass-blur`), Tailwind utilities, and the Material `Icon` component, so it
   auto-themes across aurora/daylight/noir. No new color system; match the existing app shell.
 - **Honesty in the UI:** never render a stored flag as live truth — derive status from the
   data the server provides (F10). A card that lies about a dead agent being alive is worse
   than no card.
+- **Design-fidelity gate (Lead, at review):** for ANY UI PR (Roux- or Lead-authored), Lead runs
+  an in-browser design-fidelity check after the deploy gate — the built UI must match the
+  approved mockup (tokens, spacing, glass-card, icons, both happy + empty states) and use no new
+  color system. A fidelity miss is a Gate-3 finding sent back to the author, same as a functional
+  miss. This is the safeguard that lets Roux build UI: the labor is delegated, the taste is gated.
 - **Verify the BUILT result, not just the mockup:** after the deploy gate, load the deployed
   UI in the browser and confirm it renders real data correctly (both happy + empty states);
   fold any vision nits. Component/route tests per the Test plan still apply.
 - **MERGE POLICY (Tim's decision 2026-05-31): auto-merge COVERS UI for agent-os.** Once the
-  3 gates + green-baseline + hpms1 deploy gate pass, Lead merges without a separate
-  human visual-OK-before-PR hold. NOTE: this intentionally DEVIATES from the Rewst/Riftwing
-  `riftwing-ui-mockup-workflow` Gate 4 (which holds visual PRs for Tim's OK). That gate is a
-  dayjob convention; this is Tim's private tool and he granted autonomous UI merge here. Do
-  not import Gate 4 into this project.
+  3 gates + green-baseline + hpms1 deploy gate + design-fidelity check pass, Lead merges without a
+  separate human visual-OK-before-PR hold. NOTE: this intentionally DEVIATES from the
+  Rewst/Riftwing `riftwing-ui-mockup-workflow` Gate 4 (which holds visual PRs for Tim's OK). That
+  gate is a dayjob convention; this is Tim's private tool and he granted autonomous UI merge here.
+  Do not import Gate 4 into this project.
 
 ## Acceptance criteria (must all pass before review request)
 - [ ] <behavioral criterion 1 — concrete, testable>

@@ -74,6 +74,26 @@ STEP 4 — PUSH PREFLIGHT (run before every push; abort if any check fails):
 STEP 5 — RUN VERIFICATION. Run the exact commands in the issue's "Verification commands".
 Paste their output into the PR body. If they fail, fix until green (do not open a red PR).
 
+STEP 5b — MUTATION SELF-CHECK (PROVE YOUR TESTS ARE NOT TAUTOLOGICAL — run before EVERY PR/re-push).
+This is the single highest-value step: it is the exact discrimination Lead's Gate 2/3 runs at
+review — done here it collapses the review-bounce cycle (tautological-test + silent-failure +
+regression-guard-missing are this repo's top 3 recurring bounce classes; all are caught by this
+check). For EACH behavioral guarantee your WP claims (every AC, and every bug/finding you "fixed"):
+  1. Identify the ONE test that proves it and the ONE line of PRODUCTION code that implements it.
+  2. BREAK the production behavior on purpose — revert it to the bug (flip the comparison, drop the
+     `tenant=$2` clause, return the old constant, skip the `continue`, swallow the error, etc.).
+  3. Re-run that test. It MUST now FAIL. If it still PASSES, the test is tautological / does not
+     exercise the real path (it mocks the thing it verifies, asserts only `!= 500`, re-implements
+     the logic inline, or checks a fake's map instead of prod SQL) — FIX THE TEST, not the code.
+  4. RESTORE the production code exactly (verify with `git diff` — the mutation must leave NO trace)
+     and re-run: it MUST pass again.
+Do this for the load-bearing assertions, not every trivial getter. A fast helper drives it:
+  `bash scripts/dev/mutation-selfcheck.sh <pkg-or-path> "<test-name-regex>"`  (Go), or for Python
+  emitters run the pytest case after hand-reverting the prod line. In the PR body add a
+  "Mutation self-check" block listing each guarantee → the mutation you applied → "test FAILED on
+  bug, PASSED on restore". A fix-rework PR (STEP 1) with NO mutation-proof block for the finding it
+  claims to fix is incomplete — Lead will bounce it as regression-guard-missing.
+
 STEP 6 — OPEN PR. Commit (trailers `Agent: roux` + `Refs: #<n>`), push the branch, then:
   `gh pr create --base main --head <branch> --title "<WP-id>: <title>" --body "<...includes Refs #<n>, verification output, and any off-limits-file diff proposals...>"`
   Then `gh issue edit <n> --add-label status:in-review --remove-label status:todo`
@@ -116,6 +136,11 @@ GUARDRAILS (promoted from recurring review findings — ADR-006 D3; obey pre-emp
     for this — handler wiring (status codes, header checks, JSON encoding, query-param parsing)
     keeps shipping unproven without a route test. A WP that adds a handler with no route test is
     a Gate-2 FAIL.
+  - **Mutation-prove every regression test** (the meta-guardrail, see STEP 5b): the three classes
+    above (silent-failure, tautological-test, missing route test) are all instances of one root
+    cause — a test that does not fail when the behavior breaks. Before EVERY PR, break the prod line
+    and confirm the test goes red, then restore. A "fixed" finding whose test still passes on the
+    reintroduced bug is not fixed. This is non-negotiable on fix-rework PRs.
 
 CURRENT WORK QUEUE — authoritative source is GitHub, not this list. Each tick, run
 `gh issue list --label "agent:roux,status:todo" --state open` and take the lowest-numbered.
