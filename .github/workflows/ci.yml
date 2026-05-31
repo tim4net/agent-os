@@ -102,7 +102,7 @@ jobs:
           export PGUSER="$POSTGRES_USER" PGPASSWORD="$POSTGRES_PASSWORD" PGDATABASE="$POSTGRES_DB"
           for f in $(ls internal/migrations/*.up.sql | sort); do
             echo "applying $f"
-            psql -f "$f"
+            psql -v ON_ERROR_STOP=1 --single-transaction -f "$f"
             if [ $? -ne 0 ]; then
               echo "::error::migration $f failed"
               exit 1

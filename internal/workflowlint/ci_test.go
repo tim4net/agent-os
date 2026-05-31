@@ -157,6 +157,12 @@ func TestCIWorkflowStructure(t *testing.T) {
 			}
 			if strings.Contains(runLower, "migrations") || strings.Contains(run, "*.up.sql") {
 				hasMigrate = true
+				// Regression guard: psql must use ON_ERROR_STOP so SQL
+				// errors are not silently swallowed (exit-code check
+				// is dead code without it).
+				if !strings.Contains(run, "ON_ERROR_STOP") {
+					t.Error("migration step psql must use -v ON_ERROR_STOP=1 — without it, SQL errors are silently ignored and the guard never fires")
+				}
 			}
 			if strings.Contains(run, "export AOS_TEST_DSN=") {
 				hasAOSTestDSN = true
