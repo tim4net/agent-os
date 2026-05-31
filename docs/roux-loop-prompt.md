@@ -53,7 +53,16 @@ STEP 3 — IMPLEMENT (in a local worktree you own — create it off fresh `main`
   - Code strictly to the frozen contract: `$AOS/docs/work-event-contract.md`.
     Do not deviate from its event shape, enums, validation rules, or schema. If the spec
     seems wrong or ambiguous, DO NOT improvise — comment the question on the issue and stop.
-  - Include the unit test the issue requires. No test = not done.
+  - TESTS — work the issue's "Test plan" table, do not wing it. BEFORE you write code,
+    confirm every AC has at least one case in that table (happy path + each error status +
+    the failure/error path returning non-2xx + tenant-isolation if scoped + any edge). If the
+    issue's table is thin or missing a case you can see is needed, ADD the rows yourself in a
+    PR-body "Test plan (expanded)" block and implement them — under-specified tests are the
+    #1 cause of review bounces here. Then write the cases. Obey the GUARDRAILS below
+    (no tautological tests; route handlers get a real-PG `httptest` route test asserting BOTH
+    response and DB state; integration tests RUN not skip; unique uuid-suffixed fixtures +
+    t.Cleanup). A WP whose tests don't cover its ACs is not done — and don't paper a gap by
+    claiming adjacent tests "cover it"; if you must skip a case, say so plainly in the PR.
 
 STEP 4 — PUSH PREFLIGHT (run before every push; abort if any check fails):
   - `gh api user -q .login` must print `tfournet` or `tim4net`.

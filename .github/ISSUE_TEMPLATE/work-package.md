@@ -41,13 +41,62 @@ all `internal/db/*.sql.go` aggregates.
 ## Acceptance criteria (must all pass before review request)
 - [ ] <behavioral criterion 1 — concrete, testable>
 - [ ] <criterion 2>
-- [ ] Unit test included (no test ⇒ not done — plan §7).
+- [ ] Every AC above is covered by a case in the Test plan below (no AC ⇒ no test ⇒ not done).
 - [ ] <PreLIVE real-run check if applicable, e.g. "a real `claude -p` run produces a row">
 - [ ] Screenshot at self@1920 (UI WPs) / mobile ≤430px (chat WP).
 
+## Test plan (REQUIRED — enumerate cases, don't just say "add a test")
+<!--
+  Fill this in BEFORE coding. One row per case. The reviewer checks the SHIPPED tests
+  against THIS table — a missing row is a spec gap (Lead's fault); a row with no test is
+  an incomplete WP (yours). This is what stops the 3-bounce test-quality cycle.
+-->
+
+| # | AC | Case (what scenario) | Level | Asserts | Would FAIL if… |
+|---|----|----------------------|-------|---------|----------------|
+| 1 | AC1 | happy path | route+db | 2xx + body shape + DB row present | handler stops persisting |
+| 2 | AC1 | <each error status> e.g. missing key→403, bad input→400, not-found→404 | route | exact status + error body | validation removed |
+| 3 | AC1 | **failure path surfaces** (dependency/DB error) | route+fake-err | returns non-2xx, NOT 200 | error silently swallowed |
+| 4 | AC2 | tenant isolation (if tenant-scoped) | route+db | tenant A's key/scope cannot read tenant B | cross-tenant leak (ADR-002) |
+| 5 | AC2 | idempotency / replay (if applicable) | route+db | second call → contracted code, no dup row | upsert regressed |
+| … | …  | edge: empty/aged/absorbing-terminal/etc | … | … | … |
+
+**Rules these cases MUST obey (non-negotiable — promoted guardrails):**
+- **No tautological tests.** A test that mocks the exact thing it verifies proves nothing.
+  Each case must execute the REAL code path and FAIL if behavior breaks. For any
+  guarantee/contract/loop, exercise it for real (run the loop, hit a real/fake transport,
+  assert the emitted body) — not "call it once, assert it returned."
+- **Route handlers get a route-level test.** Any handler under `internal/api/` ships an
+  `internal/api/<x>_test.go` that drives the REAL chi router via `httptest` against **real
+  PG17** (`AOS_TEST_DATABASE_URL`), modeled on `internal/api/workevents_test.go`. Assert
+  **both** the HTTP response (status + body = the contract) **and** the DB state (the row
+  count/values = reality). One without the other is not enough.
+- **Integration tests must RUN, not skip.** A suite that `t.Skip`s its real-PG tests is a
+  Gate-1 FAIL — a skipped test protects nothing. Spin a throwaway PG17, migrate, run.
+- **Failure path is mandatory.** Every bug fix ships a regression test that fails on the old
+  code. Every handler has a case proving an internal error returns non-2xx (a 200 on error
+  is a silent-failure bug).
+- **Unique fixtures.** Tests sharing a real DB MUST use globally-unique keys (uuid-suffixed
+  external_ref/branch/host) + clean up their own rows (`t.Cleanup`), or they pollute each
+  other when the package runs together.
+- **Don't substitute, and tell on yourself.** If you cannot write a required case, do NOT
+  claim adjacent tests "cover it" — say so explicitly in the PR body. A buried skip costs
+  more trust than the time it saves.
+
 ## Verification commands (run these, paste output in the PR)
 ```bash
-<exact build/test/curl commands the agent must run>
+# build + vet
+PATH="$HOME/go/bin:$PATH" go build ./... && go vet ./...
+# throwaway PG17, migrate, run the FULL suite serially with the real DB
+# (integration tests MUST run — a skipped suite is a Gate-1 fail)
+podman run -d --name wp-test-pg -e POSTGRES_USER=test -e POSTGRES_DB=test \
+  -e POSTGRES_HOST_AUTH_METHOD=trust -p 55434:5432 postgres:17-alpine
+for f in internal/migrations/*.up.sql; do podman exec -i wp-test-pg psql -U test -d test -q -f - < "$f"; done
+AOS_TEST_DATABASE_URL='postgres://test@localhost:55434/test?sslmode=disable' \
+  go test ./... -count=1 -p 1
+podman rm -f wp-test-pg
+# UI WPs: tsc + vite build must pass; new files lint-clean
+cd web && npm run build && npm run lint
 ```
 
 ## Constraints (hard rules)
