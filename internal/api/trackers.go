@@ -15,6 +15,10 @@ import (
 	"github.com/tim4net/agent-os/internal/service"
 )
 
+// testTrackerSyncers is an injection seam for tests. When non-nil, SyncTrackerItems
+// uses this map instead of creating real sources. Nil in production.
+var testTrackerSyncers map[string]service.TrackerSyncer
+
 // TrackerRoutes returns a Chi router for tracker item endpoints.
 // All list endpoints are read-only (contract §8, ADR-001 D4/D5).
 // The sync endpoint triggers a write (upsert) through the TrackerSyncer interface.
@@ -164,21 +168,37 @@ func (a *API) SyncTrackerItems(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var src service.TrackerSyncer
-	switch proj.Tracker {
-	case "shortcut":
-		src = service.NewShortcutSource(a.queries, slog.Default().WithGroup("shortcut"))
-	case "github_issues":
-		src = service.NewGitHubSource(a.queries, slog.Default().WithGroup("github"))
-	default:
-		http.Error(w, fmt.Sprintf("unsupported tracker: %s", proj.Tracker), http.StatusBadRequest)
+	// Tenant-scope the project lookup (non-blocking Finding #3).
+	if proj.Tenant != tenant {
+		http.Error(w, "project not found", http.StatusNotFound)
 		return
+	}
+
+	var src service.TrackerSyncer
+	// Use injected fakes if the test seam is set (blocking Finding #1/#2).
+	if testTrackerSyncers != nil {
+		var ok bool
+		src, ok = testTrackerSyncers[proj.Tracker]
+		if !ok {
+			http.Error(w, fmt.Sprintf("unsupported tracker: %s", proj.Tracker), http.StatusBadRequest)
+			return
+		}
+	} else {
+		switch proj.Tracker {
+		case "shortcut":
+			src = service.NewShortcutSource(a.queries, slog.Default().WithGroup("shortcut"))
+		case "github_issues":
+			src = service.NewGitHubSource(a.queries, slog.Default().WithGroup("github"))
+		default:
+			http.Error(w, fmt.Sprintf("unsupported tracker: %s", proj.Tracker), http.StatusBadRequest)
+			return
+		}
 	}
 
 	result, err := src.Sync(r.Context(), projectID, tenant)
 	if err != nil {
 		log.Printf("trackers: sync failed: %v", err)
-		http.Error(w, fmt.Sprintf("failed to sync tracker items: %s", err.Error()), http.StatusInternalServerError)
+		http.Error(w, "failed to sync tracker items", http.StatusInternalServerError)
 		return
 	}
 

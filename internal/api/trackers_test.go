@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http/httptest"
 	"os"
-	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/tim4net/agent-os/internal/db"
+	"github.com/tim4net/agent-os/internal/service"
 )
 
 // ---------------------------------------------------------------------------
@@ -338,7 +338,7 @@ func TestTrackerSync_FailureReturns500(t *testing.T) {
 	// Seed a REAL project with a valid tracker but no external_ref.
 	// Sync will proceed past the project lookup (no 404) but fail inside
 	// ShortcutSource because no shortcut external_ref is configured → 500.
-	projectID := seedProject(t, pool, "shortcut", "")
+	projectID := seedProject(t, pool, "shortcut", "", tenant)
 
 	rec := trackerRequest(a, "GET", "/sync/"+projectID, map[string]string{
 		"tenant": tenant,
@@ -353,9 +353,22 @@ func TestTrackerSync_FailureReturns500(t *testing.T) {
 // Bug #18: tracker dispatch — SyncTrackerItems routes by project.tracker
 // ---------------------------------------------------------------------------
 
-// seedProject inserts a project row with the given tracker type and returns
-// its UUID. The external_ref is set to the provided value (may be empty).
-func seedProject(t *testing.T, pool *pgxpool.Pool, tracker, externalRef string) string {
+// fakeTrackerSyncer is a test double that records whether Sync was called.
+// Used to verify dispatch routing without depending on real source behavior.
+type fakeTrackerSyncer struct {
+	name    string
+	syncErr error
+	called  bool
+}
+
+func (f *fakeTrackerSyncer) Sync(_ context.Context, _ pgtype.UUID, _ string) (service.SyncResult, error) {
+	f.called = true
+	return service.SyncResult{}, f.syncErr
+}
+
+// seedProject inserts a project row with the given tracker type and tenant,
+// returning its UUID. The external_ref is set to the provided value (may be empty).
+func seedProject(t *testing.T, pool *pgxpool.Pool, tracker, externalRef, tenant string) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -363,8 +376,7 @@ func seedProject(t *testing.T, pool *pgxpool.Pool, tracker, externalRef string) 
 	_, err := pool.Exec(ctx, `
 		INSERT INTO projects (id, slug, name, tenant, tracker, external_ref, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
-	`, id, fmt.Sprintf("proj-%s", uuid.NewString()[:8]), "Test Project",
-		fmt.Sprintf("dispatch-%s", uuid.NewString()[:8]), tracker, externalRef)
+	`, id, fmt.Sprintf("proj-%s", uuid.NewString()[:8]), "Test Project", tenant, tracker, externalRef)
 	if err != nil {
 		t.Fatalf("seed project: %v", err)
 	}
@@ -382,7 +394,10 @@ func cleanupProjects(t *testing.T, pool *pgxpool.Pool, tenantPrefix string) {
 
 // TestSyncTracker_DispatchByTrackerType verifies that SyncTrackerItems
 // dispatches to the correct tracker source based on the project's tracker column.
+// Uses injectable fake TrackerSyncers (approach (a) from Gate 3 review).
 // This is the regression guard for bug #18 (hardcoded ShortcutSource).
+// If bug #18 regresses, the github_issues subtest will call the shortcut fake
+// instead of the github fake, failing the assertion.
 func TestSyncTracker_DispatchByTrackerType(t *testing.T) {
 	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
 		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
@@ -394,54 +409,64 @@ func TestSyncTracker_DispatchByTrackerType(t *testing.T) {
 	tenant := fmt.Sprintf("dispatch-%s", uuid.NewString()[:8])
 	t.Cleanup(func() { cleanupProjects(t, pool, tenant) })
 
+	// Create named fakes that record whether Sync was called.
+	shortcutFake := &fakeTrackerSyncer{name: "shortcut", syncErr: fmt.Errorf("shortcut fake error")}
+	githubFake := &fakeTrackerSyncer{name: "github", syncErr: fmt.Errorf("github fake error")}
+
+	// Reset fakes and install them in the injection seam.
+	installFakes := func() {
+		shortcutFake.called = false
+		githubFake.called = false
+		testTrackerSyncers = map[string]service.TrackerSyncer{
+			"shortcut":      shortcutFake,
+			"github_issues": githubFake,
+		}
+	}
+	// Clear the seam so other tests use real sources.
+	t.Cleanup(func() { testTrackerSyncers = nil })
+
 	t.Run("shortcut_project_dispatches_to_shortcut_source", func(t *testing.T) {
-		// Seed a project with tracker='shortcut' and no external_ref.
-		// ShortcutSource will fail with "shortcut: project ... has no shortcut external_ref configured".
-		projectID := seedProject(t, pool, "shortcut", "")
+		installFakes()
+		projectID := seedProject(t, pool, "shortcut", "", tenant)
 
 		rec := trackerRequest(a, "GET", "/sync/"+projectID, map[string]string{
 			"tenant": tenant,
 		})
 
 		if rec.Code != 500 {
-			t.Fatalf("shortcut project: expected 500 (no shortcut config), got %d; body: %s", rec.Code, rec.Body.String())
+			t.Fatalf("shortcut project: expected 500 (fake error), got %d; body: %s", rec.Code, rec.Body.String())
 		}
-		// Assert the 500 body contains "shortcut:" proving ShortcutSource was dispatched.
-		// If bug #18 regresses (hardcoded ShortcutSource), this still passes — but the
-		// github_issues subtest below would fail because it would contain "shortcut:" instead
-		// of "github:".
-		body := rec.Body.String()
-		if !strings.Contains(body, "shortcut:") {
-			t.Fatalf("shortcut project: 500 body must contain source prefix \"shortcut:\", got: %s", body)
+		if !shortcutFake.called {
+			t.Fatal("shortcut project: ShortcutSource fake was NOT called")
+		}
+		if githubFake.called {
+			t.Fatal("shortcut project: GitHubSource fake was incorrectly called")
 		}
 	})
 
 	t.Run("github_issues_project_dispatches_to_github_source", func(t *testing.T) {
-		// Seed a project with tracker='github_issues' and no external_ref.
-		// GitHubSource will fail with "github: project ... has no github_issues external_ref configured".
-		// If bug #18 regresses (hardcoded ShortcutSource), the body would contain "shortcut:" instead.
-		projectID := seedProject(t, pool, "github_issues", "")
+		installFakes()
+		projectID := seedProject(t, pool, "github_issues", "", tenant)
 
 		rec := trackerRequest(a, "GET", "/sync/"+projectID, map[string]string{
 			"tenant": tenant,
 		})
 
 		if rec.Code != 500 {
-			t.Fatalf("github_issues project: expected 500 (no github config), got %d; body: %s", rec.Code, rec.Body.String())
+			t.Fatalf("github_issues project: expected 500 (fake error), got %d; body: %s", rec.Code, rec.Body.String())
 		}
-		// The 500 body MUST contain "github:" proving GitHubSource was dispatched.
-		// This is the regression guard for bug #18: if the dispatch is broken (hardcoded
-		// to ShortcutSource), the body would contain "shortcut:" instead and this fails.
-		body := rec.Body.String()
-		if !strings.Contains(body, "github:") {
-			t.Fatalf("github_issues project: 500 body must contain source prefix \"github:\", got: %s", body)
+		if !githubFake.called {
+			t.Fatal("github_issues project: GitHubSource fake was NOT called — bug #18 may have regressed")
+		}
+		if shortcutFake.called {
+			t.Fatal("github_issues project: ShortcutSource fake was incorrectly called — bug #18 regressed")
 		}
 	})
 
 	t.Run("unsupported_tracker_returns_400", func(t *testing.T) {
-		// Seed a project with tracker='obsidian' — not handled by the dispatch.
-		// The handler should return 400 "unsupported tracker: obsidian".
-		projectID := seedProject(t, pool, "obsidian", "")
+		installFakes()
+		// Seed a project with tracker='obsidian' — not in the fake map.
+		projectID := seedProject(t, pool, "obsidian", "", tenant)
 
 		rec := trackerRequest(a, "GET", "/sync/"+projectID, map[string]string{
 			"tenant": tenant,
@@ -450,9 +475,14 @@ func TestSyncTracker_DispatchByTrackerType(t *testing.T) {
 		if rec.Code != 400 {
 			t.Fatalf("obsidian project: expected 400 (unsupported tracker), got %d; body: %s", rec.Code, rec.Body.String())
 		}
+		// Neither fake should have been called for an unsupported tracker.
+		if shortcutFake.called || githubFake.called {
+			t.Fatal("unsupported tracker: a fake was called, expected no dispatch")
+		}
 	})
 
 	t.Run("nonexistent_project_returns_404", func(t *testing.T) {
+		installFakes()
 		projectID := uuid.NewString()
 
 		rec := trackerRequest(a, "GET", "/sync/"+projectID, map[string]string{
