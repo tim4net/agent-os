@@ -201,72 +201,59 @@ func TestIntegrationGitHub_SyncIdempotency(t *testing.T) {
 	}
 }
 
-// TestIntegrationGitHub_TenantIsolation seeds items for two tenants under the
-// same project and asserts that List for one tenant returns zero of the
-// other tenant's rows — proves the real WHERE ... AND tenant=$2 SQL predicate.
+// TestIntegrationGitHub_TenantIsolation drives tenant A through the full
+// Sync pipeline, then directly inserts tenant B's tracker_items rows under
+// the same project_id. It then asserts that List for each tenant returns
+// only that tenant's rows — proving the real WHERE ... AND tenant=$2 SQL
+// predicate (the load-bearing ADR-002 guarantee).
+//
+// Note: tenant B's rows are inserted directly because Sync requires a
+// tenant-owned project row (projects.id is the PK, so two tenants cannot
+// share one project row). This approach exercises the real tenant predicate
+// on tracker_items without needing two project rows for one id.
 func TestIntegrationGitHub_TenantIsolation(t *testing.T) {
 	pool := getGitHubTestDB(t)
+	queries := db.New(pool)
 	log := slog.Default()
 
 	tenantA := fmt.Sprintf("gh-integ-iso-a-%s", uuid.NewString()[:8])
 	tenantB := fmt.Sprintf("gh-integ-iso-b-%s", uuid.NewString()[:8])
-	sharedProjectID := mustParseUUID(uuid.NewString())
 
-	// Seed a shared project row — both tenants share the same project_id.
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	_, err := pool.Exec(ctx, `
-		INSERT INTO projects (id, slug, name, tenant, tracker, external_ref, created_at, updated_at)
-		VALUES ($1, 'shared-proj', 'Shared', $2, 'github_issues', 'tim4net/agent-os', NOW(), NOW())
-		ON CONFLICT (id) DO NOTHING
-	`, sharedProjectID, tenantA)
-	if err != nil {
-		cancel()
-		t.Fatalf("seed project A: %v", err)
-	}
-	_, err = pool.Exec(ctx, `
-		INSERT INTO projects (id, slug, name, tenant, tracker, external_ref, created_at, updated_at)
-		VALUES ($1, 'shared-proj', 'Shared', $2, 'github_issues', 'tim4net/agent-os', NOW(), NOW())
-		ON CONFLICT (id) DO NOTHING
-	`, sharedProjectID, tenantB)
-	if err != nil {
-		cancel()
-		t.Fatalf("seed project B: %v", err)
-	}
-	cancel()
+	// Seed ONE project row owned by tenantA (the tenant that Sync needs).
+	projectID := seedGitHubProject(t, pool, tenantA, "agent-os", "tim4net/agent-os")
 
-	// Sync tenant A (2 issues).
-	queriesA := db.New(pool)
+	// Sync tenant A (2 issues) through the full pipeline.
 	srvA := stubGitHubServer([]githubIssueEnvelope{
 		testGitHubIssue(100, "Tenant A issue", "open", "https://github.com/tim4net/agent-os/issues/100"),
 		testGitHubIssue(101, "Another A issue", "open", "https://github.com/tim4net/agent-os/issues/101"),
 	})
 	defer srvA.Close()
-	srcA := NewGitHubSourceWithClient(queriesA, &GitHubClient{
+	src := NewGitHubSourceWithClient(queries, &GitHubClient{
 		apiToken: "test-token", client: srvA.Client(), baseURL: srvA.URL, log: log,
 	}, log)
 
-	_, err = srcA.Sync(context.Background(), sharedProjectID, tenantA)
+	_, err := src.Sync(context.Background(), projectID, tenantA)
 	if err != nil {
 		t.Fatalf("Sync tenant A: %v", err)
 	}
 
-	// Sync tenant B (1 issue, different number).
-	queriesB := db.New(pool)
-	srvB := stubGitHubServer([]githubIssueEnvelope{
-		testGitHubIssue(200, "Tenant B issue", "closed", "https://github.com/tim4net/agent-os/issues/200"),
-	})
-	defer srvB.Close()
-	srcB := NewGitHubSourceWithClient(queriesB, &GitHubClient{
-		apiToken: "test-token", client: srvB.Client(), baseURL: srvB.URL, log: log,
-	}, log)
-
-	_, err = srcB.Sync(context.Background(), sharedProjectID, tenantB)
+	// Directly INSERT tenant B's tracker_items under the SAME project_id.
+	// Different external_refs avoid the UNIQUE(project_id, external_ref) key.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err = pool.Exec(ctx, `
+		INSERT INTO tracker_items (project_id, external_ref, title, status, item_type, tenant, synced_at, created_at, updated_at)
+		VALUES
+			($1, '#200', 'Tenant B issue', 'closed', 'task', $2, NOW(), NOW(), NOW()),
+			($1, '#201', 'Another B issue', 'open', 'task', $2, NOW(), NOW(), NOW())
+		ON CONFLICT (project_id, external_ref) DO NOTHING
+	`, projectID, tenantB)
 	if err != nil {
-		t.Fatalf("Sync tenant B: %v", err)
+		t.Fatalf("insert tenant B items: %v", err)
 	}
 
-	// List tenant A — must NOT include tenant B's #200.
-	itemsA, err := srcA.List(context.Background(), sharedProjectID, tenantA, 50, 0)
+	// List tenant A — must NOT include tenant B's #200 or #201.
+	itemsA, err := src.List(context.Background(), projectID, tenantA, 50, 0)
 	if err != nil {
 		t.Fatalf("List tenant A: %v", err)
 	}
@@ -274,7 +261,7 @@ func TestIntegrationGitHub_TenantIsolation(t *testing.T) {
 		t.Fatalf("List(tenantA) returned %d items, want 2", len(itemsA))
 	}
 	for _, it := range itemsA {
-		if it.ExternalRef == "#200" {
+		if it.ExternalRef == "#200" || it.ExternalRef == "#201" {
 			t.Errorf("tenant A list leaked tenant B item %q", it.ExternalRef)
 		}
 		if it.Tenant != tenantA {
@@ -283,17 +270,19 @@ func TestIntegrationGitHub_TenantIsolation(t *testing.T) {
 	}
 
 	// List tenant B — must NOT include tenant A's #100 or #101.
-	itemsB, err := srcB.List(context.Background(), sharedProjectID, tenantB, 50, 0)
+	itemsB, err := src.List(context.Background(), projectID, tenantB, 50, 0)
 	if err != nil {
 		t.Fatalf("List tenant B: %v", err)
 	}
-	if len(itemsB) != 1 {
-		t.Fatalf("List(tenantB) returned %d items, want 1", len(itemsB))
+	if len(itemsB) != 2 {
+		t.Fatalf("List(tenantB) returned %d items, want 2", len(itemsB))
 	}
-	if itemsB[0].ExternalRef != "#200" {
-		t.Errorf("tenant B item has external_ref=%q, want %q", itemsB[0].ExternalRef, "#200")
-	}
-	if itemsB[0].Tenant != tenantB {
-		t.Errorf("tenant B list returned item with tenant=%q", itemsB[0].Tenant)
+	for _, it := range itemsB {
+		if it.ExternalRef == "#100" || it.ExternalRef == "#101" {
+			t.Errorf("tenant B list leaked tenant A item %q", it.ExternalRef)
+		}
+		if it.Tenant != tenantB {
+			t.Errorf("tenant B list returned item with tenant=%q", it.Tenant)
+		}
 	}
 }
