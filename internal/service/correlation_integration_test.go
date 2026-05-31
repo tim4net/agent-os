@@ -69,7 +69,7 @@ func TestIntegration_CorrelationGrouping(t *testing.T) {
 	q := db.New(pool)
 	eng := NewCorrelationEngine(q)
 
-	units, err := eng.ListWorkUnits(ctx, 100, 0)
+	units, err := eng.ListWorkUnits(ctx, "", 100, 0)
 	if err != nil {
 		t.Fatalf("ListWorkUnits: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestIntegration_CorrelationGrouping(t *testing.T) {
 	}
 
 	// --- Count consistency with the page grouping ---
-	total, err := eng.Count(ctx)
+	total, err := eng.Count(ctx, "")
 	if err != nil {
 		t.Fatalf("Count: %v", err)
 	}

@@ -49,14 +49,18 @@ func (a *API) ListWorkUnits(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Tenant scope (ADR-002): empty = all tenants; otherwise filter server-side.
+	// The UI defaults to a single tenant so dayjob/personal never co-mingle in one glance.
+	tenant := r.URL.Query().Get("tenant")
+
 	engine := service.NewCorrelationEngine(a.queries)
-	units, err := engine.ListWorkUnits(r.Context(), limit, offset)
+	units, err := engine.ListWorkUnits(r.Context(), tenant, limit, offset)
 	if err != nil {
 		log.Printf("work-units: list failed: %v", err)
 		http.Error(w, "failed to list work units", http.StatusInternalServerError)
 		return
 	}
-	total, err := engine.Count(r.Context())
+	total, err := engine.Count(r.Context(), tenant)
 	if err != nil {
 		log.Printf("work-units: count failed: %v", err)
 		http.Error(w, "failed to count work units", http.StatusInternalServerError)

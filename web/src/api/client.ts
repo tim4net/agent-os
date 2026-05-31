@@ -770,6 +770,85 @@ export function getTimeline(limit?: number, offset?: number): Promise<TimelineRe
   return request<TimelineResponse>(`/api/timeline${qs ? `?${qs}` : ''}`)
 }
 
+// --- Observe (SPOG): work-units + trackers ---
+
+/** A correlated work-unit from GET /api/work-units. Liveness is derived SERVER-SIDE
+ *  (per-session, from received_at — the only liveness clock, contract §4) and aggregated
+ *  with precedence failed>running>stale>done. The UI renders `liveness` directly. */
+export interface WorkUnit {
+  tenant: string
+  external_ref: string | null
+  branch: string | null
+  sha: string | null
+  event_count: number
+  session_count: number
+  first_event_at: string
+  last_event_at: string
+  correlated: boolean
+  liveness: 'running' | 'done' | 'stale' | 'failed' | ''
+  active_session_count: number
+  latest_kind?: string
+  title?: string
+  harnesses?: string[]
+  cost_usd?: number
+}
+
+export interface WorkUnitsResponse {
+  work_units: WorkUnit[]
+  total: number
+  limit: number
+  offset: number
+}
+
+/** List work-units. tenant scopes server-side (ADR-002); omit/'' for all tenants. */
+export function getWorkUnits(opts: { tenant?: string; limit?: number; offset?: number } = {}): Promise<WorkUnitsResponse> {
+  const params = new URLSearchParams({
+    limit: String(opts.limit ?? 50),
+    offset: String(opts.offset ?? 0),
+  })
+  if (opts.tenant) params.set('tenant', opts.tenant)
+  return request<WorkUnitsResponse>(`/api/work-units?${params.toString()}`)
+}
+
+/** A mirrored tracker item from GET /api/trackers. Read-only; the plane never
+ *  writes back to trackers (ADR-001 D4). Shape from the live tracker smoke test. */
+export interface TrackerItem {
+  id: string
+  project_id: string
+  external_ref: string
+  title: string
+  status: string
+  item_type: string
+  canonical_url: string
+  tenant: string
+  synced_at: string
+  created_at?: string
+  updated_at?: string
+}
+
+export interface TrackerItemsResponse {
+  items: TrackerItem[]
+  total: number
+  limit: number
+  offset: number
+}
+
+/** List tracker items. When projectId is given, tenant is required (server enforces
+ *  ADR-002 tenant-scoping with a 400 otherwise). */
+export function getTrackerItems(opts: {
+  projectId?: string
+  tenant?: string
+  limit?: number
+  offset?: number
+} = {}): Promise<TrackerItemsResponse> {
+  const params = new URLSearchParams()
+  if (opts.projectId) params.set('project_id', opts.projectId)
+  if (opts.tenant) params.set('tenant', opts.tenant)
+  params.set('limit', String(opts.limit ?? 50))
+  params.set('offset', String(opts.offset ?? 0))
+  return request<TrackerItemsResponse>(`/api/trackers/?${params.toString()}`)
+}
+
 // --- Activity Feed ---
 
 export interface ActivityEvent {
