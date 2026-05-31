@@ -22,9 +22,12 @@ WITH session_state AS (
         COUNT(*)                          AS sess_events,
         MIN(received_at)                  AS sess_first,
         MAX(received_at)                  AS sess_last,
-        (array_agg(status ORDER BY received_at DESC)
-            FILTER (WHERE status IS NOT NULL
-                    AND kind IN ('session.start', 'session.heartbeat', 'session.end')))[1] AS sess_status,
+        -- Terminal is ABSORBING (contract §4: no resurrection). If a session.end ever
+        -- arrived, its status wins regardless of any later start/heartbeat — a late
+        -- heartbeat must NOT flip a done/failed session back to running. We take the
+        -- FIRST terminal status by received_at (the moment it terminated).
+        (array_agg(status ORDER BY received_at ASC)
+            FILTER (WHERE status IS NOT NULL AND kind = 'session.end'))[1] AS sess_terminal_status,
         (array_agg(title ORDER BY received_at DESC)
             FILTER (WHERE title IS NOT NULL AND title <> ''))[1] AS sess_title,
         (array_agg(kind ORDER BY received_at DESC))[1] AS sess_kind,
@@ -36,9 +39,11 @@ WITH session_state AS (
 session_live AS (
     SELECT *,
         CASE
-            WHEN sess_status = 'failed'              THEN 'failed'
-            WHEN sess_status IN ('done', 'cancelled') THEN 'done'
-            WHEN NOW() - sess_last > interval '5 minutes' THEN 'stale'
+            -- Terminal absorbing: a session.end status is final.
+            WHEN sess_terminal_status = 'failed'              THEN 'failed'
+            WHEN sess_terminal_status IN ('done', 'cancelled') THEN 'done'
+            -- No terminal event yet: derive from liveness window on the server clock.
+            WHEN NOW() - sess_last > interval '5 minutes'     THEN 'stale'
             ELSE 'running'
         END AS sess_liveness
     FROM session_state

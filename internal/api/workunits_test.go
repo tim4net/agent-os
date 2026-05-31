@@ -164,8 +164,39 @@ func TestHTTPWorkUnits_MultiSessionLiveness(t *testing.T) {
 	}
 }
 
-// TestHTTPWorkUnits_TenantScoping is review finding B3: the tenant query param must filter
-// server-side, so a tenant's view never includes another tenant's units.
+// TestHTTPWorkUnits_TerminalIsAbsorbing is review finding B5 + contract §4 (no resurrection):
+// a session.heartbeat (status running) arriving AFTER session.end/done must NOT flip the
+// session back to running. Terminal is absorbing.
+func TestHTTPWorkUnits_TerminalIsAbsorbing(t *testing.T) {
+	a, pool, _ := newTestAPIWithDB(t)
+	host := "route-b5-" + uuid.NewString()[:8]
+	t.Cleanup(func() { _, _ = pool.Exec(t.Context(), "DELETE FROM work_events WHERE host = $1", host) })
+
+	branch := "b5/x-" + uuid.NewString()[:8]
+	now := time.Now().UTC()
+	sess := "b5-" + uuid.NewString()
+	mk := func(off time.Duration) string { return now.Add(off).Format(time.RFC3339) }
+
+	seedEvent(t, a, fmt.Sprintf(`{"schema":"agentos.work_event/v1","event_id":%q,"host":%q,"harness":"claude","kind":"session.start","session_id":%q,"ts":%q,"status":"running","liveness_mode":"supervised","pid":11,"external_ref":"#55","branch":%q,"sha":"eeee5555"}`,
+		uuid.NewString(), host, sess, mk(-3*time.Minute), branch))
+	seedEvent(t, a, fmt.Sprintf(`{"schema":"agentos.work_event/v1","event_id":%q,"host":%q,"harness":"claude","kind":"session.end","session_id":%q,"ts":%q,"status":"done","external_ref":"#55","branch":%q,"sha":"eeee5555"}`,
+		uuid.NewString(), host, sess, mk(-2*time.Minute), branch))
+	// A LATER heartbeat (status running) — must NOT resurrect the terminated session.
+	seedEvent(t, a, fmt.Sprintf(`{"schema":"agentos.work_event/v1","event_id":%q,"host":%q,"harness":"claude","kind":"session.heartbeat","session_id":%q,"ts":%q,"status":"running","liveness_mode":"supervised","pid":11,"external_ref":"#55","branch":%q,"sha":"eeee5555"}`,
+		uuid.NewString(), host, sess, mk(0), branch))
+
+	u := findByBranch(fetchUnits(t, a, "").WorkUnits, branch)
+	if u == nil {
+		t.Fatal("b5 unit not present")
+	}
+	if u.Liveness != "done" {
+		t.Errorf("B5: terminal is absorbing — a late heartbeat must NOT resurrect a done session, got liveness=%q", u.Liveness)
+	}
+	if u.ActiveSessionCount != 0 {
+		t.Errorf("B5: expected active_session_count=0 (session is terminal), got %d", u.ActiveSessionCount)
+	}
+}
+
 func TestHTTPWorkUnits_TenantScoping(t *testing.T) {
 	a, pool, _ := newTestAPIWithDB(t)
 	host := "route-b3-" + uuid.NewString()[:8]
