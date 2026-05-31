@@ -62,11 +62,13 @@ type shortcutListResponse struct {
 
 // listStories fetches all stories for a given Shortcut project (by numeric project ID).
 // Paginates through the API's cursor-based pagination. Only uses GET (F5 gate).
+// Caps total stories at maxShortcutStoryCap and detects repeated-cursor loops.
 func (c *ShortcutClient) listStories(ctx context.Context, shortcutProjectID int64) ([]ShortcutStory, error) {
 	if c.apiToken == "" {
 		return nil, fmt.Errorf("SHORTCUT_API_TOKEN not configured")
 	}
 
+	const maxShortcutStoryCap = 10000
 	var allStories []ShortcutStory
 	cursor := ""
 
@@ -103,8 +105,19 @@ func (c *ShortcutClient) listStories(ctx context.Context, shortcutProjectID int6
 		}
 
 		allStories = append(allStories, result.Data...)
+
+		// Cap total stories to prevent unbounded fetch (M3).
+		if len(allStories) > maxShortcutStoryCap {
+			return nil, fmt.Errorf("shortcut: exceeded maximum story cap of %d", maxShortcutStoryCap)
+		}
+
 		if result.Next == "" {
 			break
+		}
+
+		// Guard against self-referential cursor (M3).
+		if result.Next == cursor {
+			return nil, fmt.Errorf("shortcut: self-referential cursor detected")
 		}
 		cursor = result.Next
 	}

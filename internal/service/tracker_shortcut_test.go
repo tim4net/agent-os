@@ -478,78 +478,112 @@ func TestList_Pagination(t *testing.T) {
 }
 
 // TestShortcutStoryToTrackerItemMapping verifies the mapping from Shortcut story
-// fields to tracker item upsert params. This is a focused mapping test that
-// exercises Sync end-to-end to prove the mapping is real, not tautological.
+// fields to tracker item upsert params. Table-driven with non-magic story numbers
+// to prove the SC-<n> mapping derives from story.Num, not a hardcoded literal (M1).
 func TestShortcutStoryToTrackerItemMapping(t *testing.T) {
-	stories := []ShortcutStory{
+	tests := []struct {
+		story ShortcutStory
+		want  db.UpsertTrackerItemParams
+	}{
 		{
-			ID:         9999,
-			Num:        91130,
-			Name:       "Implement OAuth2 flow",
-			EntityType: "feature",
-			State:      "in progress",
-			AppURL:     "https://app.shortcut.com/story/91130",
-			UpdatedAt:  time.Date(2025, 5, 30, 10, 0, 0, 0, time.UTC),
+			story: ShortcutStory{
+				ID:         9999,
+				Num:        42,
+				Name:       "Implement OAuth2 flow",
+				EntityType: "feature",
+				State:      "in progress",
+				AppURL:     "https://app.shortcut.com/story/42",
+				UpdatedAt:  time.Date(2025, 5, 30, 10, 0, 0, 0, time.UTC),
+			},
+			want: db.UpsertTrackerItemParams{
+				ExternalRef: "SC-42",
+				Title:       "Implement OAuth2 flow",
+				Status:      "in progress",
+				ItemType:    "feature",
+				Tenant:      "personal",
+				CanonicalUrl: pgtype.Text{String: "https://app.shortcut.com/story/42", Valid: true},
+			},
+		},
+		{
+			story: ShortcutStory{
+				ID:         8888,
+				Num:        107,
+				Name:       "Fix pagination bug",
+				EntityType: "bug",
+				State:      "done",
+				AppURL:     "",
+				UpdatedAt:  time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC),
+			},
+			want: db.UpsertTrackerItemParams{
+				ExternalRef: "SC-107",
+				Title:       "Fix pagination bug",
+				Status:      "done",
+				ItemType:    "bug",
+				Tenant:      "personal",
+				CanonicalUrl: pgtype.Text{Valid: false},
+			},
 		},
 	}
 
-	srv := stubShortcutServer(stories)
-	defer srv.Close()
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("num=%d", tt.story.Num), func(t *testing.T) {
+			stories := []ShortcutStory{tt.story}
 
-	fake := newFakeTrackerQuerier()
-	log := slog.Default()
+			srv := stubShortcutServer(stories)
+			defer srv.Close()
 
-	src := NewShortcutSourceWithClient(fake, &ShortcutClient{
-		apiToken: "test-token",
-		client:   srv.Client(),
-		baseURL:  srv.URL,
-		log:      log,
-	}, log)
+			fake := newFakeTrackerQuerier()
+			log := slog.Default()
 
-	_, err := src.Sync(context.Background(), testProjectUUID, "personal")
-	if err != nil {
-		t.Fatalf("Sync failed: %v", err)
-	}
+			src := NewShortcutSourceWithClient(fake, &ShortcutClient{
+				apiToken: "test-token",
+				client:   srv.Client(),
+				baseURL:  srv.URL,
+				log:      log,
+			}, log)
 
-	if len(fake.upserted) != 1 {
-		t.Fatalf("expected 1 upsert, got %d", len(fake.upserted))
-	}
+			_, err := src.Sync(context.Background(), testProjectUUID, tt.want.Tenant)
+			if err != nil {
+				t.Fatalf("Sync failed: %v", err)
+			}
 
-	up := fake.upserted[0]
+			if len(fake.upserted) != 1 {
+				t.Fatalf("expected 1 upsert, got %d", len(fake.upserted))
+			}
 
-	// AC6: SC-<n> mapping — external_ref uses story.Num, not story.ID.
-	if up.ExternalRef != "SC-91130" {
-		t.Errorf("ExternalRef=%q, want SC-91130 (from story.Num=%d)", up.ExternalRef, stories[0].Num)
-	}
+			up := fake.upserted[0]
 
-	// item_type mapping.
-	if up.ItemType != "feature" {
-		t.Errorf("ItemType=%q, want feature", up.ItemType)
-	}
+			// AC6: SC-<n> mapping — external_ref uses story.Num via fmt.Sprintf.
+			if up.ExternalRef != tt.want.ExternalRef {
+				t.Errorf("ExternalRef=%q, want %q (story.Num=%d)", up.ExternalRef, tt.want.ExternalRef, tt.story.Num)
+			}
 
-	// title.
-	if up.Title != "Implement OAuth2 flow" {
-		t.Errorf("Title=%q, want Implement OAuth2 flow", up.Title)
-	}
+			if up.ItemType != tt.want.ItemType {
+				t.Errorf("ItemType=%q, want %q", up.ItemType, tt.want.ItemType)
+			}
+			if up.Title != tt.want.Title {
+				t.Errorf("Title=%q, want %q", up.Title, tt.want.Title)
+			}
+			if up.Status != tt.want.Status {
+				t.Errorf("Status=%q, want %q", up.Status, tt.want.Status)
+			}
 
-	// status.
-	if up.Status != "in progress" {
-		t.Errorf("Status=%q, want in progress", up.Status)
-	}
+			// canonical_url validity.
+			if up.CanonicalUrl.Valid != tt.want.CanonicalUrl.Valid {
+				t.Errorf("CanonicalUrl.Valid=%v, want %v", up.CanonicalUrl.Valid, tt.want.CanonicalUrl.Valid)
+			}
+			if up.CanonicalUrl.Valid && up.CanonicalUrl.String != tt.want.CanonicalUrl.String {
+				t.Errorf("CanonicalUrl.String=%q, want %q", up.CanonicalUrl.String, tt.want.CanonicalUrl.String)
+			}
 
-	// canonical_url.
-	if !up.CanonicalUrl.Valid || up.CanonicalUrl.String != "https://app.shortcut.com/story/91130" {
-		t.Errorf("CanonicalURL=%v, want valid URL", up.CanonicalUrl)
-	}
+			if up.Tenant != tt.want.Tenant {
+				t.Errorf("Tenant=%q, want %q", up.Tenant, tt.want.Tenant)
+			}
 
-	// tenant.
-	if up.Tenant != "personal" {
-		t.Errorf("Tenant=%q, want personal", up.Tenant)
-	}
-
-	// synced_at populated on the DB row.
-	if !fake.items[0].SyncedAt.Valid {
-		t.Error("SyncedAt should be populated after Sync")
+			if !fake.items[0].SyncedAt.Valid {
+				t.Error("SyncedAt should be populated after Sync")
+			}
+		})
 	}
 }
 

@@ -59,8 +59,8 @@ type TrackerSyncer interface {
 
 // SyncResult captures the outcome of a Sync operation.
 type SyncResult struct {
-	Synced int
-	Failed int
+	Synced int `json:"synced"`
+	Failed int `json:"failed"`
 }
 
 // TrackerItemFromDB maps a generated db.TrackerItem row to the domain TrackerItemEntry.

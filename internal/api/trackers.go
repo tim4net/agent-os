@@ -2,7 +2,6 @@ package api
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
 	"log/slog"
 	"net/http"
@@ -143,7 +142,7 @@ func (a *API) SyncTrackerItems(w http.ResponseWriter, r *http.Request) {
 	result, err := src.Sync(r.Context(), projectID, tenant)
 	if err != nil {
 		log.Printf("trackers: sync failed: %v", err)
-		http.Error(w, fmt.Sprintf("failed to sync tracker items: %v", err), http.StatusInternalServerError)
+		http.Error(w, "failed to sync tracker items", http.StatusInternalServerError)
 		return
 	}
 
