@@ -178,7 +178,7 @@ func (a *API) SyncTrackerItems(w http.ResponseWriter, r *http.Request) {
 	result, err := src.Sync(r.Context(), projectID, tenant)
 	if err != nil {
 		log.Printf("trackers: sync failed: %v", err)
-		http.Error(w, "failed to sync tracker items", http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("failed to sync tracker items: %s", err.Error()), http.StatusInternalServerError)
 		return
 	}
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -395,24 +396,30 @@ func TestSyncTracker_DispatchByTrackerType(t *testing.T) {
 
 	t.Run("shortcut_project_dispatches_to_shortcut_source", func(t *testing.T) {
 		// Seed a project with tracker='shortcut' and no external_ref.
-		// ShortcutSource will fail with a specific message about missing config.
+		// ShortcutSource will fail with "shortcut: project ... has no shortcut external_ref configured".
 		projectID := seedProject(t, pool, "shortcut", "")
 
 		rec := trackerRequest(a, "GET", "/sync/"+projectID, map[string]string{
 			"tenant": tenant,
 		})
 
-		// ShortcutSource returns an error when no shortcut external_ref is configured.
-		// The handler wraps it as 500. The key assertion: the error comes from
-		// ShortcutSource (contains "shortcut" in the log), NOT from GitHubSource.
 		if rec.Code != 500 {
 			t.Fatalf("shortcut project: expected 500 (no shortcut config), got %d; body: %s", rec.Code, rec.Body.String())
+		}
+		// Assert the 500 body contains "shortcut:" proving ShortcutSource was dispatched.
+		// If bug #18 regresses (hardcoded ShortcutSource), this still passes — but the
+		// github_issues subtest below would fail because it would contain "shortcut:" instead
+		// of "github:".
+		body := rec.Body.String()
+		if !strings.Contains(body, "shortcut:") {
+			t.Fatalf("shortcut project: 500 body must contain source prefix \"shortcut:\", got: %s", body)
 		}
 	})
 
 	t.Run("github_issues_project_dispatches_to_github_source", func(t *testing.T) {
 		// Seed a project with tracker='github_issues' and no external_ref.
-		// GitHubSource will fail with "no github_issues external_ref configured".
+		// GitHubSource will fail with "github: project ... has no github_issues external_ref configured".
+		// If bug #18 regresses (hardcoded ShortcutSource), the body would contain "shortcut:" instead.
 		projectID := seedProject(t, pool, "github_issues", "")
 
 		rec := trackerRequest(a, "GET", "/sync/"+projectID, map[string]string{
@@ -421,6 +428,13 @@ func TestSyncTracker_DispatchByTrackerType(t *testing.T) {
 
 		if rec.Code != 500 {
 			t.Fatalf("github_issues project: expected 500 (no github config), got %d; body: %s", rec.Code, rec.Body.String())
+		}
+		// The 500 body MUST contain "github:" proving GitHubSource was dispatched.
+		// This is the regression guard for bug #18: if the dispatch is broken (hardcoded
+		// to ShortcutSource), the body would contain "shortcut:" instead and this fails.
+		body := rec.Body.String()
+		if !strings.Contains(body, "github:") {
+			t.Fatalf("github_issues project: 500 body must contain source prefix \"github:\", got: %s", body)
 		}
 	})
 
