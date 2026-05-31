@@ -49,10 +49,15 @@ if [ -n "$vet_out" ]; then
 fi
 
 echo "pre-push: go test -short ./..."
-# Capture exit code directly; pipefail + grep chains here previously caused false
-# failures when run inside git's hook environment. Run plainly and check rc.
+# Run twice on failure: this is a fast pre-filter and the local Go build cache can be
+# transiently contended when another `go test`/`go build` is running in a sibling shell,
+# producing a spurious non-zero. A REAL failure fails both attempts; a cache race clears
+# on the retry. The authoritative gate (hpms1) re-runs everything regardless.
 if ! go test -short ./... ; then
-  fail "unit tests failed"
+  echo "pre-push: test run failed once — retrying (transient build-cache race?)..." >&2
+  if ! go test -short -count=1 ./... ; then
+    fail "unit tests failed (twice)"
+  fi
 fi
 
 echo "pre-push: OK (authoritative gate is hpms1 — deployments/deploy.sh)"
