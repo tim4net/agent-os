@@ -14,16 +14,15 @@ import (
 )
 
 // skipIfNoDB skips the test if PG17 is not available.
-// Set DATABASE_URL to a test database to run integration tests.
+// Reads AOS_TEST_DATABASE_URL (or AOS_TEST_DSN) — the repo's CI convention.
 func skipIfNoDB(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	dsn := os.Getenv("TEST_DATABASE_URL")
+	dsn := os.Getenv("AOS_TEST_DATABASE_URL")
 	if dsn == "" {
-		// Fall back to DATABASE_URL for CI.
-		dsn = os.Getenv("DATABASE_URL")
+		dsn = os.Getenv("AOS_TEST_DSN")
 	}
 	if dsn == "" {
-		t.Skip("TEST_DATABASE_URL not set — skipping integration test")
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
 		return nil
 	}
 
@@ -376,4 +375,106 @@ func TestMigrateDirtyAbort(t *testing.T) {
 	}
 
 	t.Logf("dirty abort error: %v", err)
+}
+
+// TestMigrateDirtyOnRealFailure verifies that a real migration SQL failure
+// actually persists a dirty=true row in schema_migrations (regression for
+// the bug where the dirty INSERT was in the same aborted transaction).
+func TestMigrateDirtyOnRealFailure(t *testing.T) {
+	pool := skipIfNoDB(t)
+	if pool == nil {
+		return
+	}
+	ctx := context.Background()
+
+	schema, _ := createTestSchema(t, pool)
+	schemaPrefix := fmt.Sprintf("SET search_path TO %s,public", schema)
+	_, err := pool.Exec(ctx, schemaPrefix)
+	if err != nil {
+		t.Fatalf("set search_path: %v", err)
+	}
+
+	// Create the tracking table and pre-apply migrations 1–14 successfully
+	// so only 15 and 16 are pending. Then sabotage migration 15 by creating
+	// the constraint it tries to add (projects_tracker_check), which will
+	// cause a "constraint already exists" error on the ALTER TABLE.
+	_, err = pool.Exec(ctx, fmt.Sprintf(`
+		CREATE TABLE %s.schema_migrations (version bigint PRIMARY KEY, dirty boolean NOT NULL DEFAULT false);
+	`, schema))
+	if err != nil {
+		t.Fatalf("create schema_migrations: %v", err)
+	}
+
+	// Apply all migrations up through 14 in the test schema so only 15–16 are pending.
+	allFiles, err := parseMigrations()
+	if err != nil {
+		t.Fatalf("parseMigrations: %v", err)
+	}
+	var preUp []MigrationFile
+	for _, f := range allFiles {
+		if f.Version <= 14 && strings.HasSuffix(f.Name, ".up.sql") {
+			preUp = append(preUp, f)
+		}
+	}
+	sort.Slice(preUp, func(i, j int) bool { return preUp[i].Version < preUp[j].Version })
+	for _, f := range preUp {
+		if _, err := pool.Exec(ctx, f.Content); err != nil {
+			t.Fatalf("pre-apply migration %d: %v", f.Version, err)
+		}
+		_, err = pool.Exec(ctx, fmt.Sprintf(
+			`INSERT INTO %s.schema_migrations (version, dirty) VALUES ($1, false)`, schema),
+			f.Version,
+		)
+		if err != nil {
+			t.Fatalf("record migration %d: %v", f.Version, err)
+		}
+	}
+
+	// Sabotage migration 15: it adds a CHECK constraint "projects_tracker_check".
+	// Pre-create it so the ALTER TABLE fails.
+	sabotageSQL := fmt.Sprintf(
+		`ALTER TABLE %s.projects ADD CONSTRAINT projects_tracker_check CHECK (tracker IN ('shortcut'))`,
+		schema,
+	)
+	if _, err := pool.Exec(ctx, sabotageSQL); err != nil {
+		t.Fatalf("sabotage pre-create constraint: %v", err)
+	}
+
+	// Run MigrateUp — migration 15 should fail and be marked dirty.
+	_, err = MigrateUp(ctx, pool)
+	if err == nil {
+		t.Fatal("expected MigrateUp to fail on sabotaged migration 15")
+	}
+	t.Logf("MigrateUp error (expected): %v", err)
+
+	// Assert (a): schema_migrations actually contains a dirty=true row for version 15.
+	var dirtyVersion int64
+	var dirty bool
+	err = pool.QueryRow(ctx, fmt.Sprintf(
+		`SELECT version, dirty FROM %s.schema_migrations WHERE dirty = true`, schema),
+	).Scan(&dirtyVersion, &dirty)
+	if err != nil {
+		t.Fatalf("query dirty row: %v (no dirty row persisted — bug NOT fixed)", err)
+	}
+	if !dirty {
+		t.Fatal("expected dirty=true, got false")
+	}
+	if dirtyVersion != 15 {
+		t.Errorf("expected dirty version 15, got %d", dirtyVersion)
+	}
+	t.Logf("confirmed: version %d is persisted as dirty=true ✓", dirtyVersion)
+
+	// Assert (b): a second MigrateUp aborts on the dirty state (not retries).
+	_, err = MigrateUp(ctx, pool)
+	if err == nil {
+		t.Fatal("expected second MigrateUp to abort on dirty state")
+	}
+	errMsg := err.Error()
+	if !regexp.MustCompile(`dirty`).MatchString(errMsg) {
+		t.Errorf("second MigrateUp error should mention 'dirty', got: %v", err)
+	}
+	if !regexp.MustCompile(`15`).MatchString(errMsg) {
+		t.Errorf("second MigrateUp error should mention version 15, got: %v", err)
+	}
+	t.Logf("second MigrateUp correctly aborted on dirty state: %v", err)
 }

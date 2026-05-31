@@ -120,6 +120,20 @@ func dirtyVersions(ctx context.Context, pool *pgxpool.Pool) (map[int64]bool, err
 	return versions, rows.Err()
 }
 
+// markDirty records a migration version as dirty in a fresh transaction.
+// This MUST be called after the failed migration's transaction is already rolled back,
+// because Postgres aborts a transaction after any statement error.
+func markDirty(ctx context.Context, pool *pgxpool.Pool, version int64) error {
+	_, err := pool.Exec(ctx,
+		`INSERT INTO schema_migrations(version, dirty) VALUES($1, true) ON CONFLICT (version) DO UPDATE SET dirty = true`,
+		version,
+	)
+	if err != nil {
+		return fmt.Errorf("mark migration %d dirty: %w", version, err)
+	}
+	return nil
+}
+
 // MigrateResult holds the outcome of a MigrateUp call.
 type MigrateResult struct {
 	Applied int      // number of migrations applied this run
@@ -162,6 +176,22 @@ func MigrateUpWithLogger(ctx context.Context, pool *pgxpool.Pool, logger *slog.L
 		return nil, fmt.Errorf("database has dirty migration(s) [%s] — fix manually before continuing", strings.Join(dirtyList, ", "))
 	}
 
+	// Take a Postgres advisory lock to prevent concurrent migration runs
+	// (e.g. multiple API replicas booting simultaneously). Uses a well-known
+	// lock ID (3854494529 = hash of "agent-os:migrate") scoped to the whole DB.
+	// Released automatically when the connection (or pool) closes.
+	const migrateLockID int64 = 3854494529
+	_, err = pool.Exec(ctx, `SELECT pg_advisory_lock($1)`, migrateLockID)
+	if err != nil {
+		return nil, fmt.Errorf("acquire migration advisory lock: %w", err)
+	}
+	defer func() {
+		_, unlockErr := pool.Exec(ctx, `SELECT pg_advisory_unlock($1)`, migrateLockID)
+		if unlockErr != nil {
+			log.Error("failed to release migration advisory lock", "error", unlockErr)
+		}
+	}()
+
 	applied, err := appliedVersions(ctx, pool)
 	if err != nil {
 		return nil, err
@@ -198,9 +228,14 @@ func MigrateUpWithLogger(ctx context.Context, pool *pgxpool.Pool, logger *slog.L
 		// Execute the migration SQL.
 		_, err = tx.Exec(ctx, f.Content)
 		if err != nil {
-			// Mark dirty before rolling back.
-			tx.Exec(ctx, `INSERT INTO schema_migrations(version, dirty) VALUES($1, true) ON CONFLICT (version) DO UPDATE SET dirty = true`, f.Version)
+			// The migration SQL failed — the transaction is now aborted in Postgres.
+			// Roll back the failed tx first, then record dirty=true in a NEW transaction.
 			tx.Rollback(ctx)
+			if markErr := markDirty(ctx, pool, f.Version); markErr != nil {
+				log.Error("failed to mark migration dirty after failure",
+					"version", f.Version, "originalError", err, "markError", markErr)
+				return nil, fmt.Errorf("migration %d (%s) failed: %w (AND failed to mark dirty: %v)", f.Version, f.Name, err, markErr)
+			}
 			return nil, fmt.Errorf("migration %d (%s) failed: %w (marked dirty — fix manually)", f.Version, f.Name, err)
 		}
 
