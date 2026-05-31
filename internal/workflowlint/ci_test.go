@@ -125,7 +125,7 @@ func TestCIWorkflowStructure(t *testing.T) {
 	for _, job := range wf.Jobs {
 		for _, step := range job.Steps {
 			run, _ := step["run"].(string)
-			if run != "" && strings.Contains(strings.ToLower(run), "verify sqlc version") {
+			if run != "" && strings.Contains(strings.ToLower(run), "sqlc version") {
 				if !strings.Contains(run, "v1.31.1") {
 					t.Error("sqlc version step must pin to v1.31.1 (exact match)")
 				}
@@ -160,6 +160,14 @@ func TestCIWorkflowStructure(t *testing.T) {
 			}
 			if strings.Contains(run, "export AOS_TEST_DSN=") {
 				hasAOSTestDSN = true
+				// BLOCKING #2 fix: DSN must interpolate ${POSTGRES_PASSWORD},
+				// never a literal or masked value like ***.
+				if !strings.Contains(run, "${POSTGRES_PASSWORD}") {
+					t.Error("AOS_TEST_DSN must interpolate ${POSTGRES_PASSWORD}, not a literal/masked value")
+				}
+				if strings.Contains(run, ":***@") {
+					t.Error("AOS_TEST_DSN contains a masked '***' password (copy-pasted from a log / masker-corrupted) — integration tests cannot authenticate")
+				}
 			}
 			if strings.Contains(run, "export AOS_TEST_DATABASE_URL=") {
 				hasAOSTestDBURL = true

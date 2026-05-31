@@ -115,7 +115,7 @@ jobs:
         run: |
           # Both DSN env-var names are used across integration suites.
           # Export both so NO integration test silently skips.
-          export AOS_TEST_DSN="postgres://${POSTGRES_USER}:***@${PGHOST}:${PGPORT}/${POSTGRES_DB}?sslmode=disable"
+          export AOS_TEST_DSN="postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${PGHOST}:${PGPORT}/${POSTGRES_DB}?sslmode=disable"
           export AOS_TEST_DATABASE_URL="$AOS_TEST_DSN"
           OUTPUT=$(go test -v ./... 2>&1) || {
             echo "$OUTPUT"
