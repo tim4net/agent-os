@@ -150,6 +150,13 @@ func TestTrackerList_LargeLimitClamped(t *testing.T) {
 	if !ok || int(limit) != 200 {
 		t.Errorf("limit in response = %v, want 200", resp["limit"])
 	}
+
+	// Assert total == 201 (true row count, not the clamped page length).
+	// This catches the prior bug where Total was set to len(items) (200).
+	total, ok := resp["total"].(float64)
+	if !ok || int(total) != 201 {
+		t.Errorf("total in response = %v, want 201 (true row count, not clamped page length)", resp["total"])
+	}
 }
 
 // ---------------------------------------------------------------------------

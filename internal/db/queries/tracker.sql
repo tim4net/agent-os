@@ -30,6 +30,9 @@ WHERE tenant = $1
 ORDER BY synced_at DESC
 LIMIT $2 OFFSET $3;
 
+-- name: CountTrackerItemsByProject :one
+SELECT COUNT(*) FROM tracker_items WHERE project_id = $1 AND tenant = $2;
+
 -- name: CountTrackerItemsByTenant :one
 SELECT COUNT(*) FROM tracker_items WHERE tenant = $1;
 

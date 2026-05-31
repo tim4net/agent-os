@@ -122,6 +122,13 @@ func (f *fakeTrackerQuerier) ListTrackerItemsByTenant(_ context.Context, arg db.
 	return items, nil
 }
 
+func (f *fakeTrackerQuerier) CountTrackerItemsByProject(_ context.Context, arg db.CountTrackerItemsByProjectParams) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	pk := fmt.Sprintf("%s:%s", arg.ProjectID.String(), arg.Tenant)
+	return int64(len(f.byProject[pk])), nil
+}
+
 func (f *fakeTrackerQuerier) CountTrackerItemsByTenant(_ context.Context, tenant string) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -587,35 +594,62 @@ func TestShortcutStoryToTrackerItemMapping(t *testing.T) {
 	}
 }
 
-// TestF5Gate verifies that the stub Shortcut server rejects non-GET requests.
+// TestF5Gate verifies that production Sync code only issues GET requests.
+// Registers a stub that records all HTTP methods and calls t.Errorf on any non-GET,
+// then runs a full Sync() against it. Asserts zero non-GET requests were observed.
+// This catches a future regression where listStories (or any ShortcutClient method)
+// starts using POST/PUT/DELETE.
 func TestF5Gate(t *testing.T) {
-	srv := stubShortcutServer([]ShortcutStory{})
+	var nonGETMethods []string
+	var mu sync.Mutex
+
+	stories := []ShortcutStory{
+		{ID: 1, Num: 42, Name: "Test story", EntityType: "story", State: "todo", AppURL: "https://example.com/42"},
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Shortcut-Token") != "test-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		// Record non-GET methods as a failure.
+		if r.Method != http.MethodGet {
+			mu.Lock()
+			nonGETMethods = append(nonGETMethods, r.Method)
+			mu.Unlock()
+			t.Errorf("Shortcut server received non-GET %s request to %s — F5 gate violated", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(shortcutListResponse{
+			Next: "",
+			Data: stories,
+		})
+	}))
 	defer srv.Close()
 
-	client := srv.Client()
+	fake := newFakeTrackerQuerier()
+	log := slog.Default()
 
-	// POST should be rejected.
-	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/projects/1/stories", nil)
-	req.Header.Set("Shortcut-Token", "test-token")
-	resp, err := client.Do(req)
+	src := NewShortcutSourceWithClient(fake, &ShortcutClient{
+		apiToken: "test-token",
+		client:   srv.Client(),
+		baseURL:  srv.URL,
+		log:      log,
+	}, log)
+
+	// Run the real Sync — this exercises production listStories through the HTTP client.
+	_, err := src.Sync(context.Background(), testProjectUUID, "dayjob")
 	if err != nil {
-		t.Fatalf("POST request failed: %v", err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusMethodNotAllowed {
-		t.Errorf("POST returned %d, want %d", resp.StatusCode, http.StatusMethodNotAllowed)
+		t.Fatalf("Sync failed unexpectedly: %v", err)
 	}
 
-	// PUT should be rejected.
-	req, _ = http.NewRequest(http.MethodPut, srv.URL+"/projects/1/stories", nil)
-	req.Header.Set("Shortcut-Token", "test-token")
-	resp, err = client.Do(req)
-	if err != nil {
-		t.Fatalf("PUT request failed: %v", err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusMethodNotAllowed {
-		t.Errorf("PUT returned %d, want %d", resp.StatusCode, http.StatusMethodNotAllowed)
+	// Assert no non-GET requests were observed by the server.
+	mu.Lock()
+	defer mu.Unlock()
+	if len(nonGETMethods) > 0 {
+		t.Errorf("F5 gate violated: server observed non-GET methods: %v", nonGETMethods)
 	}
 }
 

@@ -68,6 +68,22 @@ func (a *API) ListTrackerItems(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid project_id", http.StatusBadRequest)
 			return
 		}
+		if tenant == "" {
+			http.Error(w, "tenant query parameter is required", http.StatusBadRequest)
+			return
+		}
+
+		// Get true total count for pagination (Finding: project-path Total was wrong).
+		total, err := a.queries.CountTrackerItemsByProject(r.Context(), db.CountTrackerItemsByProjectParams{
+			ProjectID: projectID,
+			Tenant:    tenant,
+		})
+		if err != nil {
+			log.Printf("trackers: count by project failed: %v", err)
+			http.Error(w, "failed to count tracker items", http.StatusInternalServerError)
+			return
+		}
+
 		src := service.NewShortcutSource(a.queries, slog.Default().WithGroup("shortcut"))
 		items, err := src.List(r.Context(), projectID, tenant, limit, offset)
 		if err != nil {
@@ -77,7 +93,7 @@ func (a *API) ListTrackerItems(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, service.TrackerItemListResponse{
 			Items:  items,
-			Total:  int64(len(items)),
+			Total:  total,
 			Limit:  limit,
 			Offset: offset,
 		})

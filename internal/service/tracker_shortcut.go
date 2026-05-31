@@ -62,17 +62,20 @@ type shortcutListResponse struct {
 
 // listStories fetches all stories for a given Shortcut project (by numeric project ID).
 // Paginates through the API's cursor-based pagination. Only uses GET (F5 gate).
-// Caps total stories at maxShortcutStoryCap and detects repeated-cursor loops.
+// Caps total stories at maxShortcutStoryCap, detects repeated-cursor loops,
+// and enforces a hard page-count bound to prevent unbounded fetch against a
+// misbehaving Shortcut API (cursor cycles that return empty Data pages).
 func (c *ShortcutClient) listStories(ctx context.Context, shortcutProjectID int64) ([]ShortcutStory, error) {
 	if c.apiToken == "" {
 		return nil, fmt.Errorf("SHORTCUT_API_TOKEN not configured")
 	}
 
 	const maxShortcutStoryCap = 10000
+	const maxPages = 500 // hard page-count bound — prevents infinite loops
 	var allStories []ShortcutStory
 	cursor := ""
 
-	for {
+	for page := 0; page < maxPages; page++ {
 		url := fmt.Sprintf("%s/projects/%d/stories", c.baseURL, shortcutProjectID)
 		if cursor != "" {
 			url += "?next=" + cursor
@@ -132,6 +135,7 @@ type TrackerQuerier interface {
 	GetTrackerItem(ctx context.Context, arg db.GetTrackerItemParams) (db.TrackerItem, error)
 	ListTrackerItemsByProject(ctx context.Context, arg db.ListTrackerItemsByProjectParams) ([]db.TrackerItem, error)
 	ListTrackerItemsByTenant(ctx context.Context, arg db.ListTrackerItemsByTenantParams) ([]db.TrackerItem, error)
+	CountTrackerItemsByProject(ctx context.Context, arg db.CountTrackerItemsByProjectParams) (int64, error)
 	CountTrackerItemsByTenant(ctx context.Context, tenant string) (int64, error)
 	GetTrackerProjects(ctx context.Context, arg db.GetTrackerProjectsParams) ([]db.Project, error)
 }
