@@ -20,7 +20,7 @@ type TrackerItemEntry struct {
 	Title        string    `json:"title"`
 	Status       string    `json:"status"`
 	ItemType     string    `json:"item_type"`              // story|bug|chore|task|feature
-	CanonicalURL string    `json:"canonical_url"`         // link back to source (empty string if absent)
+	CanonicalURL string    `json:"canonical_url"`           // link back to source (always emitted, empty string if absent)
 	Tenant       string    `json:"tenant"`
 	SyncedAt     time.Time `json:"synced_at"`
 	CreatedAt    time.Time `json:"created_at"`
