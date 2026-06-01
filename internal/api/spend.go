@@ -2,6 +2,7 @@ package api
 
 import (
 	"log/slog"
+	"math"
 	"net/http"
 	"strconv"
 
@@ -9,6 +10,12 @@ import (
 
 	"github.com/tim4net/agent-os/internal/db"
 )
+
+// epsilon for float64 cost comparisons.
+const spendEpsilon = 1e-6
+
+// feq returns true if a and b are within spendEpsilon of each other.
+func feq(a, b float64) bool { return math.Abs(a-b) < spendEpsilon }
 
 // SpendRow is a single row in the spend aggregation response.
 type SpendRow struct {
@@ -41,9 +48,11 @@ var validGroupBy = map[string]bool{
 	"day":     true,
 }
 
-// GetSpend handles GET /api/spend?group_by=agent|project|tenant|day&tenant=...&limit=50&offset=0
+// GetSpend handles GET /api/spend?group_by=agent|project|tenant|day&tenant=...&external_ref=...&limit=50&offset=0
 // Aggregates cost_usd + num_turns from work-events per the requested dimension.
 // Pure read over existing work_events — no migration needed (WP-K).
+// Per the work-event contract, cost_usd is cumulative per session; the query
+// dedupes to the latest event per (harness, session_id) before rolling up.
 func (a *API) GetSpend(w http.ResponseWriter, r *http.Request) {
 	groupBy := r.URL.Query().Get("group_by")
 	if groupBy == "" {
@@ -55,6 +64,7 @@ func (a *API) GetSpend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tenant := r.URL.Query().Get("tenant")
+	externalRef := r.URL.Query().Get("external_ref")
 
 	limit := 50
 	offset := 0
@@ -76,10 +86,11 @@ func (a *API) GetSpend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := a.queries.AggregateSpend(r.Context(), db.AggregateSpendParams{
-		GroupBy: groupBy,
-		Off:     int32(offset),
-		Lim:     int32(limit),
-		Tenant:  tenant,
+		GroupBy:     groupBy,
+		Off:         int32(offset),
+		Lim:         int32(limit),
+		Tenant:      tenant,
+		ExternalRef: externalRef,
 	})
 	if err != nil {
 		slog.Default().Error("spend: aggregate failed", "error", err)
@@ -89,7 +100,8 @@ func (a *API) GetSpend(w http.ResponseWriter, r *http.Request) {
 
 	// Convert pgtype.Numeric to float64 for JSON.
 	result := make([]SpendRow, 0, len(rows))
-	for _, row := range rows {
+	var totalGroups int64
+	for i, row := range rows {
 		cost, _ := row.TotalCostUsd.Float64Value()
 		result = append(result, SpendRow{
 			DimensionKey: row.DimensionKey,
@@ -97,11 +109,15 @@ func (a *API) GetSpend(w http.ResponseWriter, r *http.Request) {
 			EventCount:   row.EventCount,
 			TotalTurns:   row.TotalTurns,
 		})
+		// Every row carries the same total_groups (window function); take from first.
+		if i == 0 {
+			totalGroups = row.TotalGroups
+		}
 	}
 
 	writeJSON(w, http.StatusOK, SpendResponse{
 		Rows:   result,
-		Total:  int64(len(result)),
+		Total:  totalGroups,
 		Limit:  limit,
 		Offset: offset,
 	})
