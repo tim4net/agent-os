@@ -42,7 +42,7 @@ class LivenessReport:
     session_id: str = ""
     harness: str = ""
     cwd: str = ""
-    tenant: str = "personal"
+    tenant: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to JSON-POSTable dict."""
@@ -172,7 +172,7 @@ class HostReporter:
         for pid, cwd in discovered:
             current_pids.add(pid)
             if pid not in self._seen_pids:
-                # New process — report alive
+                # New process — report alive; only cache on success
                 report = LivenessReport(
                     host=self.host,
                     pid=pid,
@@ -180,21 +180,34 @@ class HostReporter:
                     cwd=cwd,
                     tenant=self.tenant,
                 )
-                self._seen_pids[pid] = report
-                self.report(report)
+                status = self.report(report)
+                if 200 <= status < 300:
+                    self._seen_pids[pid] = report
             # Existing process — already reported alive, skip unless cwd changed
             else:
                 existing = self._seen_pids[pid]
                 if existing.cwd != cwd:
-                    existing.cwd = cwd
-                    self.report(existing)
+                    new_report = LivenessReport(
+                        host=existing.host,
+                        pid=existing.pid,
+                        alive=existing.alive,
+                        session_id=existing.session_id,
+                        harness=existing.harness,
+                        cwd=cwd,
+                        tenant=existing.tenant,
+                    )
+                    status = self.report(new_report)
+                    if 200 <= status < 300:
+                        self._seen_pids[pid] = new_report
 
         # Check for processes that disappeared
         gone_pids = set(self._seen_pids.keys()) - current_pids
         for pid in gone_pids:
-            report = self._seen_pids.pop(pid)
+            report = self._seen_pids[pid]
             report.alive = False
-            self.report(report)
+            status = self.report(report)
+            if 200 <= status < 300:
+                self._seen_pids.pop(pid)
 
     def run_forever(self) -> None:
         """Run the reporter loop until interrupted."""

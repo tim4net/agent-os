@@ -11,11 +11,11 @@ import (
 
 // Worktree represents a single git worktree with metadata.
 type Worktree struct {
-	Path      string `json:"path"`       // absolute filesystem path
-	Branch    string `json:"branch"`     // checked-out branch name
-	Dirty     bool   `json:"dirty"`      // true if working tree has uncommitted changes
-	HEAD      string `json:"head"`       // short SHA of HEAD commit
-	IsMain    bool   `json:"is_main"`    // true if on the default branch
+	Path   string `json:"path"`    // absolute filesystem path
+	Branch string `json:"branch"`  // checked-out branch name
+	Dirty  bool   `json:"dirty"`   // true if working tree has uncommitted changes
+	HEAD   string `json:"head"`    // short SHA of HEAD commit
+	IsMain bool   `json:"is_main"` // true if on the default branch
 }
 
 // WorktreeInfo augments a Worktree with optional correlation metadata.
@@ -79,7 +79,7 @@ func (s *WorktreeScanner) Scan(ctx context.Context) ([]WorktreeInfo, error) {
 		statusCmd := exec.CommandContext(ctx, "git", "-C", wt.Path, "status", "--porcelain")
 		statusOut, statusErr := statusCmd.Output()
 		if statusErr != nil {
-			s.lastErr = fmt.Errorf("git status for %s: %w", wt.Path, statusErr)
+			return nil, fmt.Errorf("git status for %s: %w", wt.Path, statusErr)
 		} else if len(strings.TrimSpace(string(statusOut))) > 0 {
 			info.Dirty = true
 		}
@@ -124,10 +124,10 @@ func parseWorktreeList(output string) ([]Worktree, error) {
 					wt.HEAD = parts[0]
 				}
 			} else if strings.HasPrefix(line, "branch ") {
-					ref := strings.TrimPrefix(line, "branch ")
-					// refs/heads/<branch> → <branch>
-					wt.Branch = strings.TrimPrefix(ref, "refs/heads/")
-				}
+				ref := strings.TrimPrefix(line, "branch ")
+				// refs/heads/<branch> → <branch>
+				wt.Branch = strings.TrimPrefix(ref, "refs/heads/")
+			}
 		}
 		if wt.Path != "" {
 			// Default HEAD if not parsed

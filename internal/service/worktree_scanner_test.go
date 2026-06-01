@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -130,7 +131,7 @@ func TestExtractExternalRef(t *testing.T) {
 		{"wp-n/issue-28-host-reporter", ""},
 		{"SC-12345", "SC-12345"},
 		{"feature/sc-999-thing", "sc-999"},
-		{"misc-123", ""},  // N2: negative test — must not match as SC ref
+		{"misc-123", ""},            // N2: negative test — must not match as SC ref
 		{"bugfix/misc-456-fix", ""}, // N2: negative test — misc is not SC
 	}
 	for _, tt := range tests {
@@ -307,5 +308,61 @@ func TestWorktreeScanner_CleanWorktree(t *testing.T) {
 func must(err error) {
 	if err != nil {
 		panic(err)
+	}
+}
+
+// TestWorktreeScanner_GitStatusErrorReturnsError tests that a git status
+// failure does NOT silently collapse to dirty=false. Instead, Scan returns
+// an error (which the handler maps to 500).
+func TestWorktreeScanner_GitStatusErrorReturnsError(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping real git test in short mode")
+	}
+
+	tmpDir := t.TempDir()
+	repoDir := filepath.Join(tmpDir, "repo")
+
+	run := func(name string, args ...string) {
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = name
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%s %v: %s (err=%v)", name, args, string(out), err)
+		}
+	}
+
+	must(os.MkdirAll(repoDir, 0o755))
+	run(repoDir, "git", "init")
+	run(repoDir, "git", "config", "user.email", "test@test.com")
+	run(repoDir, "git", "config", "user.name", "test")
+	run(repoDir, "git", "commit", "--allow-empty", "-m", "initial")
+
+	// Make the .git directory of the main worktree unreadable so git status fails.
+	// We do this by creating a worktree, then making its .git file point to
+	// a nonexistent object directory.
+	scanner := NewWorktreeScanner(repoDir)
+	// Scan should succeed (main worktree is fine).
+	trees, err := scanner.Scan(context.Background())
+	if err != nil {
+		t.Fatalf("initial scan should succeed: %v", err)
+	}
+	if len(trees) < 1 {
+		t.Fatalf("expected at least 1 worktree, got %d", len(trees))
+	}
+
+	// Now corrupt the index to make git status fail for the main worktree.
+	idxPath := filepath.Join(repoDir, ".git", "index")
+	// Write garbage to the index file to force git status to error.
+	must(os.WriteFile(idxPath, []byte("corrupted"), 0o644))
+
+	scanner2 := NewWorktreeScanner(repoDir)
+	_, err = scanner2.Scan(context.Background())
+	if err == nil {
+		t.Fatal("expected Scan to return an error when git status fails, got nil")
+	}
+	// The error should mention "git status"
+	if errStr := err.Error(); !strings.Contains(errStr, "git status") {
+		t.Fatalf("expected error to mention 'git status', got: %v", err)
 	}
 }

@@ -266,3 +266,57 @@ class TestHostReporter:
             f"expected exactly 1 alive=false POST for pid 123, got {len(gone_posts)}"
         )
         assert gone_posts[0]["pid"] == 123
+
+    def test_gone_pid_retries_on_post_failure(self) -> None:
+        """When alive=false POST fails, the pid is NOT removed and is retried.
+
+        Simulates three poll cycles:
+          1. First poll discovers PID 123 → POST alive=true (success)
+          2. Second poll: PID 123 gone → POST alive=false (500 error) → pid stays pending
+          3. Third poll: PID 123 still gone → POST alive=false (success) → pid removed
+        """
+        posts: list[dict[str, Any]] = []
+        attempt = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            body = json.loads(request.content)
+            posts.append(body)
+            nonlocal attempt
+            attempt += 1
+            # First alive=true POST succeeds, first alive=false POST fails (500),
+            # second alive=false POST succeeds
+            if body.get("alive") is False and len([p for p in posts if not p.get("alive", True)]) == 1:
+                return httpx.Response(500, text="server error")
+            return httpx.Response(200, json={"id": 1})
+
+        transport = httpx.MockTransport(handler)
+        reporter = self._make_reporter(transport)
+
+        call_count = 0
+
+        def fake_discover() -> list[tuple[int, str]]:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return [(123, "/work")]
+            return []
+
+        reporter.discover_processes = fake_discover  # type: ignore[assignment]
+
+        # Poll 1: PID 123 discovered → alive=true
+        reporter.poll_once()
+        assert 123 in reporter._seen_pids, "PID 123 should be cached after alive=true POST"
+
+        # Poll 2: PID 123 gone → alive=false (server returns 500)
+        reporter.poll_once()
+        assert 123 in reporter._seen_pids, "PID 123 should remain cached after failed alive=false POST"
+
+        # Poll 3: PID 123 still gone → alive=false (server returns 200)
+        reporter.poll_once()
+        assert 123 not in reporter._seen_pids, "PID 123 should be removed after successful alive=false POST"
+
+        # Should have exactly 1 alive=true and 2 alive=false POSTs
+        alive_true = [p for p in posts if p.get("alive") is True]
+        alive_false = [p for p in posts if p.get("alive") is False]
+        assert len(alive_true) == 1, f"expected 1 alive=true POST, got {len(alive_true)}"
+        assert len(alive_false) == 2, f"expected 2 alive=false POSTs (retry), got {len(alive_false)}"
