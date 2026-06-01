@@ -26,6 +26,8 @@ type Querier interface {
 	CleanStaleDelegations(ctx context.Context) error
 	// Count active (non-revoked) keys for a tenant.
 	CountActiveIngestKeys(ctx context.Context, tenant string) (int64, error)
+	// Counts app instances matching the tenant filter (for pagination total).
+	CountAppInstances(ctx context.Context, tenant string) (int64, error)
 	CountArtifacts(ctx context.Context, dollar_1 string) (int64, error)
 	CountDelegations(ctx context.Context, arg CountDelegationsParams) (int64, error)
 	// Returns the total count of non-zero-cost groups matching the given filters,
@@ -38,6 +40,8 @@ type Querier interface {
 	// Consistent with ListWorkUnits grouping (same key + same tenant filter) so Total matches.
 	CountWorkUnits(ctx context.Context, tenant string) (int64, error)
 	CreateAgent(ctx context.Context, arg CreateAgentParams) (Agent, error)
+	// Inserts a new app instance. Returns the created row.
+	CreateAppInstance(ctx context.Context, arg CreateAppInstanceParams) (AppInstance, error)
 	CreateArtifact(ctx context.Context, arg CreateArtifactParams) (Artifact, error)
 	CreateConversation(ctx context.Context, arg CreateConversationParams) (Conversation, error)
 	CreateDelegation(ctx context.Context, arg CreateDelegationParams) (Delegation, error)
@@ -54,6 +58,8 @@ type Querier interface {
 	CreateWorkflow(ctx context.Context, arg CreateWorkflowParams) (Workflow, error)
 	CreateWorkflowRun(ctx context.Context, arg CreateWorkflowRunParams) (WorkflowRun, error)
 	DeleteAgent(ctx context.Context, id pgtype.UUID) error
+	// Deletes an app instance by ID.
+	DeleteAppInstance(ctx context.Context, id pgtype.UUID) error
 	DeleteArtifact(ctx context.Context, id pgtype.UUID) error
 	DeleteGoal(ctx context.Context, id pgtype.UUID) error
 	DeleteLastExchange(ctx context.Context, conversationID pgtype.UUID) (int64, error)
@@ -69,6 +75,8 @@ type Querier interface {
 	EnsureProjectBySlug(ctx context.Context, arg EnsureProjectBySlugParams) (Project, error)
 	GetAgent(ctx context.Context, id pgtype.UUID) (Agent, error)
 	GetAgentByName(ctx context.Context, name string) (Agent, error)
+	// Fetches a single app instance by ID.
+	GetAppInstance(ctx context.Context, id pgtype.UUID) (AppInstance, error)
 	GetArtifact(ctx context.Context, id pgtype.UUID) (Artifact, error)
 	GetArtifactByPath(ctx context.Context, filePath pgtype.Text) (Artifact, error)
 	GetConversation(ctx context.Context, id pgtype.UUID) (Conversation, error)
@@ -98,6 +106,10 @@ type Querier interface {
 	// Upsert by event_id: inserts new row, on conflict does nothing and returns nothing (pgx.ErrNoRows).
 	InsertWorkEvent(ctx context.Context, arg InsertWorkEventParams) (WorkEvent, error)
 	ListAgents(ctx context.Context) ([]Agent, error)
+	// Lists app instances scoped to a tenant. Returns all if tenant is empty.
+	// Supports pagination with limit/offset.
+	// Orders by last_probed_at DESC NULLS LAST (never-probed instances at end).
+	ListAppInstances(ctx context.Context, arg ListAppInstancesParams) ([]AppInstance, error)
 	ListArtifacts(ctx context.Context, arg ListArtifactsParams) ([]Artifact, error)
 	ListConversations(ctx context.Context, dollar_1 pgtype.UUID) ([]Conversation, error)
 	ListDelegations(ctx context.Context, arg ListDelegationsParams) ([]Delegation, error)
@@ -135,6 +147,9 @@ type Querier interface {
 	ListWorkUnits(ctx context.Context, arg ListWorkUnitsParams) ([]ListWorkUnitsRow, error)
 	ListWorkflowRuns(ctx context.Context, workflowID pgtype.UUID) ([]WorkflowRun, error)
 	ListWorkflows(ctx context.Context) ([]Workflow, error)
+	// Called when a server.stopped work-event arrives (contract §4).
+	// Sets status to 'down' — this is a definitive signal, not a probe.
+	MarkInstanceDownByServerStopped(ctx context.Context, arg MarkInstanceDownByServerStoppedParams) error
 	// Revoke an ingest key by setting revoked_at to now.
 	RevokeIngestKey(ctx context.Context, id int64) error
 	SearchMemory(ctx context.Context, arg SearchMemoryParams) ([]MemoryIndex, error)
@@ -146,12 +161,26 @@ type Querier interface {
 	UpdateConversationSummary(ctx context.Context, arg UpdateConversationSummaryParams) (Conversation, error)
 	UpdateDelegation(ctx context.Context, arg UpdateDelegationParams) (Delegation, error)
 	UpdateGoal(ctx context.Context, arg UpdateGoalParams) (Goal, error)
+	// Marks an instance as 'down' (from server.stopped event or probe failure).
+	UpdateInstanceDown(ctx context.Context, id pgtype.UUID) error
+	// Updates the status and last_probed_at of an instance after a probe.
+	// This is the ONLY way status changes — never set from a work-event.
+	UpdateInstanceProbeStatus(ctx context.Context, arg UpdateInstanceProbeStatusParams) error
 	UpdatePipelineItem(ctx context.Context, arg UpdatePipelineItemParams) (PipelineItem, error)
 	UpdateProjectTracker(ctx context.Context, arg UpdateProjectTrackerParams) (Project, error)
 	UpdateSkill(ctx context.Context, arg UpdateSkillParams) (Skill, error)
 	UpdateTask(ctx context.Context, arg UpdateTaskParams) (Task, error)
 	UpdateWorkflow(ctx context.Context, arg UpdateWorkflowParams) (Workflow, error)
 	UpdateWorkflowRun(ctx context.Context, arg UpdateWorkflowRunParams) (WorkflowRun, error)
+	// Upserts an instance keyed on (host, health_url, tenant).
+	// Used by server.started work-event auto-creation: if the same host+url+tenant
+	// already exists, updates its session_id, branch, sha, pid, and label.
+	// Does NOT change status — only a real probe updates status (anti-fake-status rule).
+	UpsertAppInstanceByHostURL(ctx context.Context, arg UpsertAppInstanceByHostURLParams) (AppInstance, error)
+	// Called when a server.started work-event arrives (contract §4).
+	// Creates the instance if not known, or updates session/branch/sha.
+	// Status is set to 'unknown' only on creation (needs a real probe to go 'up').
+	UpsertAppInstanceOnServerStarted(ctx context.Context, arg UpsertAppInstanceOnServerStartedParams) (AppInstance, error)
 	UpsertMemory(ctx context.Context, arg UpsertMemoryParams) (MemoryIndex, error)
 	UpsertSkill(ctx context.Context, arg UpsertSkillParams) (Skill, error)
 	// Upsert a tracker item on (project_id, external_ref). Updates title/status/type/url/payload and bumps synced_at.

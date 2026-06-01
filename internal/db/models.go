@@ -25,6 +25,25 @@ type Agent struct {
 	Visible      bool               `json:"visible"`
 }
 
+type AppInstance struct {
+	ID            pgtype.UUID        `json:"id"`
+	Harness       string             `json:"harness"`
+	SessionID     string             `json:"session_id"`
+	Host          string             `json:"host"`
+	Pid           pgtype.Int4        `json:"pid"`
+	Label         string             `json:"label"`
+	HealthUrl     string             `json:"health_url"`
+	Branch        pgtype.Text        `json:"branch"`
+	Sha           pgtype.Text        `json:"sha"`
+	Cwd           pgtype.Text        `json:"cwd"`
+	Tenant        string             `json:"tenant"`
+	Status        string             `json:"status"`
+	LastProbedAt  pgtype.Timestamptz `json:"last_probed_at"`
+	LastHeartbeat pgtype.Timestamptz `json:"last_heartbeat"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Artifact struct {
 	ID          pgtype.UUID        `json:"id"`
 	AgentID     pgtype.UUID        `json:"agent_id"`

@@ -179,5 +179,8 @@ func (a *API) Router() http.Handler {
 	// Spend observability (WP-K)
 	r.Mount("/spend", a.SpendRoutes())
 
+	// Instance registry + health prober (WP-I, ADR-003)
+	r.Mount("/instances", a.InstanceRoutes())
+
 	return r
 }
