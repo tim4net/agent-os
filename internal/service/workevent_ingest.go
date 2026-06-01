@@ -94,11 +94,10 @@ var runningStatuses = map[string]bool{
 	"running": true, "unknown": true,
 }
 
-// NOTE: tenant enum validation ("personal", "dayjob", etc.) will be enforced once
-// config.go is wired with the key→allowed-tenant map. Until then, the body tenant
-// field is ignored (overridden by ResolveTenantFromKey) and the server accepts the
-// key-resolved tenant. The contract's "tenant not permitted by ingest key → 403"
-// AC is explicitly deferred to the config.go follow-up. See issue #2 comments.
+// NOTE: Tenant enum validation ("personal", "dayjob", etc.) is now enforced by
+// the DB-backed ingest key store (WP-A2): the key is bound to a specific tenant
+// at creation time and the server resolves the tenant from the key, ignoring the
+// body tenant field entirely (contract §1 / ADR-002 D6).
 
 var externalRefPattern = regexp.MustCompile(`^(SC-\d+|#\d+)$`)
 
@@ -123,9 +122,9 @@ func NewIngestService(queries db.Querier, bus *EventBus, log *slog.Logger, artif
 }
 
 // ResolveTenantFromKey resolves a tenant string from an ingest key.
-// TODO(WP-A finding #3): once config.go is wired, this should look up the key
-// in a server-side key→tenant mapping and return the allowed tenant set.
-// For now, all non-empty keys resolve to "personal" and the body tenant is ignored.
+// DEPRECATED: use ResolveTenantFromKeyDB instead (WP-A2 durable key store).
+// Retained for backward compatibility with unit tests and the delegation bridge
+// until the integrator wires the DB-backed resolver for all callers.
 func ResolveTenantFromKey(ingestKey string) (string, error) {
 	if ingestKey == "" {
 		return "", fmt.Errorf("missing ingest key")
