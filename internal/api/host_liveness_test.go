@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -216,9 +217,9 @@ func TestHTTPHostLiveness_PostUpsert_UpdatesExisting(t *testing.T) {
 
 	// POST a not-alive update
 	body := LivenessReportRequest{
-		Host:  "uphost",
-		PID:   99999,
-		Alive: false,
+		Host:   "uphost",
+		PID:    99999,
+		Alive:  false,
 		Tenant: tenant,
 	}
 	bodyBytes, _ := json.Marshal(body)
@@ -389,4 +390,220 @@ func TestHTTPHostLiveness_ListPagination(t *testing.T) {
 	if len(resp2.Records) != 1 {
 		t.Fatalf("expected 1 record on page 2, got %d", len(resp2.Records))
 	}
+}
+
+// ---------------------------------------------------------------------------
+// WP-N AC2: Feed→stale derivation — real-PG end-to-end test
+// Proves that the host-liveness feed, when consumed by the bounded-session
+// derivation query (GetBoundedSessionHostLiveness), correctly drives
+// session status: alive=true → running, alive=false → stale.
+//
+// The off-limits wiring (derivation call site in session_liveness.go) is
+// proposed as a PR-body diff. This test exercises the SQL query + API
+// flow end-to-end to prove the data model works.
+// ---------------------------------------------------------------------------
+
+// seedBoundedSession inserts a work_events session.start for a bounded session.
+func seedBoundedSession(t *testing.T, pool *pgxpool.Pool, harness, sessionID, host string, pid int32, tenant string) {
+	t.Helper()
+	ctx := context.Background()
+	_, err := pool.Exec(ctx, `
+		INSERT INTO work_events (
+			event_id, schema_version, harness, session_id, host, pid,
+			kind, status, liveness_mode, tenant, received_at, ts, payload
+		) VALUES (
+			$1, 'agentos.work_event/v1', $2, $3, $4, $5,
+			'session.start', 'running', 'bounded', $6, $7, $8, '{}'
+		) ON CONFLICT (event_id) DO NOTHING
+	`,
+		uuid.NewString(),
+		harness,
+		sessionID,
+		host,
+		pid,
+		tenant,
+		time.Now().UTC(),
+		time.Now().UTC(),
+	)
+	if err != nil {
+		t.Fatalf("seedBoundedSession: %v", err)
+	}
+}
+
+// postLivenessReport POSTs a liveness report via the API handler.
+func postLivenessReport(t *testing.T, a *API, req LivenessReportRequest) HostLivenessResponse {
+	t.Helper()
+	bodyBytes, _ := json.Marshal(req)
+	httpReq := httptest.NewRequest("POST", "/", bytes.NewReader(bodyBytes))
+	httpReq.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	a.HostLivenessRoutes().ServeHTTP(rec, httpReq)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /api/host/liveness returned %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp HostLivenessResponse
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	return resp
+}
+
+// queryBoundedSessionLiveness calls GetBoundedSessionHostLiveness via the queries interface.
+func queryBoundedSessionLiveness(t *testing.T, queries *db.Queries, harness, sessionID, tenant string) bool {
+	t.Helper()
+	alive, err := queries.GetBoundedSessionHostLiveness(context.Background(), db.GetBoundedSessionHostLivenessParams{
+		Harness:   harness,
+		SessionID: sessionID,
+		Tenant:    tenant,
+	})
+	if err != nil {
+		t.Fatalf("GetBoundedSessionHostLiveness: %v", err)
+	}
+	return alive
+}
+
+// TestBoundedSessionDerivation_AliveTrue_Running proves:
+// AC2 part 1: A bounded session with host-reporter alive=true is derived as "running".
+// Seeds a bounded session, POSTs alive=true, queries derivation → running.
+func TestBoundedSessionDerivation_AliveTrue_Running(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+
+	a, pool := newTestAPIWithDBForHostLiveness(t)
+	defer pool.Close()
+	queries := db.New(pool)
+	ensureHostLivenessTable(t, pool)
+
+	tenant := hostLivenessTestTenant(t, "derive-alive")
+	sessionID := "sess-derive-alive-" + uuid.NewString()[:8]
+	host := "derive-host"
+	pid := int32(54321)
+
+	// Seed a bounded session in work_events.
+	seedBoundedSession(t, pool, "claude", sessionID, host, pid, tenant)
+
+	// No liveness row yet → derivation should be false (no proof → stale).
+	aliveBefore := queryBoundedSessionLiveness(t, queries, "claude", sessionID, tenant)
+	if aliveBefore {
+		t.Fatal("expected alive=false when no host_liveness row exists (no proof → not alive)")
+	}
+
+	// POST alive=true via the API.
+	postLivenessReport(t, a, LivenessReportRequest{
+		Host:   host,
+		PID:    pid,
+		Alive:  true,
+		Tenant: tenant,
+	})
+
+	// Now derivation should be true (positive proof → running).
+	aliveAfter := queryBoundedSessionLiveness(t, queries, "claude", sessionID, tenant)
+	if !aliveAfter {
+		t.Fatal("expected alive=true after POST alive=true (positive proof → running)")
+	}
+
+	// Cleanup
+	ctx := context.Background()
+	pool.Exec(ctx, "DELETE FROM host_liveness WHERE host = $1 AND pid = $2", host, pid)
+	pool.Exec(ctx, "DELETE FROM work_events WHERE session_id = $1", sessionID)
+}
+
+// TestBoundedSessionDerivation_AliveFalse_Stale proves:
+// AC2 part 2: A bounded session flips to stale when the reporter POSTs alive=false.
+// Seeds a bounded session, POSTs alive=true, then alive=false → derivation should be stale.
+func TestBoundedSessionDerivation_AliveFalse_Stale(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+
+	a, pool := newTestAPIWithDBForHostLiveness(t)
+	defer pool.Close()
+	queries := db.New(pool)
+	ensureHostLivenessTable(t, pool)
+
+	tenant := hostLivenessTestTenant(t, "derive-stale")
+	sessionID := "sess-derive-stale-" + uuid.NewString()[:8]
+	host := "derive-host-stale"
+	pid := int32(54322)
+
+	// Seed a bounded session.
+	seedBoundedSession(t, pool, "claude", sessionID, host, pid, tenant)
+
+	// POST alive=true first (session is running).
+	postLivenessReport(t, a, LivenessReportRequest{
+		Host:   host,
+		PID:    pid,
+		Alive:  true,
+		Tenant: tenant,
+	})
+	aliveRunning := queryBoundedSessionLiveness(t, queries, "claude", sessionID, tenant)
+	if !aliveRunning {
+		t.Fatal("expected alive=true after initial POST (running)")
+	}
+
+	// POST alive=false (process killed/crashed).
+	postLivenessReport(t, a, LivenessReportRequest{
+		Host:   host,
+		PID:    pid,
+		Alive:  false,
+		Tenant: tenant,
+	})
+
+	// Now derivation should be false (killed → stale).
+	aliveKilled := queryBoundedSessionLiveness(t, queries, "claude", sessionID, tenant)
+	if aliveKilled {
+		t.Fatal("expected alive=false after POST alive=false (killed → stale)")
+	}
+
+	// Cleanup
+	ctx := context.Background()
+	pool.Exec(ctx, "DELETE FROM host_liveness WHERE host = $1 AND pid = $2", host, pid)
+	pool.Exec(ctx, "DELETE FROM work_events WHERE session_id = $1", sessionID)
+}
+
+// TestBoundedSessionDerivation_NotBefore proves:
+// AC2 part 3: A bounded session does NOT flip to stale while alive=true is current.
+// Seeds a bounded session, POSTs alive=true, re-queries twice → stays running.
+func TestBoundedSessionDerivation_NotBefore(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+
+	a, pool := newTestAPIWithDBForHostLiveness(t)
+	defer pool.Close()
+	queries := db.New(pool)
+	ensureHostLivenessTable(t, pool)
+
+	tenant := hostLivenessTestTenant(t, "derive-notbefore")
+	sessionID := "sess-derive-notbefore-" + uuid.NewString()[:8]
+	host := "derive-host-notbefore"
+	pid := int32(54323)
+
+	// Seed a bounded session.
+	seedBoundedSession(t, pool, "claude", sessionID, host, pid, tenant)
+
+	// POST alive=true.
+	postLivenessReport(t, a, LivenessReportRequest{
+		Host:   host,
+		PID:    pid,
+		Alive:  true,
+		Tenant: tenant,
+	})
+
+	// Query immediately — should be running.
+	alive1 := queryBoundedSessionLiveness(t, queries, "claude", sessionID, tenant)
+	if !alive1 {
+		t.Fatal("expected alive=true (not before: session should NOT be stale while alive)")
+	}
+
+	// Query again after a tiny delay — should still be running.
+	time.Sleep(10 * time.Millisecond)
+	alive2 := queryBoundedSessionLiveness(t, queries, "claude", sessionID, tenant)
+	if !alive2 {
+		t.Fatal("expected alive=true to persist (not before: session stays running)")
+	}
+
+	// Cleanup
+	ctx := context.Background()
+	pool.Exec(ctx, "DELETE FROM host_liveness WHERE host = $1 AND pid = $2", host, pid)
+	pool.Exec(ctx, "DELETE FROM work_events WHERE session_id = $1", sessionID)
 }

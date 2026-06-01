@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+from unittest.mock import patch
 from typing import Any
 
 import httpx
@@ -381,4 +383,89 @@ class TestHostReporter:
         alive_false = [p for p in posts if p.get("alive") is False]
         assert len(alive_false) == 1, (
             f"expected 1 alive=false POST, got {len(alive_false)}"
+        )
+
+    def test_discover_processes_real_os_error_returns_none(self) -> None:
+        """When os.listdir on /proc raises OSError, discover_processes returns None.
+
+        This exercises the REAL except path in discover_processes (not a
+        monkeypatched return value). Reverting the except block from
+        `return None` to `return []` causes this test to FAIL.
+        """
+        reporter = self._make_reporter(
+            httpx.MockTransport(lambda r: httpx.Response(200)),
+            poll_s=0,
+        )
+        # Monkeypatch os.listdir to raise OSError, simulating an unreadable /proc.
+        def fake_listdir(path: str):
+            raise OSError("[Errno 13] Permission denied: '/proc'")
+
+        with patch.object(os, "listdir", fake_listdir):
+            result = reporter.discover_processes()
+        # The real except path must return None (not []).
+        assert result is None, (
+            f"expected None on os.listdir failure, got {result!r}"
+        )
+
+    def test_os_error_during_scan_preserves_cached_pids(self) -> None:
+        """When /proc scan fails mid-run, poll_once sends ZERO alive=false POSTs
+        and all cached PIDs remain.
+
+        This drives the full poll_once path with a real os.listdir failure
+        (not just a None return from discover_processes). The pid should
+        stay cached and no alive=false should be POSTed.
+
+        Mutation guard: reverting `except Exception: ... return None` to
+        `return []` causes alive=false to be POSTed (test goes RED).
+        """
+        posts: list[dict[str, Any]] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            body = json.loads(request.content)
+            posts.append(body)
+            return httpx.Response(200, json={"id": 1})
+
+        transport = httpx.MockTransport(handler)
+        reporter = self._make_reporter(transport)
+
+        # Save the original discover_processes before monkeypatching.
+        original_discover = reporter.discover_processes
+
+        call_count = 0
+
+        def fake_discover() -> list[tuple[int, str]] | None:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                # First call: discover PID 123 normally
+                return [(123, "/work")]
+            if call_count == 2:
+                # Second call: trigger REAL os.listdir failure on the
+                # ORIGINAL discover_processes method (not this monkeypatch).
+                def raise_on_listdir(path: str):
+                    raise OSError("[Errno 13] Permission denied: '/proc'")
+
+                with patch.object(os, "listdir", raise_on_listdir):
+                    return original_discover()
+            return []
+
+        reporter.discover_processes = fake_discover  # type: ignore[assignment]
+
+        # Poll 1: PID 123 discovered → alive=true
+        reporter.poll_once()
+        assert 123 in reporter._seen_pids, "PID 123 should be cached"
+        alive_true = [p for p in posts if p.get("alive") is True]
+        assert len(alive_true) == 1, f"expected 1 alive=true POST, got {len(alive_true)}"
+
+        pre_fail_count = len(posts)
+
+        # Poll 2: real os.listdir failure → discover_processes returns None
+        # → poll_once skips gone-pid sweep → ZERO new POSTs
+        reporter.poll_once()
+        assert 123 in reporter._seen_pids, (
+            "PID 123 must remain cached after /proc scan failure"
+        )
+        # No new POSTs during the failed scan cycle
+        assert len(posts) == pre_fail_count, (
+            f"expected 0 POSTs during scan failure, got {len(posts) - pre_fail_count} new"
         )

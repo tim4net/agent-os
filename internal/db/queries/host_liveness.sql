@@ -38,6 +38,30 @@ ORDER BY seen_at DESC
 LIMIT sqlc.arg('lim')::int
 OFFSET sqlc.arg('off')::int;
 
+-- name: GetBoundedSessionHostLiveness :one
+-- Returns the latest host-liveness alive status for a bounded session.
+-- Joins the session's (host, pid) from work_events (kind=session.start) with
+-- host_liveness to get the latest alive report. COALESCE(NULL, false) means
+-- "no reporter proof → not alive" (contract §4: never running without proof).
+--
+-- Derivation rule (consumed by deriveBoundedStatus in session_liveness.go):
+--   alive=true  → session is running (positive proof from host reporter)
+--   alive=false → session is stale (process killed/crashed)
+--   no row      → no reporter proof → stale (NEVER running without proof)
+SELECT COALESCE(hl.alive, false)::boolean AS alive
+FROM (
+    SELECT we_host.host AS host, we_host.pid AS pid
+    FROM work_events AS we_host
+    WHERE we_host.harness = sqlc.arg('harness')
+      AND we_host.session_id = sqlc.arg('session_id')
+      AND we_host.tenant = sqlc.arg('tenant')
+      AND we_host.kind = 'session.start'
+    ORDER BY we_host.received_at DESC
+    LIMIT 1
+) sess
+LEFT JOIN host_liveness hl
+    ON hl.host = sess.host AND hl.pid = sess.pid AND hl.tenant = sqlc.arg('tenant');
+
 -- name: CountHostLiveness :one
 -- Counts liveness records matching the tenant filter.
 SELECT COUNT(*)::bigint FROM host_liveness
