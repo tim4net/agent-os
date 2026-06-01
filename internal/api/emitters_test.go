@@ -1,0 +1,1064 @@
+package api
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/tim4net/agent-os/internal/service"
+)
+
+// ---------------------------------------------------------------------------
+// WP-M: Emitter Health API handler tests (real-PG httptest route tests)
+// Tests liveness derivation as a PURE FUNCTION of (events, server clock now).
+// Contract §4: running requires positive proof; absence of proof → stale.
+// ---------------------------------------------------------------------------
+
+// emitterTestTenant returns a unique tenant name for emitter health tests.
+func emitterTestTenant(t *testing.T, suffix string) string {
+	t.Helper()
+	return "test-emitter-" + suffix + "-" + uuid.NewString()[:8]
+}
+
+// TestHTTPEmitterHealth_SupervisedRunning proves AC:
+// A supervised session with a recent heartbeat is "running".
+func TestHTTPEmitterHealth_SupervisedRunning(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+	tenant := emitterTestTenant(t, "sup-running")
+	a, pool, _ := newTestAPIWithDB(t)
+	defer pool.Close()
+
+	// Seed session.start 2 minutes ago + heartbeat 1 minute ago → within 5m window → running
+	now := time.Now().UTC()
+	sessID := uuid.NewString()
+	ctx := t.Context()
+	eid1 := uuid.New()
+	_, err := pool.Exec(ctx,
+		`INSERT INTO work_events (event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, tenant, ts, received_at)
+		 VALUES ($1, 'agentos.work_event/v1', 'claude', $2, 'testhost-claude', 12345, 'session.start', 'running', 'supervised', $3, $4, $5)`,
+		eid1, sessID, tenant, now.Add(-2*time.Minute), now.Add(-2*time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("seed start: %v", err)
+	}
+	eid2 := uuid.New()
+	_, err = pool.Exec(ctx,
+		`INSERT INTO work_events (event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, tenant, ts, received_at)
+		 VALUES ($1, 'agentos.work_event/v1', 'claude', $2, 'testhost-claude', 12345, 'session.heartbeat', 'running', 'supervised', $3, $4, $5)`,
+		eid2, sessID, tenant, now.Add(-1*time.Minute), now.Add(-1*time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("seed heartbeat: %v", err)
+	}
+
+	req := newTestGET("/?tenant=" + tenant + "&stale_window=5m")
+	rec := httptest.NewRecorder()
+	a.EmitterRoutes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp service.EmitterHealthResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	if len(resp.Emitters) == 0 {
+		t.Fatal("expected at least 1 emitter session")
+	}
+
+	// Find our session
+	found := false
+	for _, e := range resp.Emitters {
+		if e.SessionID == sessID {
+			found = true
+			if e.Status != service.EmitterStatusRunning {
+				t.Fatalf("expected status 'running', got %q", e.Status)
+			}
+			if e.LivenessMode != "supervised" {
+				t.Fatalf("expected liveness_mode 'supervised', got %q", e.LivenessMode)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("session %s not found in response", sessID)
+	}
+}
+
+// TestHTTPEmitterHealth_SupervisedStale proves AC:
+// Stop an emitter (no heartbeat for >5m) → shows "stale".
+func TestHTTPEmitterHealth_SupervisedStale(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+	tenant := emitterTestTenant(t, "sup-stale")
+	a, pool, _ := newTestAPIWithDB(t)
+	defer pool.Close()
+
+	now := time.Now().UTC()
+	sessID := uuid.NewString()
+	ctx := t.Context()
+
+	// Seed session.start 10 minutes ago, last heartbeat 10 minutes ago → beyond 5m → stale
+	eid1 := uuid.New()
+	_, err := pool.Exec(ctx,
+		`INSERT INTO work_events (event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, tenant, ts, received_at)
+		 VALUES ($1, 'agentos.work_event/v1', 'claude', $2, 'testhost-claude', 12345, 'session.start', 'running', 'supervised', $3, $4, $5)`,
+		eid1, sessID, tenant, now.Add(-10*time.Minute), now.Add(-10*time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("seed start: %v", err)
+	}
+	eid2 := uuid.New()
+	_, err = pool.Exec(ctx,
+		`INSERT INTO work_events (event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, tenant, ts, received_at)
+		 VALUES ($1, 'agentos.work_event/v1', 'claude', $2, 'testhost-claude', 12345, 'session.heartbeat', 'running', 'supervised', $3, $4, $5)`,
+		eid2, sessID, tenant, now.Add(-10*time.Minute), now.Add(-10*time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("seed heartbeat: %v", err)
+	}
+
+	req := newTestGET("/?tenant=" + tenant + "&stale_window=5m")
+	rec := httptest.NewRecorder()
+	a.EmitterRoutes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp service.EmitterHealthResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	found := false
+	for _, e := range resp.Emitters {
+		if e.SessionID == sessID {
+			found = true
+			if e.Status != service.EmitterStatusStale {
+				t.Fatalf("AC FAIL: stopped emitter should be 'stale', got %q", e.Status)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("session %s not found in response", sessID)
+	}
+}
+
+// TestHTTPEmitterHealth_StaleToRunningTransition proves AC:
+// Resume an emitter → heartbeat → becomes "running" again.
+func TestHTTPEmitterHealth_StaleToRunningTransition(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+	tenant := emitterTestTenant(t, "transition")
+	a, pool, _ := newTestAPIWithDB(t)
+	defer pool.Close()
+
+	now := time.Now().UTC()
+	sessID := uuid.NewString()
+	ctx := t.Context()
+
+	// Phase 1: Session was active 10 min ago → stale
+	eid1 := uuid.New()
+	_, err := pool.Exec(ctx,
+		`INSERT INTO work_events (event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, tenant, ts, received_at)
+		 VALUES ($1, 'agentos.work_event/v1', 'hermes', $2, 'testhost-hermes', 12345, 'session.start', 'running', 'supervised', $3, $4, $5)`,
+		eid1, sessID, tenant, now.Add(-10*time.Minute), now.Add(-10*time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("phase1 seed: %v", err)
+	}
+
+	// Verify stale
+	req1 := newTestGET("/?tenant=" + tenant + "&stale_window=5m")
+	rec1 := httptest.NewRecorder()
+	a.EmitterRoutes().ServeHTTP(rec1, req1)
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("phase1: expected 200, got %d; body: %s", rec1.Code, rec1.Body.String())
+	}
+	var resp1 service.EmitterHealthResponse
+	if err := json.Unmarshal(rec1.Body.Bytes(), &resp1); err != nil {
+		t.Fatalf("phase1: failed to parse response: %v", err)
+	}
+	foundPhase1 := false
+	for _, e := range resp1.Emitters {
+		if e.SessionID == sessID {
+			foundPhase1 = true
+			if e.Status != service.EmitterStatusStale {
+				t.Fatalf("phase1: expected stale, got %q", e.Status)
+			}
+		}
+	}
+	if !foundPhase1 {
+		t.Fatalf("phase1: session %s not found in response", sessID)
+	}
+
+	// Phase 2: Resume — fresh heartbeat within the window
+	eid2 := uuid.New()
+	_, err = pool.Exec(ctx,
+		`INSERT INTO work_events (event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, tenant, ts, received_at)
+		 VALUES ($1, 'agentos.work_event/v1', 'hermes', $2, 'testhost-hermes', 12345, 'session.heartbeat', 'running', 'supervised', $3, $4, $5)`,
+		eid2, sessID, tenant, now.Add(-30*time.Second), now.Add(-30*time.Second),
+	)
+	if err != nil {
+		t.Fatalf("phase2 seed: %v", err)
+	}
+
+	// Verify running
+	req2 := newTestGET("/?tenant=" + tenant + "&stale_window=5m")
+	rec2 := httptest.NewRecorder()
+	a.EmitterRoutes().ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("phase2: expected 200, got %d; body: %s", rec2.Code, rec2.Body.String())
+	}
+	var resp2 service.EmitterHealthResponse
+	if err := json.Unmarshal(rec2.Body.Bytes(), &resp2); err != nil {
+		t.Fatalf("phase2: failed to parse response: %v", err)
+	}
+
+	found := false
+	for _, e := range resp2.Emitters {
+		if e.SessionID == sessID {
+			found = true
+			if e.Status != service.EmitterStatusRunning {
+				t.Fatalf("AC FAIL: resumed emitter should be 'running', got %q", e.Status)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("session %s not found after transition", sessID)
+	}
+}
+
+// TestHTTPEmitterHealth_TerminalAbsorbing proves contract §4:
+// A session.end (terminal) is absorbing — later heartbeats don't resurrect.
+func TestHTTPEmitterHealth_TerminalAbsorbing(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+	tenant := emitterTestTenant(t, "absorbing")
+	a, pool, _ := newTestAPIWithDB(t)
+	defer pool.Close()
+
+	now := time.Now().UTC()
+	sessID := uuid.NewString()
+	ctx := t.Context()
+
+	// Session start 5 min ago
+	eid1 := uuid.New()
+	_, err := pool.Exec(ctx,
+		`INSERT INTO work_events (event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, tenant, ts, received_at)
+		 VALUES ($1, 'agentos.work_event/v1', 'claude', $2, 'testhost-claude', 12345, 'session.start', 'running', 'supervised', $3, $4, $5)`,
+		eid1, sessID, tenant, now.Add(-5*time.Minute), now.Add(-5*time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("seed start: %v", err)
+	}
+
+	// Terminal event 3 min ago
+	eid2 := uuid.New()
+	_, err = pool.Exec(ctx,
+		`INSERT INTO work_events (event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, tenant, ts, received_at)
+		 VALUES ($1, 'agentos.work_event/v1', 'claude', $2, 'testhost-claude', 12345, 'session.end', 'done', 'supervised', $3, $4, $5)`,
+		eid2, sessID, tenant, now.Add(-3*time.Minute), now.Add(-3*time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("seed end: %v", err)
+	}
+
+	// Late heartbeat (inert — terminal is absorbing)
+	eid3 := uuid.New()
+	_, err = pool.Exec(ctx,
+		`INSERT INTO work_events (event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, tenant, ts, received_at)
+		 VALUES ($1, 'agentos.work_event/v1', 'claude', $2, 'testhost-claude', 12345, 'session.heartbeat', 'running', 'supervised', $3, $4, $5)`,
+		eid3, sessID, tenant, now.Add(-1*time.Minute), now.Add(-1*time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("seed late heartbeat: %v", err)
+	}
+
+	req := newTestGET("/?tenant=" + tenant + "&stale_window=5m")
+	rec := httptest.NewRecorder()
+	a.EmitterRoutes().ServeHTTP(rec, req)
+
+	var resp service.EmitterHealthResponse
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+
+	for _, e := range resp.Emitters {
+		if e.SessionID == sessID {
+			// Must be "done" (terminal), NOT "running" (absorbing rule).
+			if e.Status != service.EmitterStatusDone {
+				t.Fatalf("terminal absorbing: expected 'done', got %q — late heartbeat resurrected session", e.Status)
+			}
+			return
+		}
+	}
+	t.Fatal("session not found")
+}
+
+// TestHTTPEmitterHealth_OldEventIsStale proves AC:
+// "Last Claude event 3 days ago = broken" surfaces as stale.
+func TestHTTPEmitterHealth_OldEventIsStale(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+	tenant := emitterTestTenant(t, "old-event")
+	a, pool, _ := newTestAPIWithDB(t)
+	defer pool.Close()
+
+	now := time.Now().UTC()
+	sessID := uuid.NewString()
+	ctx := t.Context()
+
+	// Session with last event 3 days ago
+	eid := uuid.New()
+	_, err := pool.Exec(ctx,
+		`INSERT INTO work_events (event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, tenant, ts, received_at)
+		 VALUES ($1, 'agentos.work_event/v1', 'claude', $2, 'testhost-claude', 12345, 'session.start', 'running', 'supervised', $3, $4, $5)`,
+		eid, sessID, tenant, now.Add(-72*time.Hour), now.Add(-72*time.Hour),
+	)
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	req := newTestGET("/?tenant=" + tenant + "&stale_window=5m")
+	rec := httptest.NewRecorder()
+	a.EmitterRoutes().ServeHTTP(rec, req)
+
+	var resp service.EmitterHealthResponse
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+
+	found := false
+	for _, e := range resp.Emitters {
+		if e.SessionID == sessID {
+			found = true
+			if e.Status != service.EmitterStatusStale {
+				t.Fatalf("AC FAIL: 3-day-old event should be 'stale', got %q", e.Status)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("session not found")
+	}
+}
+
+// TestHTTPEmitterHealth_TenantIsolation proves:
+// Sessions from tenant A don't appear in tenant B's results.
+func TestHTTPEmitterHealth_TenantIsolation(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+	tenantA := emitterTestTenant(t, "tenant-a")
+	tenantB := emitterTestTenant(t, "tenant-b")
+	a, pool, _ := newTestAPIWithDB(t)
+	defer pool.Close()
+
+	now := time.Now().UTC()
+	ctx := t.Context()
+
+	// Seed tenant A session
+	eidA := uuid.New()
+	_, err := pool.Exec(ctx,
+		`INSERT INTO work_events (event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, tenant, ts, received_at)
+		 VALUES ($1, 'agentos.work_event/v1', 'claude', $2, 'testhost-a', 12345, 'session.start', 'running', 'supervised', $3, $4, $5)`,
+		eidA, uuid.NewString(), tenantA, now.Add(-1*time.Minute), now.Add(-1*time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("seed A: %v", err)
+	}
+
+	// Seed tenant B session
+	eidB := uuid.New()
+	sessBID := uuid.NewString()
+	_, err = pool.Exec(ctx,
+		`INSERT INTO work_events (event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, tenant, ts, received_at)
+		 VALUES ($1, 'agentos.work_event/v1', 'hermes', $2, 'testhost-b', 12345, 'session.start', 'running', 'supervised', $3, $4, $5)`,
+		eidB, sessBID, tenantB, now.Add(-1*time.Minute), now.Add(-1*time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("seed B: %v", err)
+	}
+
+	// Query tenant B only
+	req := newTestGET("/?tenant=" + tenantB + "&stale_window=5m")
+	rec := httptest.NewRecorder()
+	a.EmitterRoutes().ServeHTTP(rec, req)
+
+	var resp service.EmitterHealthResponse
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+
+	for _, e := range resp.Emitters {
+		if e.Harness == "claude" {
+			t.Fatalf("tenant isolation violated: claude (tenant A) leaked into tenant B results")
+		}
+	}
+
+	foundB := false
+	for _, e := range resp.Emitters {
+		if e.SessionID == sessBID {
+			foundB = true
+		}
+	}
+	if !foundB {
+		t.Fatal("tenant B session not found in its own results")
+	}
+}
+
+// TestHTTPEmitterHealth_EmptyTenantReturns400 proves ADR-002:
+// GET /api/emitters with no tenant query parameter → 400.
+func TestHTTPEmitterHealth_EmptyTenantReturns400(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+	a, pool, _ := newTestAPIWithDB(t)
+	defer pool.Close()
+
+	req := newTestGET("/")
+	rec := httptest.NewRecorder()
+	a.EmitterRoutes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for empty tenant, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]string
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if !strings.Contains(resp["error"], "tenant") {
+		t.Fatalf("expected 'tenant' in error message, got: %s", resp["error"])
+	}
+}
+
+// TestHTTPEmitterHealth_CrossTenantNeverLeaks proves ADR-002:
+// Seeding two tenants and querying each one never returns the other tenant's sessions.
+func TestHTTPEmitterHealth_CrossTenantNeverLeaks(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+	tenantA := emitterTestTenant(t, "leak-a")
+	tenantB := emitterTestTenant(t, "leak-b")
+	a, pool, _ := newTestAPIWithDB(t)
+	defer pool.Close()
+
+	now := time.Now().UTC()
+	ctx := t.Context()
+
+	// Seed two sessions for tenant A
+	sessA1 := uuid.NewString()
+	sessA2 := uuid.NewString()
+	for _, sess := range []string{sessA1, sessA2} {
+		eid := uuid.New()
+		_, err := pool.Exec(ctx,
+			`INSERT INTO work_events (event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, tenant, ts, received_at)
+			 VALUES ($1, 'agentos.work_event/v1', 'claude', $2, 'testhost-leak-a', 12345, 'session.start', 'running', 'supervised', $3, $4, $5)`,
+			eid, sess, tenantA, now.Add(-1*time.Minute), now.Add(-1*time.Minute),
+		)
+		if err != nil {
+			t.Fatalf("seed A: %v", err)
+		}
+	}
+
+	// Seed one session for tenant B
+	sessB1 := uuid.NewString()
+	eidB := uuid.New()
+	_, err := pool.Exec(ctx,
+		`INSERT INTO work_events (event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, tenant, ts, received_at)
+		 VALUES ($1, 'agentos.work_event/v1', 'hermes', $2, 'testhost-leak-b', 12345, 'session.start', 'running', 'supervised', $3, $4, $5)`,
+		eidB, sessB1, tenantB, now.Add(-1*time.Minute), now.Add(-1*time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("seed B: %v", err)
+	}
+
+	// Query tenant A — must only see A sessions
+	reqA := newTestGET("/?tenant=" + tenantA + "&stale_window=5m")
+	recA := httptest.NewRecorder()
+	a.EmitterRoutes().ServeHTTP(recA, reqA)
+	var respA service.EmitterHealthResponse
+	if err := json.Unmarshal(recA.Body.Bytes(), &respA); err != nil {
+		t.Fatalf("parse A response: %v", err)
+	}
+	for _, e := range respA.Emitters {
+		if e.SessionID == sessB1 {
+			t.Fatal("tenant B session leaked into tenant A query")
+		}
+	}
+	if len(respA.Emitters) < 2 {
+		t.Fatalf("expected at least 2 sessions for tenant A, got %d", len(respA.Emitters))
+	}
+
+	// Query tenant B — must only see B sessions
+	reqB := newTestGET("/?tenant=" + tenantB + "&stale_window=5m")
+	recB := httptest.NewRecorder()
+	a.EmitterRoutes().ServeHTTP(recB, reqB)
+	var respB service.EmitterHealthResponse
+	if err := json.Unmarshal(recB.Body.Bytes(), &respB); err != nil {
+		t.Fatalf("parse B response: %v", err)
+	}
+	for _, e := range respB.Emitters {
+		if e.SessionID == sessA1 || e.SessionID == sessA2 {
+			t.Fatal("tenant A session leaked into tenant B query")
+		}
+	}
+	if len(respB.Emitters) < 1 {
+		t.Fatalf("expected at least 1 session for tenant B, got %d", len(respB.Emitters))
+	}
+}
+
+// TestHTTPEmitterHealth_BoundedRecentIsRunning proves:
+// A bounded session with recent events is "running" (no proof from reporter yet).
+func TestHTTPEmitterHealth_BoundedRecentIsRunning(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+	tenant := emitterTestTenant(t, "bounded-recent")
+	a, pool, _ := newTestAPIWithDB(t)
+	defer pool.Close()
+
+	now := time.Now().UTC()
+	sessID := uuid.NewString()
+	ctx := t.Context()
+
+	eid := uuid.New()
+	_, err := pool.Exec(ctx,
+		`INSERT INTO work_events (event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, tenant, ts, received_at)
+		 VALUES ($1, 'agentos.work_event/v1', 'claude', $2, 'testhost-claude', NULL, 'session.start', 'running', 'bounded', $3, $4, $5)`,
+		eid, sessID, tenant, now.Add(-2*time.Minute), now.Add(-2*time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	req := newTestGET("/?tenant=" + tenant + "&stale_window=5m")
+	rec := httptest.NewRecorder()
+	a.EmitterRoutes().ServeHTTP(rec, req)
+
+	var resp service.EmitterHealthResponse
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+
+	for _, e := range resp.Emitters {
+		if e.SessionID == sessID {
+			if e.Status != service.EmitterStatusRunning {
+				t.Fatalf("bounded recent: expected 'running', got %q", e.Status)
+			}
+			return
+		}
+	}
+	t.Fatal("session not found")
+}
+
+// TestHTTPEmitterHealth_BoundedOldIsStale proves:
+// A bounded session with no events for >6h is "stale" (backstop).
+func TestHTTPEmitterHealth_BoundedOldIsStale(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+	tenant := emitterTestTenant(t, "bounded-old")
+	a, pool, _ := newTestAPIWithDB(t)
+	defer pool.Close()
+
+	now := time.Now().UTC()
+	sessID := uuid.NewString()
+	ctx := t.Context()
+
+	eid := uuid.New()
+	_, err := pool.Exec(ctx,
+		`INSERT INTO work_events (event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, tenant, ts, received_at)
+		 VALUES ($1, 'agentos.work_event/v1', 'claude', $2, 'testhost-claude', NULL, 'session.start', 'running', 'bounded', $3, $4, $5)`,
+		eid, sessID, tenant, now.Add(-7*time.Hour), now.Add(-7*time.Hour),
+	)
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	req := newTestGET("/?tenant=" + tenant + "&stale_window=5m")
+	rec := httptest.NewRecorder()
+	a.EmitterRoutes().ServeHTTP(rec, req)
+
+	var resp service.EmitterHealthResponse
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+
+	for _, e := range resp.Emitters {
+		if e.SessionID == sessID {
+			if e.Status != service.EmitterStatusStale {
+				t.Fatalf("bounded old: expected 'stale', got %q", e.Status)
+			}
+			return
+		}
+	}
+	t.Fatal("session not found")
+}
+
+// TestHTTPEmitterHealth_InvalidStaleWindow_Returns400 proves error handling.
+func TestHTTPEmitterHealth_InvalidStaleWindow_Returns400(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+	a, pool, _ := newTestAPIWithDB(t)
+	defer pool.Close()
+
+	tenant := emitterTestTenant(t, "invalidsw")
+	req := newTestGET("/?tenant=" + tenant + "&stale_window=not-a-duration")
+	rec := httptest.NewRecorder()
+	a.EmitterRoutes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse error response: %v", err)
+	}
+	if !strings.Contains(resp["error"], "invalid stale_window") {
+		t.Fatalf("expected 'invalid stale_window' error, got: %s", resp["error"])
+	}
+}
+
+// TestHTTPEmitterHealth_SupervisedNoteAsLatestRow proves:
+// A supervised session whose latest event is a note (NULL liveness_mode) with a fresh
+// heartbeat is still reported "running" — liveness is derived from per-session
+// aggregation (start/heartbeat), never from the arbitrary latest row.
+// Mutation self-check: this test MUST fail if liveness_mode is read from the latest
+// row instead of aggregated per session.
+func TestHTTPEmitterHealth_SupervisedNoteAsLatestRow(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+	tenant := emitterTestTenant(t, "note-latest")
+	a, pool, _ := newTestAPIWithDB(t)
+	defer pool.Close()
+
+	now := time.Now().UTC()
+	sessID := uuid.NewString()
+	ctx := t.Context()
+
+	// session.start (supervised, 2m ago)
+	eid1 := uuid.New()
+	_, err := pool.Exec(ctx,
+		`INSERT INTO work_events (event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, tenant, ts, received_at)
+		 VALUES ($1, 'agentos.work_event/v1', 'claude', $2, 'testhost-claude', 12345, 'session.start', 'running', 'supervised', $3, $4, $5)`,
+		eid1, sessID, tenant, now.Add(-2*time.Minute), now.Add(-2*time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("seed start: %v", err)
+	}
+
+	// session.heartbeat (supervised, 1m ago — fresh within 5m window)
+	eid2 := uuid.New()
+	_, err = pool.Exec(ctx,
+		`INSERT INTO work_events (event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, tenant, ts, received_at)
+		 VALUES ($1, 'agentos.work_event/v1', 'claude', $2, 'testhost-claude', 12345, 'session.heartbeat', 'running', 'supervised', $3, $4, $5)`,
+		eid2, sessID, tenant, now.Add(-1*time.Minute), now.Add(-1*time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("seed heartbeat: %v", err)
+	}
+
+	// note (NULL liveness_mode, 30s ago — this is the LATEST row)
+	// This must NOT cause the session to be reported stale.
+	eid3 := uuid.New()
+	_, err = pool.Exec(ctx,
+		`INSERT INTO work_events (event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, tenant, ts, received_at)
+		 VALUES ($1, 'agentos.work_event/v1', 'claude', $2, 'testhost-claude', 12345, 'note', 'info', NULL, $3, $4, $5)`,
+		eid3, sessID, tenant, now.Add(-30*time.Second), now.Add(-30*time.Second),
+	)
+	if err != nil {
+		t.Fatalf("seed note: %v", err)
+	}
+
+	req := newTestGET("/?tenant=" + tenant + "&stale_window=5m")
+	rec := httptest.NewRecorder()
+	a.EmitterRoutes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp service.EmitterHealthResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	found := false
+	for _, e := range resp.Emitters {
+		if e.SessionID == sessID {
+			found = true
+			if e.Status != service.EmitterStatusRunning {
+				t.Fatalf("FINDING-1 REGRESSION: supervised session with fresh heartbeat + latest-row note(NULL mode) should be 'running', got %q — liveness_mode is likely read from the latest row instead of per-session aggregation", e.Status)
+			}
+			if e.LivenessMode != "supervised" {
+				t.Fatalf("expected liveness_mode 'supervised' (aggregated from start/heartbeat), got %q", e.LivenessMode)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("session %s not found in response", sessID)
+	}
+}
+
+// TestHTTPEmitterHealth_SupervisedNoteAsLatestRow_Stale proves:
+// A supervised session whose heartbeat is old (>5m) with a recent note (NULL mode, latest
+// row) is correctly reported "stale" — the per-session aggregation still shows the old
+// heartbeat, and status derives from last_heartbeat age, not from the flag.
+func TestHTTPEmitterHealth_SupervisedNoteAsLatestRow_Stale(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+	tenant := emitterTestTenant(t, "note-latest-stale")
+	a, pool, _ := newTestAPIWithDB(t)
+	defer pool.Close()
+
+	now := time.Now().UTC()
+	sessID := uuid.NewString()
+	ctx := t.Context()
+
+	// session.start (supervised, 10m ago)
+	eid1 := uuid.New()
+	_, err := pool.Exec(ctx,
+		`INSERT INTO work_events (event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, tenant, ts, received_at)
+		 VALUES ($1, 'agentos.work_event/v1', 'claude', $2, 'testhost-claude', 12345, 'session.start', 'running', 'supervised', $3, $4, $5)`,
+		eid1, sessID, tenant, now.Add(-10*time.Minute), now.Add(-10*time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("seed start: %v", err)
+	}
+
+	// session.heartbeat (supervised, 10m ago — stale, beyond 5m window)
+	eid2 := uuid.New()
+	_, err = pool.Exec(ctx,
+		`INSERT INTO work_events (event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, tenant, ts, received_at)
+		 VALUES ($1, 'agentos.work_event/v1', 'claude', $2, 'testhost-claude', 12345, 'session.heartbeat', 'running', 'supervised', $3, $4, $5)`,
+		eid2, sessID, tenant, now.Add(-10*time.Minute), now.Add(-10*time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("seed heartbeat: %v", err)
+	}
+
+	// note (NULL liveness_mode, 30s ago — latest row, but doesn't resurrect the session)
+	eid3 := uuid.New()
+	_, err = pool.Exec(ctx,
+		`INSERT INTO work_events (event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, tenant, ts, received_at)
+		 VALUES ($1, 'agentos.work_event/v1', 'claude', $2, 'testhost-claude', 12345, 'note', 'info', NULL, $3, $4, $5)`,
+		eid3, sessID, tenant, now.Add(-30*time.Second), now.Add(-30*time.Second),
+	)
+	if err != nil {
+		t.Fatalf("seed note: %v", err)
+	}
+
+	req := newTestGET("/?tenant=" + tenant + "&stale_window=5m")
+	rec := httptest.NewRecorder()
+	a.EmitterRoutes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp service.EmitterHealthResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	found := false
+	for _, e := range resp.Emitters {
+		if e.SessionID == sessID {
+			found = true
+			if e.Status != service.EmitterStatusStale {
+				t.Fatalf("supervised session with old heartbeat + latest-row note should be 'stale', got %q", e.Status)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("session %s not found in response", sessID)
+	}
+}
+
+// TestHTTPEmitterHealth_ReceivedAtVsTs_FreshServerOldEmitter proves:
+// received_at is the SOLE liveness clock — even when ts (emitter-supplied, spoofable)
+// is fresh, an old received_at (server-authoritative) still yields "stale".
+// Mutation self-check: swap received_at→ts in the query and this test goes RED.
+func TestHTTPEmitterHealth_ReceivedAtVsTs_FreshServerOldEmitter(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+	tenant := emitterTestTenant(t, "ts-diff-stale")
+	a, pool, _ := newTestAPIWithDB(t)
+	defer pool.Close()
+
+	now := time.Now().UTC()
+	sessID := uuid.NewString()
+	ctx := t.Context()
+
+	// session.start: ts=now-30s (emitter claims recent), received_at=now-10m (server says old)
+	eid1 := uuid.New()
+	_, err := pool.Exec(ctx,
+		`INSERT INTO work_events (event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, tenant, ts, received_at)
+		 VALUES ($1, 'agentos.work_event/v1', 'claude', $2, 'testhost-claude', 12345, 'session.start', 'running', 'supervised', $3, $4, $5)`,
+		eid1, sessID, tenant, now.Add(-30*time.Second), now.Add(-10*time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("seed start: %v", err)
+	}
+
+	req := newTestGET("/?tenant=" + tenant + "&stale_window=5m")
+	rec := httptest.NewRecorder()
+	a.EmitterRoutes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp service.EmitterHealthResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	found := false
+	for _, e := range resp.Emitters {
+		if e.SessionID == sessID {
+			found = true
+			if e.Status != service.EmitterStatusStale {
+				t.Fatalf("RECEIVED_AT INVARIANT: session with old received_at but fresh ts must be 'stale' (server clock drives liveness, not emitter-supplied ts), got %q", e.Status)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("session %s not found in response", sessID)
+	}
+}
+
+// TestHTTPEmitterHealth_ReceivedAtVsTs_OldServerFreshEmitter proves:
+// received_at is the SOLE liveness clock — even when ts (emitter-supplied) is stale,
+// a fresh received_at (server-authoritative) still yields "running".
+// Mutation self-check: swap received_at→ts in the query and this test goes RED.
+func TestHTTPEmitterHealth_ReceivedAtVsTs_OldServerFreshEmitter(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+	tenant := emitterTestTenant(t, "ts-diff-running")
+	a, pool, _ := newTestAPIWithDB(t)
+	defer pool.Close()
+
+	now := time.Now().UTC()
+	sessID := uuid.NewString()
+	ctx := t.Context()
+
+	// session.start: ts=now-10m (emitter claims old), received_at=now-30s (server says recent)
+	eid1 := uuid.New()
+	_, err := pool.Exec(ctx,
+		`INSERT INTO work_events (event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, tenant, ts, received_at)
+		 VALUES ($1, 'agentos.work_event/v1', 'claude', $2, 'testhost-claude', 12345, 'session.start', 'running', 'supervised', $3, $4, $5)`,
+		eid1, sessID, tenant, now.Add(-10*time.Minute), now.Add(-30*time.Second),
+	)
+	if err != nil {
+		t.Fatalf("seed start: %v", err)
+	}
+
+	req := newTestGET("/?tenant=" + tenant + "&stale_window=5m")
+	rec := httptest.NewRecorder()
+	a.EmitterRoutes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp service.EmitterHealthResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	found := false
+	for _, e := range resp.Emitters {
+		if e.SessionID == sessID {
+			found = true
+			if e.Status != service.EmitterStatusRunning {
+				t.Fatalf("RECEIVED_AT INVARIANT: session with fresh received_at but old ts must be 'running' (server clock drives liveness), got %q", e.Status)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("session %s not found in response", sessID)
+	}
+}
+
+// TestHTTPEmitterHealth_StaleWindow_TooSmall proves:
+// stale_window < 1s returns 400.
+func TestHTTPEmitterHealth_StaleWindow_TooSmall(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+	a, pool, _ := newTestAPIWithDB(t)
+	defer pool.Close()
+
+	tenant := emitterTestTenant(t, "sw-small")
+	req := newTestGET("/?tenant=" + tenant + "&stale_window=500ms")
+	rec := httptest.NewRecorder()
+	a.EmitterRoutes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for stale_window < 1s, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]string
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if !strings.Contains(resp["error"], "at least 1 second") {
+		t.Fatalf("expected 'at least 1 second' error, got: %s", resp["error"])
+	}
+}
+
+// TestHTTPEmitterHealth_StaleWindow_TooLarge proves:
+// stale_window > 24h returns 400.
+func TestHTTPEmitterHealth_StaleWindow_TooLarge(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+	a, pool, _ := newTestAPIWithDB(t)
+	defer pool.Close()
+
+	tenant := emitterTestTenant(t, "sw-large")
+	req := newTestGET("/?tenant=" + tenant + "&stale_window=48h")
+	rec := httptest.NewRecorder()
+	a.EmitterRoutes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for stale_window > 24h, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]string
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if !strings.Contains(resp["error"], "at most 24 hours") {
+		t.Fatalf("expected 'at most 24 hours' error, got: %s", resp["error"])
+	}
+}
+
+// TestHTTPEmitterHealth_ResponseShape proves the response JSON shape.
+func TestHTTPEmitterHealth_ResponseShape(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+	tenant := emitterTestTenant(t, "shape")
+	a, pool, _ := newTestAPIWithDB(t)
+	defer pool.Close()
+
+	req := newTestGET("/?tenant=" + tenant + "&limit=10&offset=0")
+	rec := httptest.NewRecorder()
+	a.EmitterRoutes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp service.EmitterHealthResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	// Verify pagination fields
+	if resp.Limit != 10 {
+		t.Fatalf("expected limit=10, got %d", resp.Limit)
+	}
+	if resp.Offset != 0 {
+		t.Fatalf("expected offset=0, got %d", resp.Offset)
+	}
+	// Verify emitters is an array (not null)
+	if resp.Emitters == nil {
+		t.Fatal("emitters should be an array, got null")
+	}
+}
+
+// TestHTTPEmitterHealth_EmptyResult proves:
+// When no events exist for the tenant, returns empty array (not error).
+func TestHTTPEmitterHealth_EmptyResult(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+	a, pool, _ := newTestAPIWithDB(t)
+	defer pool.Close()
+
+	req := newTestGET("/?tenant=test-emitter-nonexistent-" + uuid.NewString()[:8])
+	rec := httptest.NewRecorder()
+	a.EmitterRoutes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp service.EmitterHealthResponse
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+
+	if len(resp.Emitters) != 0 {
+		t.Fatalf("expected 0 emitters for nonexistent tenant, got %d", len(resp.Emitters))
+	}
+	if resp.Total != 0 {
+		t.Fatalf("expected total=0, got %d", resp.Total)
+	}
+}
+
+// TestHTTPEmitterHealth_NullHostSession proves the nullable-scan-crash guard:
+// A session with ONLY non-start/non-heartbeat events (e.g. note, artifact.created)
+// has no rows matching the FILTER in session_host's aggregation, so session_host
+// is NULL. The query must not 500; the response should have host="" and the
+// correct status derivation.
+func TestHTTPEmitterHealth_NullHostSession(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+	tenant := emitterTestTenant(t, "null-host")
+	a, pool, _ := newTestAPIWithDB(t)
+	defer pool.Close()
+
+	now := time.Now().UTC()
+	sessID := uuid.NewString()
+	ctx := t.Context()
+
+	// Seed a session with only a `note` event — no session.start or session.heartbeat.
+	// The host column is NOT NULL on the row, but the per-session FILTER
+	// (WHERE kind IN ('session.start','session.heartbeat')) matches zero rows,
+	// so session_host aggregates to NULL.
+	eid := uuid.New()
+	_, err := pool.Exec(ctx,
+		`INSERT INTO work_events (event_id, schema_version, harness, session_id, host, pid, kind, status, tenant, ts, received_at)
+		 VALUES ($1, 'agentos.work_event/v1', 'claude', $2, 'some-host', 12345, 'note', 'running', $3, $4, $5)`,
+		eid, sessID, tenant, now.Add(-30*time.Second), now.Add(-30*time.Second),
+	)
+	if err != nil {
+		t.Fatalf("seed note event: %v", err)
+	}
+
+	req := newTestGET("/?tenant=" + tenant + "&stale_window=5m")
+	rec := httptest.NewRecorder()
+	a.EmitterRoutes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for NULL-session-host session, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp service.EmitterHealthResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	found := false
+	for _, e := range resp.Emitters {
+		if e.SessionID == sessID {
+			found = true
+			// Must NOT crash — NULL session_host is safely defaulted to empty string.
+			if e.Host != "" {
+				t.Fatalf("expected host='' for NULL-session-host, got %q", e.Host)
+			}
+			// No liveness_mode either (same FILTER), so status should be stale.
+			if e.Status != service.EmitterStatusStale {
+				t.Fatalf("no-start/heartbeat session should be 'stale', got %q", e.Status)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("session %s not found in response", sessID)
+	}
+}
