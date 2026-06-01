@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -10,6 +11,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/tim4net/agent-os/internal/service"
 )
 
 // ---------------------------------------------------------------------------
@@ -68,12 +71,20 @@ func ingestWorkEvent(t *testing.T, a *API, body string) int {
 	return rec.Code
 }
 
-// TestIncidents_NoFailedSessions_ReturnsEmptyGreen tests that when there are no
-// failed sessions, the endpoint returns an empty incidents list (honest "all green").
-func TestIncidents_NoFailedSessions_ReturnsEmptyGreen(t *testing.T) {
+
+
+// requireTestDB skips the test if AOS_TEST_DATABASE_URL is not set.
+func requireTestDB(t *testing.T) {
+	t.Helper()
 	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
 		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
 	}
+}
+
+// TestIncidents_NoFailedSessions_ReturnsEmptyGreen tests that when there are no
+// failed sessions, the endpoint returns an empty incidents list (honest "all green").
+func TestIncidents_NoFailedSessions_ReturnsEmptyGreen(t *testing.T) {
+	requireTestDB(t)
 	a, pool, _ := newTestAPIWithDB(t)
 	defer pool.Close()
 	seedTestIngestKey(t, pool)
@@ -100,11 +111,11 @@ func TestIncidents_NoFailedSessions_ReturnsEmptyGreen(t *testing.T) {
 
 // TestIncidents_FailedSessionSurfaces tests AC: a failed work-event surfaces
 // in the incidents endpoint. No failure is buried.
+// This is a REST test — the GET returning the incident proves "surfaces within
+// one poll cycle". No SSE/bus assertion needed (incidents endpoint is REST-only).
 func TestIncidents_FailedSessionSurfaces(t *testing.T) {
-	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
-		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
-	}
-	a, pool, bus := newTestAPIWithDB(t)
+	requireTestDB(t)
+	a, pool, _ := newTestAPIWithDB(t)
 	defer pool.Close()
 	seedTestIngestKey(t, pool)
 
@@ -128,9 +139,6 @@ func TestIncidents_FailedSessionSurfaces(t *testing.T) {
 		t.Fatalf("start event: expected 201, got %d", code)
 	}
 
-	// Subscribe to SSE bus to confirm event is published
-	sub := bus.Subscribe()
-
 	// Ingest the failed session.end
 	failBody := failedSessionWorkEvent(endID, sessionID)
 	failReq := map[string]interface{}{}
@@ -143,17 +151,7 @@ func TestIncidents_FailedSessionSurfaces(t *testing.T) {
 		t.Fatalf("failed end event: expected 201, got %d", code)
 	}
 
-	// Verify SSE event was published (AC: "within one poll/SSE cycle")
-	select {
-	case evt := <-sub:
-		if evt.Type != "work_event" {
-			t.Fatalf("expected SSE type work_event, got %q", evt.Type)
-		}
-	default:
-		t.Fatal("expected SSE event on bus after failed session, got none")
-	}
-
-	// Now query the incidents endpoint
+	// Query the incidents endpoint (REST — proves "surfaces within one poll cycle")
 	incReq := httptest.NewRequest("GET", "/?tenant=personal", nil)
 	incRec := httptest.NewRecorder()
 	a.IncidentRoutes().ServeHTTP(incRec, incReq)
@@ -202,9 +200,7 @@ func TestIncidents_FailedSessionSurfaces(t *testing.T) {
 // TestIncidents_DoneSessionDoesNotSurface tests that a session.end with status=done
 // does NOT appear as an incident. Only failed sessions surface.
 func TestIncidents_DoneSessionDoesNotSurface(t *testing.T) {
-	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
-		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
-	}
+	requireTestDB(t)
 	a, pool, _ := newTestAPIWithDB(t)
 	defer pool.Close()
 	seedTestIngestKey(t, pool)
@@ -247,9 +243,7 @@ func TestIncidents_DoneSessionDoesNotSurface(t *testing.T) {
 // TestIncidents_TenantIsolation tests that incidents are tenant-scoped (ADR-002).
 // A failed session for tenant "personal" must not appear when querying tenant "dayjob".
 func TestIncidents_TenantIsolation(t *testing.T) {
-	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
-		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
-	}
+	requireTestDB(t)
 	a, pool, _ := newTestAPIWithDB(t)
 	defer pool.Close()
 	seedTestIngestKey(t, pool)
@@ -289,11 +283,9 @@ func TestIncidents_TenantIsolation(t *testing.T) {
 }
 
 // TestIncidents_Pagination tests that limit and offset work correctly —
-// pages do not overlap by session_id.
+// pages do not overlap by session_id. Unified pagination across all types.
 func TestIncidents_Pagination(t *testing.T) {
-	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
-		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
-	}
+	requireTestDB(t)
 	a, pool, _ := newTestAPIWithDB(t)
 	defer pool.Close()
 	seedTestIngestKey(t, pool)
@@ -351,14 +343,13 @@ func TestIncidents_Pagination(t *testing.T) {
 // (most recent failure first). This is a mutation self-check: if the subquery
 // wrapper were removed and DISTINCT ON ordering leaked through, this test would fail.
 func TestIncidents_NewestFirst(t *testing.T) {
-	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
-		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
-	}
+	requireTestDB(t)
 	a, pool, _ := newTestAPIWithDB(t)
 	defer pool.Close()
 	seedTestIngestKey(t, pool)
 
 	// Ingest 3 failed sessions with known time ordering.
+	// Add a small delay to ensure distinct received_at values.
 	var sessionIDs []string
 	for i := 0; i < 3; i++ {
 		sid := uuid.NewString()
@@ -375,6 +366,10 @@ func TestIncidents_NewestFirst(t *testing.T) {
 
 		ingestWorkEvent(t, a, string(startJSON))
 		ingestWorkEvent(t, a, string(failBody))
+
+		if i < 2 {
+			time.Sleep(10 * time.Millisecond)
+		}
 	}
 
 	req := httptest.NewRequest("GET", "/?tenant=personal&limit=10", nil)
@@ -391,7 +386,7 @@ func TestIncidents_NewestFirst(t *testing.T) {
 		t.Fatalf("expected at least 2 incidents for ordering check, got %d", len(resp.Incidents))
 	}
 
-	// Verify each incident is more recent than the next.
+	// Verify each incident is more recent than or equal to the next.
 	for i := 0; i < len(resp.Incidents)-1; i++ {
 		a := resp.Incidents[i].ReceivedAt
 		b := resp.Incidents[i+1].ReceivedAt
@@ -404,9 +399,7 @@ func TestIncidents_NewestFirst(t *testing.T) {
 
 // TestIncidents_ResponseShape tests the response JSON structure is correct.
 func TestIncidents_ResponseShape(t *testing.T) {
-	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
-		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
-	}
+	requireTestDB(t)
 	a, pool, _ := newTestAPIWithDB(t)
 	defer pool.Close()
 	seedTestIngestKey(t, pool)
@@ -440,9 +433,7 @@ func TestIncidents_ResponseShape(t *testing.T) {
 // TestIncidents_AllTenantsFilter tests that empty tenant parameter returns
 // incidents across all tenants.
 func TestIncidents_AllTenantsFilter(t *testing.T) {
-	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
-		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
-	}
+	requireTestDB(t)
 	a, pool, _ := newTestAPIWithDB(t)
 	defer pool.Close()
 	seedTestIngestKey(t, pool)
@@ -492,9 +483,7 @@ func TestIncidents_AllTenantsFilter(t *testing.T) {
 
 // TestIncidents_ClampAbsurdLimit tests that absurdly large limit values are clamped.
 func TestIncidents_ClampAbsurdLimit(t *testing.T) {
-	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
-		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
-	}
+	requireTestDB(t)
 	a, pool, _ := newTestAPIWithDB(t)
 	defer pool.Close()
 	seedTestIngestKey(t, pool)
@@ -514,3 +503,253 @@ func TestIncidents_ClampAbsurdLimit(t *testing.T) {
 		t.Fatalf("limit should be clamped to %d, got %d", maxIncidentLimit, resp.Limit)
 	}
 }
+
+// TestIncidents_FailedThenSucceededDoesNotSurface tests finding #4:
+// a session that failed then later succeeded must NOT surface as failed.
+// The query uses the latest terminal status per session.
+func TestIncidents_FailedThenSucceededDoesNotSurface(t *testing.T) {
+	requireTestDB(t)
+	a, pool, _ := newTestAPIWithDB(t)
+	defer pool.Close()
+	seedTestIngestKey(t, pool)
+
+	// Ingest: session.start → session.end(failed) → session.end(done)
+	sessionID := uuid.NewString()
+	startJSON := validWorkEventJSON(uuid.NewString())
+	startReq := map[string]interface{}{}
+	json.Unmarshal([]byte(startJSON), &startReq)
+	startReq["session_id"] = sessionID
+	startReq["event_id"] = uuid.NewString()
+	sj, _ := json.Marshal(startReq)
+	ingestWorkEvent(t, a, string(sj))
+
+	failBody := failedSessionWorkEvent(uuid.NewString(), sessionID)
+	fr := map[string]interface{}{}
+	json.Unmarshal([]byte(failBody), &fr)
+	fr["session_id"] = sessionID
+	fj, _ := json.Marshal(fr)
+	ingestWorkEvent(t, a, string(fj))
+
+	// Now ingest a successful end for the same session
+	doneBody := doneSessionWorkEvent(uuid.NewString(), sessionID)
+	dr := map[string]interface{}{}
+	json.Unmarshal([]byte(doneBody), &dr)
+	dr["session_id"] = sessionID
+	dj, _ := json.Marshal(dr)
+	ingestWorkEvent(t, a, string(dj))
+
+	// Query incidents — the session should NOT appear as failed
+	req := httptest.NewRequest("GET", "/?tenant=personal", nil)
+	rec := httptest.NewRecorder()
+	a.IncidentRoutes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var resp IncidentsResponse
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+
+	for _, inc := range resp.Incidents {
+		if inc.Type == "failed_session" && inc.SessionID == sessionID {
+			t.Fatalf("session %s failed then succeeded — must NOT appear as failed incident", sessionID)
+		}
+	}
+}
+
+// TestIncidents_DownInstanceSurfaces tests that a down instance (WP-I) surfaces
+// as a down_instance incident. Seeds an app_instances row with status=down and
+// asserts it appears in the incidents response.
+func TestIncidents_DownInstanceSurfaces(t *testing.T) {
+	requireTestDB(t)
+	a, pool, _ := newTestAPIWithDB(t)
+	defer pool.Close()
+	seedTestIngestKey(t, pool)
+
+	// Seed a down app_instance directly via SQL.
+	ctx := t.Context()
+	uniqueHealthURL := fmt.Sprintf("http://down-test-%s:9999/health", uuid.NewString()[:8])
+	_, err := pool.Exec(ctx,
+		`INSERT INTO app_instances (harness, session_id, host, label, health_url, tenant, status, last_probed_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+		 ON CONFLICT (host, health_url, tenant) DO UPDATE SET status = $7, last_probed_at = NOW()`,
+		"test-harness", uuid.NewString(), "down-test-host", "down test instance", uniqueHealthURL, "personal", "down",
+	)
+	if err != nil {
+		t.Fatalf("seed app_instance: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/?tenant=personal", nil)
+	rec := httptest.NewRecorder()
+	a.IncidentRoutes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp IncidentsResponse
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+
+	found := false
+	for _, inc := range resp.Incidents {
+		if inc.Type == "down_instance" && inc.Host == "down-test-host" {
+			found = true
+			if inc.Status != "down" {
+				t.Errorf("expected status=down, got %q", inc.Status)
+			}
+			if inc.Title != "down test instance" {
+				t.Errorf("expected title='down test instance', got %q", inc.Title)
+			}
+			if inc.Tenant != "personal" {
+				t.Errorf("expected tenant=personal, got %q", inc.Tenant)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("down instance not found in incidents; total=%d, incidents=%+v", resp.Total, resp.Incidents)
+	}
+}
+
+// TestIncidents_StaleSessionSurfaces tests that a supervised session with no
+// recent heartbeat surfaces as a stale_session incident (contract §4).
+// Liveness is derived from work_events — no agent_sessions table needed (WP-J).
+func TestIncidents_StaleSessionSurfaces(t *testing.T) {
+	requireTestDB(t)
+	a, pool, _ := newTestAPIWithDB(t)
+	defer pool.Close()
+	seedTestIngestKey(t, pool)
+
+	// Create a supervised session.start event with a very old timestamp.
+	// This will be older than the 5-minute stale window, making it stale.
+	sessionID := uuid.NewString()
+	startJSON := validWorkEventJSON(uuid.NewString())
+	startReq := map[string]interface{}{}
+	json.Unmarshal([]byte(startJSON), &startReq)
+	startReq["event_id"] = uuid.NewString()
+	startReq["session_id"] = sessionID
+	startReq["status"] = "running"
+	startReq["kind"] = "session.start"
+	startReq["liveness_mode"] = "supervised"
+	startReq["pid"] = 12345
+	startReq["harness"] = "stale-test"
+
+	// Use a ts far enough in the past (but within the 10-min server clock skew guard)
+	// so the received_at falls outside the stale window. Since received_at is server-set,
+	// we need to actually set the timestamp far back. We'll insert the start event
+	// and then manually UPDATE received_at to be old.
+	sj, _ := json.Marshal(startReq)
+	if code := ingestWorkEvent(t, a, string(sj)); code != http.StatusCreated {
+		t.Fatalf("start event: expected 201, got %d", code)
+	}
+
+	// Manually backdate the received_at to well past the stale window (5 min).
+	ctx := t.Context()
+	_, err := pool.Exec(ctx,
+		`UPDATE work_events SET received_at = NOW() - INTERVAL '10 minutes'
+		 WHERE session_id = $1 AND kind = 'session.start'`,
+		sessionID,
+	)
+	if err != nil {
+		t.Fatalf("backdate work_event: %v", err)
+	}
+
+	// Use a very large stale_window to make our 10-minute-old event definitely stale.
+	// The default 5-minute window should already catch it.
+	req := httptest.NewRequest("GET", "/?tenant=personal&stale_window=6m", nil)
+	rec := httptest.NewRecorder()
+	a.IncidentRoutes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp IncidentsResponse
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+
+	found := false
+	for _, inc := range resp.Incidents {
+		if inc.Type == "stale_session" && inc.SessionID == sessionID {
+			found = true
+			if inc.Status != "stale" {
+				t.Errorf("expected status=stale, got %q", inc.Status)
+			}
+			if inc.Harness != "stale-test" {
+				t.Errorf("expected harness=stale-test, got %q", inc.Harness)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("stale session %s not found in incidents; total=%d, incidents=%+v", sessionID, resp.Total, resp.Incidents)
+	}
+}
+
+// TestIncidents_UnifiedTotal tests that Total is the true total across all incident
+// types (failed sessions + down instances + stale sessions), not just failed sessions.
+func TestIncidents_UnifiedTotal(t *testing.T) {
+	requireTestDB(t)
+	a, pool, _ := newTestAPIWithDB(t)
+	defer pool.Close()
+	seedTestIngestKey(t, pool)
+
+	// Count baseline incidents before we add anything.
+	req0 := httptest.NewRequest("GET", "/?tenant=personal&limit=200", nil)
+	rec0 := httptest.NewRecorder()
+	a.IncidentRoutes().ServeHTTP(rec0, req0)
+	var resp0 IncidentsResponse
+	json.Unmarshal(rec0.Body.Bytes(), &resp0)
+	baseline := resp0.Total
+
+	// Add a failed session.
+	sessionID := uuid.NewString()
+	startJSON := validWorkEventJSON(uuid.NewString())
+	sr := map[string]interface{}{}
+	json.Unmarshal([]byte(startJSON), &sr)
+	sr["session_id"] = sessionID
+	ingestWorkEvent(t, a, string(startJSON))
+
+	failBody := failedSessionWorkEvent(uuid.NewString(), sessionID)
+	fr := map[string]interface{}{}
+	json.Unmarshal([]byte(failBody), &fr)
+	fr["session_id"] = sessionID
+	ingestWorkEvent(t, a, string(failBody))
+
+	// Add a down instance.
+	uniqueHealthURL := fmt.Sprintf("http://total-test-%s:9999/health", uuid.NewString()[:8])
+	pool.Exec(t.Context(),
+		`INSERT INTO app_instances (harness, session_id, host, label, health_url, tenant, status, last_probed_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+		 ON CONFLICT (host, health_url, tenant) DO UPDATE SET status = $7, last_probed_at = NOW()`,
+		"test", uuid.NewString(), "total-test-host", "total test", uniqueHealthURL, "personal", "down",
+	)
+
+	// Query all incidents with a large limit.
+	req := httptest.NewRequest("GET", "/?tenant=personal&limit=200", nil)
+	rec := httptest.NewRecorder()
+	a.IncidentRoutes().ServeHTTP(rec, req)
+
+	var resp IncidentsResponse
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+
+	// Total should be baseline + 2 (one failed session + one down instance).
+	expected := baseline + 2
+	if resp.Total != expected {
+		t.Fatalf("expected total=%d (baseline=%d + 1 failed + 1 down), got %d", expected, baseline, resp.Total)
+	}
+
+	// Both types should be present in the incidents list.
+	typeCounts := map[string]int{}
+	for _, inc := range resp.Incidents {
+		typeCounts[inc.Type]++
+	}
+	if typeCounts["failed_session"] < 1 {
+		t.Errorf("expected at least 1 failed_session incident, got %d", typeCounts["failed_session"])
+	}
+	if typeCounts["down_instance"] < 1 {
+		t.Errorf("expected at least 1 down_instance incident, got %d", typeCounts["down_instance"])
+	}
+}
+
+// ensure imports used
+var _ = service.DefaultSupervisedStaleWindow

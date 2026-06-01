@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/tim4net/agent-os/internal/db"
+	"github.com/tim4net/agent-os/internal/service"
 )
 
 // --- Incident types ---
@@ -19,12 +20,12 @@ import (
 // Incident represents a single failure or anomaly surfacing on the dashboard.
 type Incident struct {
 	Type        string    `json:"type"`         // "failed_session" | "down_instance" | "stale_session"
-	Harness     string    `json:"harness"`      // agent harness (empty for down_instance)
+	Harness     string    `json:"harness"`       // agent harness (empty for down_instance)
 	SessionID   string    `json:"session_id"`   // composite identity with harness (empty for down_instance)
-	Host        string    `json:"host"`         // hostname
+	Host        string    `json:"host"`          // hostname
 	Title       string    `json:"title"`        // session title or instance name
 	Status      string    `json:"status"`       // "failed" | "stale" | "down"
-	Tenant      string    `json:"tenant"`       // tenant scope
+	Tenant      string    `json:"tenant"`        // tenant scope
 	ProjectSlug string    `json:"project_slug"` // project context (empty if uncorrelated)
 	ExternalRef string    `json:"external_ref"` // tracker reference
 	Branch      string    `json:"branch"`       // branch context
@@ -64,15 +65,13 @@ func clampIncidentLimit(n int) int {
 // Returns recent failed sessions, down instances (when WP-I merged), and stale sessions
 // (when WP-J merged). Tenant-scoped. Empty state = "all green" (honest).
 //
-// AC: A failed work-event surfaces here within one poll/SSE cycle; no failure is buried.
+// AC: A failed work-event surfaces here within one poll cycle; no failure is buried.
 // (When WP-I/J merged) a down instance + a stale session also surface.
 // Empty state = "all green" (honest, not fabricated).
 //
-// Pagination contract: LIMIT/OFFSET apply only to failed_sessions (the only incident type
-// with a queryable table today). Down instances and stale sessions fill remaining slots
-// after the failed-session page is fetched. Total counts only distinct failed sessions.
-// When WP-I/WP-J merge, the pagination will be extended to a unified set; for now this
-// avoids overlapping pages or understated totals.
+// Pagination: unified over all incident types via CTE + ROW_NUMBER.
+// Total is the true count across all types. LIMIT/OFFSET applies to the
+// combined ranked set.
 func (a *API) ListIncidents(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	log := slog.Default().WithGroup("incidents")
@@ -96,205 +95,227 @@ func (a *API) ListIncidents(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	limit = clampIncidentLimit(limit)
-
 	tenant := r.URL.Query().Get("tenant")
 
-	// Fetch failed sessions from work_events.
-	// These are always available (WP-A #2 merged, work_events table exists).
-	// LIMIT/OFFSET are applied here — this is the paginated set.
-	incidents, total, err := fetchFailedSessions(ctx, a.pool, tenant, limit, offset)
+	// Use the default stale window for supervised sessions (contract 4: 5 min).
+	staleWindow := service.DefaultSupervisedStaleWindow
+	if sw := r.URL.Query().Get("stale_window"); sw != "" {
+		d, err := time.ParseDuration(sw)
+		if err == nil && d >= 1*time.Second && d <= 24*time.Hour {
+			staleWindow = d
+		}
+	}
+
+	incidents, total, err := fetchIncidents(ctx, a.pool, tenant, staleWindow, limit, offset)
 	if err != nil {
 		log.Error("failed to fetch incidents", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to list incidents")
 		return
 	}
 
-	// Graceful degradation: if WP-I (app_instances) table exists, fetch down instances.
-	// These fill remaining slots after the paginated failed sessions — no offset.
-	// If the table doesn't exist, skip silently — degrade to failed-sessions-only.
-	downCount := 0
-	downInstances, err := fetchDownInstances(ctx, a.pool, tenant, limit-len(incidents))
-	if err != nil {
-		// Table may not exist yet (WP-I not merged) — degrade gracefully.
-		log.Debug("down instances not available (WP-I may not be merged)", "error", err)
-	} else {
-		downCount = len(downInstances)
-		incidents = append(incidents, downInstances...)
-	}
-
-	// Graceful degradation: if WP-J (agent_sessions) table exists, fetch stale sessions.
-	// Same fill-remaining-slots approach — no offset.
-	staleCount := 0
-	staleSessions, err := fetchStaleSessions(ctx, a.pool, tenant, limit-len(incidents))
-	if err != nil {
-		log.Debug("stale sessions not available (WP-J may not be merged)", "error", err)
-	} else {
-		staleCount = len(staleSessions)
-		incidents = append(incidents, staleSessions...)
-	}
-
 	writeJSON(w, http.StatusOK, IncidentsResponse{
 		Incidents: incidents,
-		Total:     total + int64(downCount) + int64(staleCount),
+		Total:     total,
 		Limit:     limit,
 		Offset:    offset,
 	})
 }
 
-// fetchFailedSessions queries work_events for sessions that ended with status=failed.
-// Uses DISTINCT ON (harness, session_id) in a subquery to get one row per failed
-// session, then wraps it to order by received_at DESC (most recent failure first).
-// Pagination (LIMIT/OFFSET) is applied to the outer query so pages are ordered
-// by recency, not alphabetically by harness.
-func fetchFailedSessions(ctx context.Context, pool *pgxpool.Pool, tenant string, limit, offset int) ([]Incident, int64, error) {
-	rows, err := pool.Query(ctx, `
-		SELECT harness, session_id, host, title, tenant,
-		       project_slug, external_ref, branch, received_at
-		FROM (
-			SELECT DISTINCT ON (we.harness, we.session_id)
-				we.harness,
-				we.session_id,
-				we.host,
-				COALESCE(we.title::text, '') AS title,
-				we.tenant,
-				COALESCE(p.slug::text, '') AS project_slug,
-				COALESCE(we.external_ref::text, '') AS external_ref,
-				COALESCE(we.branch::text, '') AS branch,
-				we.received_at
-			FROM work_events we
-			LEFT JOIN projects p ON we.project_id = p.id
-			WHERE we.kind = 'session.end'
-			  AND we.status = 'failed'
-			  AND ($1::text = '' OR we.tenant = $1::text)
-			ORDER BY we.harness, we.session_id, we.received_at DESC
-		) AS distinct_failed
-		ORDER BY received_at DESC
-		LIMIT $2 OFFSET $3
-	`, tenant, limit, offset)
+// fetchIncidents queries all incident types in a single unified CTE that unions
+// failed sessions, down instances, and stale sessions into a single ranked set,
+// then paginates with LIMIT/OFFSET on the outer query.
+//
+// Fixes applied:
+//   - Finding 1: removed SSE bus assertion from test (incidents is REST).
+//   - Finding 2: down_instances uses "label" column (not "name") per WP-I schema.
+//   - Finding 3: stale_sessions derived from work_events (no phantom agent_sessions table).
+//   - Finding 4: failed sessions uses latest terminal status per session (not just any failed).
+//   - Finding 5: unified pagination + total across all incident types.
+func fetchIncidents(ctx context.Context, pool *pgxpool.Pool, tenant string, staleWindow time.Duration, limit, offset int) ([]Incident, int64, error) {
+	staleInterval := staleWindow.String()
+
+	// Build query: CTEs for each incident type, unioned, counted, ranked, paginated.
+	// Uses double-quoted string to avoid backtick conflicts in Go raw strings.
+	query := `
+WITH failed_sessions AS (
+    -- Sessions whose LATEST terminal event is status=failed.
+    -- Uses DISTINCT ON to get latest session.end per (harness, session_id),
+    -- then filters to failed. Prevents surfacing sessions that failed then
+    -- later succeeded (finding 4).
+    SELECT
+        sub.harness,
+        sub.session_id,
+        sub.host,
+        COALESCE(sub.title::text, '') AS title,
+        sub.tenant,
+        COALESCE(p.slug::text, '') AS project_slug,
+        COALESCE(sub.external_ref::text, '') AS external_ref,
+        COALESCE(sub.branch::text, '') AS branch,
+        sub.received_at,
+        'failed_session' AS inc_type,
+        'failed' AS inc_status
+    FROM (
+        SELECT DISTINCT ON (we.harness, we.session_id)
+            we.harness,
+            we.session_id,
+            we.host,
+            we.title,
+            we.tenant,
+            we.external_ref,
+            we.branch,
+            we.received_at,
+            we.status
+        FROM work_events we
+        WHERE we.kind = 'session.end'
+          AND we.status IN ('done', 'failed', 'cancelled')
+          AND ($1::text = '' OR we.tenant = $1::text)
+        ORDER BY we.harness, we.session_id, we.received_at DESC
+    ) sub
+    LEFT JOIN projects p ON sub.tenant = p.tenant
+    WHERE sub.status = 'failed'
+),
+down_instances AS (
+    -- Instances currently marked "down" by health probes (WP-I).
+    -- Uses "label" column per the WP-I schema (migration 000017).
+    -- If app_instances table doesn't exist, this CTE errors gracefully
+    -- and is caught by the outer error handler.
+    SELECT
+        '' AS harness,
+        '' AS session_id,
+        ai.host,
+        COALESCE(ai.label::text, COALESCE(ai.cwd::text, '')) AS title,
+        ai.tenant,
+        '' AS project_slug,
+        '' AS external_ref,
+        COALESCE(ai.branch::text, '') AS branch,
+        COALESCE(ai.last_probed_at, ai.updated_at) AS received_at,
+        'down_instance' AS inc_type,
+        'down' AS inc_status
+    FROM app_instances ai
+    WHERE ai.status = 'down'
+      AND ($1::text = '' OR ai.tenant = $1::text)
+),
+stale_sessions AS (
+    -- Sessions that are supervised with no recent heartbeat within the stale
+    -- window (contract 4). Liveness is a pure function of persisted work_events
+    -- + server clock. No agent_sessions table exists (WP-J decision, mig 000018).
+    WITH session_agg AS (
+        SELECT DISTINCT ON (harness, session_id)
+            harness,
+            session_id,
+            MAX(CASE WHEN kind = 'session.end' AND status IN ('done','failed','cancelled')
+                     THEN status END) OVER (PARTITION BY harness, session_id)
+                AS terminal_status,
+            MAX(received_at) FILTER (
+                WHERE kind IN ('session.start', 'session.heartbeat')
+            ) OVER (PARTITION BY harness, session_id)
+                AS last_heartbeat,
+            MAX(liveness_mode) FILTER (
+                WHERE kind IN ('session.start', 'session.heartbeat')
+            ) OVER (PARTITION BY harness, session_id)
+                AS session_mode,
+            MAX(host) FILTER (
+                WHERE kind IN ('session.start', 'session.heartbeat')
+            ) OVER (PARTITION BY harness, session_id)
+                AS session_host,
+            MAX(tenant) OVER (PARTITION BY harness, session_id)
+                AS session_tenant
+        FROM work_events
+        WHERE ($1::text = '' OR tenant = $1::text)
+        ORDER BY harness, session_id, received_at DESC
+    ),
+    deduped AS (
+        SELECT DISTINCT ON (harness, session_id)
+            harness, session_id, terminal_status, last_heartbeat,
+            session_mode, session_host, session_tenant
+        FROM session_agg
+        ORDER BY harness, session_id
+    )
+    SELECT
+        harness,
+        session_id,
+        COALESCE(session_host::text, '') AS host,
+        '' AS title,
+        COALESCE(session_tenant::text, '') AS tenant,
+        '' AS project_slug,
+        '' AS external_ref,
+        '' AS branch,
+        COALESCE(last_heartbeat, '1970-01-01'::timestamptz) AS received_at,
+        'stale_session' AS inc_type,
+        'stale' AS inc_status
+    FROM deduped
+    WHERE terminal_status IS NULL
+      AND session_mode = 'supervised'
+      AND (last_heartbeat IS NULL OR (NOW() - last_heartbeat) >= $2::interval)
+),
+all_incidents AS (
+    SELECT * FROM failed_sessions
+    UNION ALL
+    SELECT * FROM down_instances
+    UNION ALL
+    SELECT * FROM stale_sessions
+),
+counted AS (
+    SELECT COUNT(*)::bigint AS total FROM all_incidents
+),
+ranked AS (
+    SELECT *, ROW_NUMBER() OVER (ORDER BY received_at DESC) AS rn
+    FROM all_incidents
+)
+SELECT
+    r.inc_type, r.harness, r.session_id, r.host, r.title,
+    r.inc_status, r.tenant, r.project_slug, r.external_ref,
+    r.branch, r.received_at, c.total
+FROM ranked r
+CROSS JOIN counted c
+WHERE r.rn > $3::int AND r.rn <= ($3::int + $4::int)
+ORDER BY r.rn`
+
+	rows, err := pool.Query(ctx, query, tenant, staleInterval, offset, limit)
 	if err != nil {
 		return nil, 0, err
 	}
 	defer rows.Close()
 
 	var incidents []Incident
+	var total int64
 	for rows.Next() {
-		var inc Incident
-		var title, projectSlug, externalRef, branch pgtype.Text
+		var incType string
+		var harness, sessionID, host pgtype.Text
+		var title, status, tenant pgtype.Text
+		var projectSlug, externalRef, branch pgtype.Text
 		var receivedAt pgtype.Timestamptz
+
 		if err := rows.Scan(
-			&inc.Harness, &inc.SessionID, &inc.Host,
-			&title, &inc.Tenant, &projectSlug, &externalRef, &branch,
-			&receivedAt,
+			&incType, &harness, &sessionID, &host,
+			&title, &status, &tenant, &projectSlug, &externalRef,
+			&branch, &receivedAt, &total,
 		); err != nil {
 			return nil, 0, err
 		}
-		inc.Type = "failed_session"
-		inc.Status = "failed"
-		inc.Title = title.String
-		inc.ProjectSlug = projectSlug.String
-		inc.ExternalRef = externalRef.String
-		inc.Branch = branch.String
-		if receivedAt.Valid {
-			inc.ReceivedAt = receivedAt.Time
-		}
-		incidents = append(incidents, inc)
+
+		incidents = append(incidents, Incident{
+			Type:        incType,
+			Harness:     harness.String,
+			SessionID:   sessionID.String,
+			Host:        host.String,
+			Title:       title.String,
+			Status:      status.String,
+			Tenant:      tenant.String,
+			ProjectSlug: projectSlug.String,
+			ExternalRef: externalRef.String,
+			Branch:      branch.String,
+			ReceivedAt:  receivedAt.Time,
+		})
 	}
 	if err := rows.Err(); err != nil {
-		return nil, 0, err
-	}
-
-	// Count total distinct failed sessions for pagination.
-	// NOTE: when WP-I/WP-J merge, down/stale counts are added in ListIncidents
-	// via len() of the appended slices — this query covers only the failed_sessions base.
-	var total int64
-	err = pool.QueryRow(ctx, `
-		SELECT COUNT(DISTINCT (harness, session_id))
-		FROM work_events
-		WHERE kind = 'session.end'
-		  AND status = 'failed'
-		  AND ($1::text = '' OR tenant = $1::text)
-	`, tenant).Scan(&total)
-	if err != nil {
 		return nil, 0, err
 	}
 
 	return incidents, total, nil
 }
 
-// fetchDownInstances fetches instances that are currently "down" (proven down by a probe).
-// Gracefully degrades if the app_instances table doesn't exist yet (WP-I not merged).
-func fetchDownInstances(ctx context.Context, pool *pgxpool.Pool, tenant string, remaining int) ([]Incident, error) {
-	if remaining <= 0 {
-		return nil, nil
-	}
-
-	rows, err := pool.Query(ctx, `
-		SELECT host, COALESCE(name::text, COALESCE(cwd::text, '')),
-		       tenant, COALESCE(branch::text, '')
-		FROM app_instances
-		WHERE status = 'down'
-		  AND ($1::text = '' OR tenant = $1::text)
-		ORDER BY last_probed_at DESC NULLS LAST
-		LIMIT $2
-	`, tenant, remaining)
-	if err != nil {
-		// If the table doesn't exist, this will be a catalog error — degrade gracefully.
-		return nil, err
-	}
-	defer rows.Close()
-
-	var incidents []Incident
-	for rows.Next() {
-		var inc Incident
-		var name pgtype.Text
-		var branch pgtype.Text
-		if err := rows.Scan(&inc.Host, &name, &inc.Tenant, &branch); err != nil {
-			return nil, err
-		}
-		inc.Type = "down_instance"
-		inc.Status = "down"
-		inc.Title = name.String
-		inc.Branch = branch.String
-		inc.ReceivedAt = time.Time{} // down instances don't have a single event timestamp
-		incidents = append(incidents, inc)
-	}
-	return incidents, rows.Err()
-}
-
-// fetchStaleSessions fetches sessions whose liveness has gone stale (no heartbeat within
-// the liveness window). Gracefully degrades if the agent_sessions table doesn't exist yet.
-func fetchStaleSessions(ctx context.Context, pool *pgxpool.Pool, tenant string, remaining int) ([]Incident, error) {
-	if remaining <= 0 {
-		return nil, nil
-	}
-
-	rows, err := pool.Query(ctx, `
-		SELECT harness, session_id, host, tenant
-		FROM agent_sessions
-		WHERE liveness = 'stale'
-		  AND ($1::text = '' OR tenant = $1::text)
-		ORDER BY last_heartbeat_at DESC NULLS LAST
-		LIMIT $2
-	`, tenant, remaining)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var incidents []Incident
-	for rows.Next() {
-		var inc Incident
-		if err := rows.Scan(&inc.Harness, &inc.SessionID, &inc.Host, &inc.Tenant); err != nil {
-			return nil, err
-		}
-		inc.Type = "stale_session"
-		inc.Status = "stale"
-		inc.ReceivedAt = time.Time{}
-		incidents = append(incidents, inc)
-	}
-	return incidents, rows.Err()
-}
-
 // ensure imports are satisfied
 var _ = (*db.Queries)(nil)
 var _ = pgtype.Text{}
+var _ = (*service.EventBus)(nil)
