@@ -48,6 +48,11 @@ OFFSET sqlc.arg('off')::int;
 --   alive=true  → session is running (positive proof from host reporter)
 --   alive=false → session is stale (process killed/crashed)
 --   no row      → no reporter proof → stale (NEVER running without proof)
+--
+-- NOTE: seen_at freshness — the reporter only POSTs alive=true on first-seen
+-- and cwd-change. Long-running processes do NOT re-POST alive=true. The
+-- derivation must account for this (see session_liveness.go BoundedMaxAge
+-- backstop and the proposed seen_at TTL in the PR-body wiring diff).
 SELECT COALESCE(hl.alive, false)::boolean AS alive
 FROM (
     SELECT we_host.host AS host, we_host.pid AS pid

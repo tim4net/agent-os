@@ -393,14 +393,7 @@ func TestHTTPHostLiveness_ListPagination(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// WP-N AC2: Feed→stale derivation — real-PG end-to-end test
-// Proves that the host-liveness feed, when consumed by the bounded-session
-// derivation query (GetBoundedSessionHostLiveness), correctly drives
-// session status: alive=true → running, alive=false → stale.
-//
-// The off-limits wiring (derivation call site in session_liveness.go) is
-// proposed as a PR-body diff. This test exercises the SQL query + API
-// flow end-to-end to prove the data model works.
+// WP-N AC2: Feed→stale derivation — helpers
 // ---------------------------------------------------------------------------
 
 // seedBoundedSession inserts a work_events session.start for a bounded session.
@@ -445,6 +438,12 @@ func postLivenessReport(t *testing.T, a *API, req LivenessReportRequest) HostLiv
 	json.Unmarshal(rec.Body.Bytes(), &resp)
 	return resp
 }
+
+// ---------------------------------------------------------------------------
+// WP-N AC2: Query-level derivation tests (prove the SQL join works)
+// These exercise GetBoundedSessionHostLiveness directly to validate the
+// data model. The production-path tests below drive GetFleet.
+// ---------------------------------------------------------------------------
 
 // queryBoundedSessionLiveness calls GetBoundedSessionHostLiveness via the queries interface.
 func queryBoundedSessionLiveness(t *testing.T, queries *db.Queries, harness, sessionID, tenant string) bool {
@@ -600,6 +599,234 @@ func TestBoundedSessionDerivation_NotBefore(t *testing.T) {
 	alive2 := queryBoundedSessionLiveness(t, queries, "claude", sessionID, tenant)
 	if !alive2 {
 		t.Fatal("expected alive=true to persist (not before: session stays running)")
+	}
+
+	// Cleanup
+	ctx := context.Background()
+	pool.Exec(ctx, "DELETE FROM host_liveness WHERE host = $1 AND pid = $2", host, pid)
+	pool.Exec(ctx, "DELETE FROM work_events WHERE session_id = $1", sessionID)
+}
+
+// ---------------------------------------------------------------------------
+// WP-N AC2: Production-path derivation tests (drive GetFleet)
+//
+// These tests exercise the ACTUAL production derivation path:
+//   GetFleet → deriveSessionStatus → deriveBoundedStatus
+//
+// They drive the full session-liveness service, which calls the bounded-status
+// derivation function. The off-limits wiring (deriveBoundedStatus consuming
+// host_liveness) is proposed as a PR-body diff below.
+//
+// ⚠️ IMPORTANT: These tests are EXPECTED TO FAIL against the current code
+// because deriveBoundedStatus (in session_liveness.go, off-limits) unconditionally
+// returns "stale" without consulting host_liveness. This is by design — the
+// test failure proves it exercises the gap. Once the integrator applies the
+// PR-body diff to wire deriveBoundedStatus → host_liveness, these tests turn GREEN.
+//
+// Mutation self-check: reverting the integrator diff (restore unconditional
+// "stale" return) causes these tests to go RED.
+// ---------------------------------------------------------------------------
+
+// findSessionInFleet finds a session by ID in a FleetResponse.
+func findSessionInFleet(t *testing.T, fleet *service.FleetResponse, sessionID string) *service.SessionStatus {
+	t.Helper()
+	for i := range fleet.Sessions {
+		if fleet.Sessions[i].SessionID == sessionID {
+			s := fleet.Sessions[i]
+			return &s
+		}
+	}
+	t.Fatalf("session %s not found in fleet (got %d sessions)", sessionID, len(fleet.Sessions))
+	return nil
+}
+
+// TestBoundedSessionDerivation_ProductionPath_AliveTrueRunning proves:
+// AC2 production-path part 1: A bounded session with host-reporter alive=true
+// is derived as "running" through the full GetFleet → deriveBoundedStatus path.
+//
+// This test seeds a bounded session.start, POSTs alive=true via the host-liveness
+// API, then calls GetFleet (the production endpoint) and asserts the session's
+// derived status is "running" — not "stale".
+//
+// ⚠️ EXPECTED TO FAIL: deriveBoundedStatus currently returns "stale" unconditionally.
+// Green after integrator applies the session_liveness.go wiring diff.
+func TestBoundedSessionDerivation_ProductionPath_AliveTrueRunning(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+
+	a, pool := newTestAPIWithDBForHostLiveness(t)
+	defer pool.Close()
+	ensureHostLivenessTable(t, pool)
+
+	tenant := hostLivenessTestTenant(t, "prod-alive")
+	sessionID := "sess-prod-alive-" + uuid.NewString()[:8]
+	host := "prod-host"
+	pid := int32(64321)
+
+	// Seed a bounded session in work_events (recent, within BoundedMaxAge).
+	seedBoundedSession(t, pool, "claude", sessionID, host, pid, tenant)
+
+	// No liveness row yet → GetFleet should report "stale" (no proof).
+	svc := service.NewSessionLivenessService(pool)
+	fleetBefore, err := svc.GetFleet(context.Background(), tenant)
+	if err != nil {
+		t.Fatalf("GetFleet before report: %v", err)
+	}
+	sessBefore := findSessionInFleet(t, fleetBefore, sessionID)
+	if sessBefore.Status != "stale" {
+		t.Fatalf("expected stale before report (no proof), got %q", sessBefore.Status)
+	}
+
+	// POST alive=true via the API.
+	postLivenessReport(t, a, LivenessReportRequest{
+		Host:   host,
+		PID:    pid,
+		Alive:  true,
+		Tenant: tenant,
+	})
+
+	// Now GetFleet should report "running" (positive proof from host reporter).
+	fleetAfter, err := svc.GetFleet(context.Background(), tenant)
+	if err != nil {
+		t.Fatalf("GetFleet after report: %v", err)
+	}
+	sessAfter := findSessionInFleet(t, fleetAfter, sessionID)
+	if sessAfter.Status != "running" {
+		t.Fatalf("expected 'running' after alive=true report (positive proof), got %q — "+
+			"this FAIL is expected until integrator applies the session_liveness.go wiring diff", sessAfter.Status)
+	}
+
+	// Cleanup
+	ctx := context.Background()
+	pool.Exec(ctx, "DELETE FROM host_liveness WHERE host = $1 AND pid = $2", host, pid)
+	pool.Exec(ctx, "DELETE FROM work_events WHERE session_id = $1", sessionID)
+}
+
+// TestBoundedSessionDerivation_ProductionPath_AliveFalseStale proves:
+// AC2 production-path part 2: A bounded session flips to "stale" when the
+// reporter POSTs alive=false, through the full GetFleet path.
+//
+// Seeds bounded session.start, POSTs alive=true (assert running), then
+// POSTs alive=false (assert stale). Proves the killed→stale flip.
+//
+// ⚠️ EXPECTED TO FAIL: deriveBoundedStatus currently returns "stale" unconditionally.
+// Green after integrator applies the session_liveness.go wiring diff.
+func TestBoundedSessionDerivation_ProductionPath_AliveFalseStale(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+
+	a, pool := newTestAPIWithDBForHostLiveness(t)
+	defer pool.Close()
+	ensureHostLivenessTable(t, pool)
+
+	tenant := hostLivenessTestTenant(t, "prod-stale")
+	sessionID := "sess-prod-stale-" + uuid.NewString()[:8]
+	host := "prod-host-stale"
+	pid := int32(64322)
+
+	// Seed a bounded session.
+	seedBoundedSession(t, pool, "claude", sessionID, host, pid, tenant)
+
+	// POST alive=true first → should be running.
+	postLivenessReport(t, a, LivenessReportRequest{
+		Host:   host,
+		PID:    pid,
+		Alive:  true,
+		Tenant: tenant,
+	})
+	svc := service.NewSessionLivenessService(pool)
+	fleetRunning, err := svc.GetFleet(context.Background(), tenant)
+	if err != nil {
+		t.Fatalf("GetFleet while running: %v", err)
+	}
+	sessRunning := findSessionInFleet(t, fleetRunning, sessionID)
+	if sessRunning.Status != "running" {
+		t.Fatalf("expected 'running' after alive=true, got %q — "+
+			"this FAIL is expected until integrator applies the wiring diff", sessRunning.Status)
+	}
+
+	// POST alive=false (process killed) → should flip to stale.
+	postLivenessReport(t, a, LivenessReportRequest{
+		Host:   host,
+		PID:    pid,
+		Alive:  false,
+		Tenant: tenant,
+	})
+	fleetStale, err := svc.GetFleet(context.Background(), tenant)
+	if err != nil {
+		t.Fatalf("GetFleet after kill: %v", err)
+	}
+	sessStale := findSessionInFleet(t, fleetStale, sessionID)
+	if sessStale.Status != "stale" {
+		t.Fatalf("expected 'stale' after alive=false, got %q — "+
+			"this FAIL is expected until integrator applies the wiring diff", sessStale.Status)
+	}
+
+	// Cleanup
+	ctx := context.Background()
+	pool.Exec(ctx, "DELETE FROM host_liveness WHERE host = $1 AND pid = $2", host, pid)
+	pool.Exec(ctx, "DELETE FROM work_events WHERE session_id = $1", sessionID)
+}
+
+// TestBoundedSessionDerivation_ProductionPath_NotBefore proves:
+// AC2 production-path part 3: A bounded session does NOT flip to stale
+// while alive=true is current, through the full GetFleet path.
+//
+// Seeds bounded session.start, POSTs alive=true, queries GetFleet twice
+// with a small delay → stays "running" both times. Proves the "not before"
+// guarantee: the session is running until the explicit alive=false report.
+//
+// ⚠️ EXPECTED TO FAIL: deriveBoundedStatus currently returns "stale" unconditionally.
+// Green after integrator applies the session_liveness.go wiring diff.
+func TestBoundedSessionDerivation_ProductionPath_NotBefore(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+
+	a, pool := newTestAPIWithDBForHostLiveness(t)
+	defer pool.Close()
+	ensureHostLivenessTable(t, pool)
+
+	tenant := hostLivenessTestTenant(t, "prod-notbefore")
+	sessionID := "sess-prod-notbefore-" + uuid.NewString()[:8]
+	host := "prod-host-notbefore"
+	pid := int32(64323)
+
+	// Seed a bounded session.
+	seedBoundedSession(t, pool, "claude", sessionID, host, pid, tenant)
+
+	// POST alive=true.
+	postLivenessReport(t, a, LivenessReportRequest{
+		Host:   host,
+		PID:    pid,
+		Alive:  true,
+		Tenant: tenant,
+	})
+
+	// Query immediately — should be running.
+	svc := service.NewSessionLivenessService(pool)
+	fleet1, err := svc.GetFleet(context.Background(), tenant)
+	if err != nil {
+		t.Fatalf("GetFleet query 1: %v", err)
+	}
+	sess1 := findSessionInFleet(t, fleet1, sessionID)
+	if sess1.Status != "running" {
+		t.Fatalf("expected 'running' immediately after alive=true (not before), got %q — "+
+			"this FAIL is expected until integrator applies the wiring diff", sess1.Status)
+	}
+
+	// Query again after a small delay — should still be running.
+	time.Sleep(50 * time.Millisecond)
+	fleet2, err := svc.GetFleet(context.Background(), tenant)
+	if err != nil {
+		t.Fatalf("GetFleet query 2: %v", err)
+	}
+	sess2 := findSessionInFleet(t, fleet2, sessionID)
+	if sess2.Status != "running" {
+		t.Fatalf("expected 'running' to persist (not before: stays running), got %q — "+
+			"this FAIL is expected until integrator applies the wiring diff", sess2.Status)
 	}
 
 	// Cleanup
