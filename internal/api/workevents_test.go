@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -52,6 +53,31 @@ func newTestAPIWithDB(t *testing.T) (*API, *pgxpool.Pool, *service.EventBus) {
 	return a, pool, bus
 }
 
+// testIngestRawKey is the raw key used across all integration tests.
+// Its hash is seeded into ingest_keys during test setup so the
+// DB-backed resolver (ResolveTenantFromKeyDB) recognizes it.
+const testIngestRawKey = "test-key"
+
+// seedTestIngestKey ensures the standard test ingest key exists in the DB
+// (bound to tenant "personal") so that all handler tests using
+// X-AgentOS-Ingest-Key: test-key resolve correctly through the WP-A2
+// durable key store.
+func seedTestIngestKey(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	ctx := context.Background()
+	keyHash := service.HashIngestKey(testIngestRawKey)
+	// INSERT ... ON CONFLICT DO NOTHING so tests are idempotent.
+	_, err := pool.Exec(ctx,
+		`INSERT INTO ingest_keys (key_hash, tenant, label)
+		 VALUES ($1, 'personal', 'integration-test')
+		 ON CONFLICT (key_hash) DO NOTHING`,
+		keyHash,
+	)
+	if err != nil {
+		t.Fatalf("seed test ingest key: %v", err)
+	}
+}
+
 // validWorkEventJSON returns a JSON-encoded valid WorkEventRequest.
 func validWorkEventJSON(eventID string) string {
 	pid := 12345
@@ -79,6 +105,7 @@ func validWorkEventJSON(eventID string) string {
 func TestHTTPWorkEvent_MissingIngestKey_Returns403(t *testing.T) {
 	a, pool, _ := newTestAPIWithDB(t)
 	defer pool.Close()
+	seedTestIngestKey(t, pool)
 
 	body := validWorkEventJSON(uuid.NewString())
 	req := httptest.NewRequest("POST", "/work", strings.NewReader(body))
@@ -101,6 +128,7 @@ func TestHTTPWorkEvent_MissingIngestKey_Returns403(t *testing.T) {
 func TestHTTPWorkEvent_EmptyIngestKey_Returns403(t *testing.T) {
 	a, pool, _ := newTestAPIWithDB(t)
 	defer pool.Close()
+	seedTestIngestKey(t, pool)
 
 	body := validWorkEventJSON(uuid.NewString())
 	req := httptest.NewRequest("POST", "/work", strings.NewReader(body))
@@ -118,6 +146,7 @@ func TestHTTPWorkEvent_EmptyIngestKey_Returns403(t *testing.T) {
 func TestHTTPWorkEvent_UnknownKeys_Returns400(t *testing.T) {
 	a, pool, _ := newTestAPIWithDB(t)
 	defer pool.Close()
+	seedTestIngestKey(t, pool)
 
 	body := `{"schema":"agentos.work_event/v1","event_id":"` + uuid.NewString() + `","host":"h","harness":"hermes","kind":"session.start","session_id":"` + uuid.NewString() + `","ts":"` + time.Now().UTC().Format(time.RFC3339) + `","status":"running","liveness_mode":"supervised","made_up_key":true}`
 
@@ -141,6 +170,7 @@ func TestHTTPWorkEvent_UnknownKeys_Returns400(t *testing.T) {
 func TestHTTPWorkEvent_InvalidJSON_Returns400(t *testing.T) {
 	a, pool, _ := newTestAPIWithDB(t)
 	defer pool.Close()
+	seedTestIngestKey(t, pool)
 
 	req := httptest.NewRequest("POST", "/work", strings.NewReader("not json"))
 	req.Header.Set("Content-Type", "application/json")
@@ -162,6 +192,7 @@ func TestHTTPWorkEvent_InvalidJSON_Returns400(t *testing.T) {
 func TestHTTPWorkEvent_ValidEvent_Returns201AndDBRow(t *testing.T) {
 	a, pool, bus := newTestAPIWithDB(t)
 	defer pool.Close()
+	seedTestIngestKey(t, pool)
 
 	eventID := uuid.NewString()
 	body := validWorkEventJSON(eventID)
@@ -217,6 +248,7 @@ func TestHTTPWorkEvent_ValidEvent_Returns201AndDBRow(t *testing.T) {
 func TestHTTPWorkEvent_DuplicateEventID_Returns202(t *testing.T) {
 	a, pool, _ := newTestAPIWithDB(t)
 	defer pool.Close()
+	seedTestIngestKey(t, pool)
 
 	eventID := uuid.NewString()
 	body := validWorkEventJSON(eventID)
@@ -272,6 +304,7 @@ func TestHTTPWorkEvent_DuplicateEventID_Returns202(t *testing.T) {
 func TestHTTPWorkEvent_ValidationError_Returns400(t *testing.T) {
 	a, pool, _ := newTestAPIWithDB(t)
 	defer pool.Close()
+	seedTestIngestKey(t, pool)
 
 	tests := []struct {
 		name       string
@@ -319,6 +352,7 @@ func TestHTTPWorkEvent_ValidationError_Returns400(t *testing.T) {
 func TestHTTPWorkEvent_TenantOverriddenByKey(t *testing.T) {
 	a, pool, _ := newTestAPIWithDB(t)
 	defer pool.Close()
+	seedTestIngestKey(t, pool)
 
 	eventID := uuid.NewString()
 	pid := 12345
@@ -366,6 +400,7 @@ func TestHTTPWorkEvent_WriteErrorLogsJSON(t *testing.T) {
 	// AC3: errors are JSON-encoded AND logged, NEVER silently dropped.
 	a, pool, _ := newTestAPIWithDB(t)
 	defer pool.Close()
+	seedTestIngestKey(t, pool)
 
 	req := httptest.NewRequest("POST", "/work", strings.NewReader("{}"))
 	req.Header.Set("Content-Type", "application/json")
@@ -391,6 +426,152 @@ func TestHTTPWorkEvent_WriteErrorLogsJSON(t *testing.T) {
 	}
 	if resp["error"] == "" {
 		t.Fatal("expected 'error' field in JSON response, got empty")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// WP-A2 AC integration tests (real-PG, no mocks)
+// ---------------------------------------------------------------------------
+
+// TestIngestKey_TenantBinding_AC1 proves AC1: a key bound to tenant A cannot
+// write events under tenant B. The server resolves tenant from the key, so
+// the body tenant field is overridden.
+func TestIngestKey_TenantBinding_AC1(t *testing.T) {
+	a, pool, _ := newTestAPIWithDB(t)
+	defer pool.Close()
+	ctx := context.Background()
+
+	// Create a raw key bound to tenant "acme-corp".
+	rawKey := "acme-key-" + uuid.NewString()[:8]
+	keyHash := service.HashIngestKey(rawKey)
+	var keyID int64
+	err := pool.QueryRow(ctx,
+		`INSERT INTO ingest_keys (key_hash, tenant, label) VALUES ($1, 'acme-corp', 'ac1-test') RETURNING id`,
+		keyHash,
+	).Scan(&keyID)
+	if err != nil {
+		t.Fatalf("insert acme key: %v", err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM ingest_keys WHERE id = $1", keyID) })
+
+	// POST an event with body tenant="other-tenant" using the acme key.
+	eventID := uuid.NewString()
+	body := fmt.Sprintf(`{
+		"schema": "agentos.work_event/v1",
+		"event_id": "%s",
+		"host": "ac1-host",
+		"harness": "hermes",
+		"kind": "session.start",
+		"session_id": "%s",
+		"ts": "%s",
+		"status": "running",
+		"liveness_mode": "supervised",
+		"tenant": "other-tenant"
+	}`, eventID, uuid.NewString(), time.Now().UTC().Format(time.RFC3339))
+
+	req := httptest.NewRequest("POST", "/work", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-AgentOS-Ingest-Key", rawKey)
+
+	rec := httptest.NewRecorder()
+	a.WorkEventRoutes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	// Verify the persisted event has tenant="acme-corp" (from key), NOT "other-tenant" (from body).
+	var pgEID pgtype.UUID
+	_ = pgEID.Scan(eventID)
+	row, err := a.queries.GetWorkEventByEventID(ctx, pgEID)
+	if err != nil {
+		t.Fatalf("failed to query event: %v", err)
+	}
+	if row.Tenant != "acme-corp" {
+		t.Fatalf("AC1 VIOLATION: expected tenant 'acme-corp' (from key), got %q (body tenant should be overridden)", row.Tenant)
+	}
+}
+
+// TestIngestKey_Revocation_AC2 proves AC2: an active key succeeds, but after
+// revocation the same key returns 403.
+func TestIngestKey_Revocation_AC2(t *testing.T) {
+	a, pool, _ := newTestAPIWithDB(t)
+	defer pool.Close()
+	ctx := context.Background()
+
+	// Create a fresh key for this test.
+	rawKey := "revoke-test-" + uuid.NewString()[:8]
+	keyHash := service.HashIngestKey(rawKey)
+	var keyID int64
+	err := pool.QueryRow(ctx,
+		`INSERT INTO ingest_keys (key_hash, tenant, label) VALUES ($1, 'personal', 'ac2-test') RETURNING id`,
+		keyHash,
+	).Scan(&keyID)
+	if err != nil {
+		t.Fatalf("insert key: %v", err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, "DELETE FROM ingest_keys WHERE id = $1", keyID) })
+
+	// Step 1: POST with the active key → 201.
+	eventID1 := uuid.NewString()
+	body1 := fmt.Sprintf(`{
+		"schema": "agentos.work_event/v1",
+		"event_id": "%s",
+		"host": "ac2-host",
+		"harness": "hermes",
+		"kind": "session.start",
+		"session_id": "%s",
+		"ts": "%s",
+		"status": "running",
+		"liveness_mode": "supervised"
+	}`, eventID1, uuid.NewString(), time.Now().UTC().Format(time.RFC3339))
+
+	req1 := httptest.NewRequest("POST", "/work", strings.NewReader(body1))
+	req1.Header.Set("Content-Type", "application/json")
+	req1.Header.Set("X-AgentOS-Ingest-Key", rawKey)
+
+	rec1 := httptest.NewRecorder()
+	a.WorkEventRoutes().ServeHTTP(rec1, req1)
+	if rec1.Code != http.StatusCreated {
+		t.Fatalf("active key: expected 201, got %d; body: %s", rec1.Code, rec1.Body.String())
+	}
+
+	// Step 2: Revoke the key.
+	tag, err := pool.Exec(ctx, "UPDATE ingest_keys SET revoked_at = NOW() WHERE id = $1 AND revoked_at IS NULL", keyID)
+	if err != nil {
+		t.Fatalf("revoke key: %v", err)
+	}
+	if tag.RowsAffected() != 1 {
+		t.Fatalf("expected 1 row revoked, got %d", tag.RowsAffected())
+	}
+
+	// Step 3: POST again with the same (now revoked) key → 403.
+	eventID2 := uuid.NewString()
+	body2 := fmt.Sprintf(`{
+		"schema": "agentos.work_event/v1",
+		"event_id": "%s",
+		"host": "ac2-host",
+		"harness": "hermes",
+		"kind": "session.end",
+		"session_id": "%s",
+		"ts": "%s",
+		"status": "done"
+	}`, eventID2, uuid.NewString(), time.Now().UTC().Format(time.RFC3339))
+
+	req2 := httptest.NewRequest("POST", "/work", strings.NewReader(body2))
+	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set("X-AgentOS-Ingest-Key", rawKey)
+
+	rec2 := httptest.NewRecorder()
+	a.WorkEventRoutes().ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusForbidden {
+		t.Fatalf("revoked key: expected 403, got %d; body: %s", rec2.Code, rec2.Body.String())
+	}
+
+	var resp map[string]string
+	json.Unmarshal(rec2.Body.Bytes(), &resp)
+	if resp["error"] != "invalid ingest key" {
+		t.Fatalf("expected 'invalid ingest key', got %q", resp["error"])
 	}
 }
 

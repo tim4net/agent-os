@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -41,7 +42,7 @@ func ResolveTenantFromKeyDB(ctx context.Context, querier IngestKeyQuerier, rawKe
 	keyHash := HashIngestKey(rawKey)
 	row, err := querier.GetIngestKeyByHash(ctx, keyHash)
 	if err != nil {
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			slog.Default().Warn("ingest key not found (unknown or revoked)", "key_hash_prefix", keyHash[:8])
 			return "", fmt.Errorf("invalid ingest key")
 		}
