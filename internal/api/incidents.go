@@ -260,7 +260,7 @@ counted AS (
     SELECT COUNT(*)::bigint AS total FROM all_incidents
 ),
 ranked AS (
-    SELECT *, ROW_NUMBER() OVER (ORDER BY received_at DESC) AS rn
+    SELECT *, ROW_NUMBER() OVER (ORDER BY received_at DESC, inc_type, harness, session_id, host) AS rn
     FROM all_incidents
 )
 SELECT
@@ -277,7 +277,7 @@ ORDER BY r.rn`
 	}
 	defer rows.Close()
 
-	var incidents []Incident
+	incidents := make([]Incident, 0)
 	var total int64
 	for rows.Next() {
 		var incTypeT pgtype.Text

@@ -105,6 +105,10 @@ func TestIncidents_NoFailedSessions_ReturnsEmptyGreen(t *testing.T) {
 	if len(resp.Incidents) != 0 {
 		t.Fatalf("expected 0 incidents (all green), got %d", len(resp.Incidents))
 	}
+	// Pin the empty-state contract: JSON must serialize as [] not null.
+	if !strings.Contains(rec.Body.String(), `"incidents":[]`) {
+		t.Fatalf("empty state must serialize as \"incidents\":[], got body: %s", rec.Body.String())
+	}
 	if resp.Total != 0 {
 		t.Fatalf("expected total=0, got %d", resp.Total)
 	}
@@ -314,8 +318,13 @@ func TestIncidents_Pagination(t *testing.T) {
 	rec1 := httptest.NewRecorder()
 	a.IncidentRoutes().ServeHTTP(rec1, req1)
 
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("page 1: expected 200, got %d; body: %s", rec1.Code, rec1.Body.String())
+	}
 	var resp1 IncidentsResponse
-	json.Unmarshal(rec1.Body.Bytes(), &resp1)
+	if err := json.Unmarshal(rec1.Body.Bytes(), &resp1); err != nil {
+		t.Fatalf("page 1: failed to parse response JSON: %v", err)
+	}
 	if len(resp1.Incidents) > 2 {
 		t.Fatalf("page 1: expected at most 2 incidents, got %d", len(resp1.Incidents))
 	}
@@ -325,8 +334,13 @@ func TestIncidents_Pagination(t *testing.T) {
 	rec2 := httptest.NewRecorder()
 	a.IncidentRoutes().ServeHTTP(rec2, req2)
 
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("page 2: expected 200, got %d; body: %s", rec2.Code, rec2.Body.String())
+	}
 	var resp2 IncidentsResponse
-	json.Unmarshal(rec2.Body.Bytes(), &resp2)
+	if err := json.Unmarshal(rec2.Body.Bytes(), &resp2); err != nil {
+		t.Fatalf("page 2: failed to parse response JSON: %v", err)
+	}
 
 	// Pages should not overlap (by session_id)
 	ids1 := make(map[string]bool)
