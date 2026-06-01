@@ -24,6 +24,8 @@ type Querier interface {
 	// start=$0.05 then end=$0.07 contributes $0.07, not $0.12.
 	AggregateSpend(ctx context.Context, arg AggregateSpendParams) ([]AggregateSpendRow, error)
 	CleanStaleDelegations(ctx context.Context) error
+	// Count active (non-revoked) keys for a tenant.
+	CountActiveIngestKeys(ctx context.Context, tenant string) (int64, error)
 	CountArtifacts(ctx context.Context, dollar_1 string) (int64, error)
 	CountDelegations(ctx context.Context, arg CountDelegationsParams) (int64, error)
 	// Returns the total count of non-zero-cost groups matching the given filters,
@@ -40,6 +42,9 @@ type Querier interface {
 	CreateConversation(ctx context.Context, arg CreateConversationParams) (Conversation, error)
 	CreateDelegation(ctx context.Context, arg CreateDelegationParams) (Delegation, error)
 	CreateGoal(ctx context.Context, arg CreateGoalParams) (Goal, error)
+	// Insert a new ingest key (hashed). The raw key is never stored — callers
+	// must hash before calling this.
+	CreateIngestKey(ctx context.Context, arg CreateIngestKeyParams) (IngestKey, error)
 	CreateMessage(ctx context.Context, arg CreateMessageParams) (Message, error)
 	CreatePipelineItem(ctx context.Context, arg CreatePipelineItemParams) (PipelineItem, error)
 	CreateProject(ctx context.Context, arg CreateProjectParams) (Project, error)
@@ -69,6 +74,9 @@ type Querier interface {
 	GetConversation(ctx context.Context, id pgtype.UUID) (Conversation, error)
 	GetDelegation(ctx context.Context, id pgtype.UUID) (Delegation, error)
 	GetGoal(ctx context.Context, id pgtype.UUID) (Goal, error)
+	// Look up a (non-revoked) ingest key by its SHA-256 hash.
+	// Returns NULL (pgx.ErrNoRows) if not found or revoked.
+	GetIngestKeyByHash(ctx context.Context, keyHash string) (IngestKey, error)
 	GetLastUserMessage(ctx context.Context, conversationID pgtype.UUID) (Message, error)
 	GetLatestWorkflowRun(ctx context.Context, workflowID pgtype.UUID) (WorkflowRun, error)
 	GetMemoryByPath(ctx context.Context, filePath string) (MemoryIndex, error)
@@ -94,6 +102,8 @@ type Querier interface {
 	ListConversations(ctx context.Context, dollar_1 pgtype.UUID) ([]Conversation, error)
 	ListDelegations(ctx context.Context, arg ListDelegationsParams) ([]Delegation, error)
 	ListGoals(ctx context.Context) ([]Goal, error)
+	// List all (including revoked) keys for a tenant, newest first.
+	ListIngestKeysByTenant(ctx context.Context, tenant string) ([]IngestKey, error)
 	ListMemoryIndex(ctx context.Context) ([]MemoryIndex, error)
 	ListMessages(ctx context.Context, conversationID pgtype.UUID) ([]Message, error)
 	ListPipelineItems(ctx context.Context, arg ListPipelineItemsParams) ([]PipelineItem, error)
@@ -125,6 +135,8 @@ type Querier interface {
 	ListWorkUnits(ctx context.Context, arg ListWorkUnitsParams) ([]ListWorkUnitsRow, error)
 	ListWorkflowRuns(ctx context.Context, workflowID pgtype.UUID) ([]WorkflowRun, error)
 	ListWorkflows(ctx context.Context) ([]Workflow, error)
+	// Revoke an ingest key by setting revoked_at to now.
+	RevokeIngestKey(ctx context.Context, id int64) error
 	SearchMemory(ctx context.Context, arg SearchMemoryParams) ([]MemoryIndex, error)
 	UpdateAgent(ctx context.Context, arg UpdateAgentParams) (Agent, error)
 	UpdateAgentConfig(ctx context.Context, arg UpdateAgentConfigParams) (Agent, error)

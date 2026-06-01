@@ -71,6 +71,15 @@ type Goal struct {
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
 
+type IngestKey struct {
+	ID        int64              `json:"id"`
+	KeyHash   string             `json:"key_hash"`
+	Tenant    string             `json:"tenant"`
+	Label     string             `json:"label"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	RevokedAt pgtype.Timestamptz `json:"revoked_at"`
+}
+
 type MemoryIndex struct {
 	ID          pgtype.UUID        `json:"id"`
 	FilePath    string             `json:"file_path"`
