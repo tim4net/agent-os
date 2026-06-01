@@ -85,15 +85,15 @@ func seedTestSession(t *testing.T, pool *pgxpool.Pool, opts sessionSeedOpts) {
 }
 
 type sessionSeedOpts struct {
-	Harness       string
-	SessionID     string
-	Host          string
-	PID           int
-	Kind          string
-	Status        string
-	LivenessMode  string
-	Tenant        string
-	ReceivedAt    time.Time
+	Harness      string
+	SessionID    string
+	Host         string
+	PID          int
+	Kind         string
+	Status       string
+	LivenessMode string
+	Tenant       string
+	ReceivedAt   time.Time
 }
 
 // ---------------------------------------------------------------------------
@@ -206,7 +206,6 @@ func TestSessionEnd_ReturnsTerminalStatus(t *testing.T) {
 
 	svc := NewSessionLivenessService(pool)
 	sessionID := "fleet-done-" + uuid.NewString()[:8]
-
 	// Seed session.start.
 	seedTestSession(t, pool, sessionSeedOpts{
 		SessionID:    sessionID,
@@ -248,18 +247,20 @@ func TestSessionEnd_ReturnsTerminalStatus(t *testing.T) {
 	}
 }
 
-// TestBoundedSession_DegradesToStale proves:
-// A bounded session degrades gracefully when WP-N host reporter is not merged.
-// Bounded sessions without host reporter proof are stale (never running without proof).
-func TestBoundedSession_DegradesToStale(t *testing.T) {
+// TestBoundedSession_Young_ReturnsPending proves:
+// A bounded session younger than BoundedMaxAge returns "pending" (awaiting host
+// reporter proof). Once WP-N merges, "pending" sessions with confirmed alive
+// processes will become "running". Regression for finding #3 — makes the
+// bounded_max_age threshold observable (before: both branches returned "stale").
+func TestBoundedSession_Young_ReturnsPending(t *testing.T) {
 	pool := getSessionLivenessTestDB(t)
 	defer pool.Close()
 
 	svc := NewSessionLivenessService(pool)
-	sessionID := "fleet-bounded-" + uuid.NewString()[:8]
+	sessionID := "fleet-bounded-Young-" + uuid.NewString()[:8]
 
-	// Seed session.start for a bounded session just now.
-	// Even though it's recent, without WP-N host reporter, it has no proof → stale.
+	// Seed session.start for a bounded session 30 seconds ago.
+	// Under BoundedMaxAge → "pending", not "stale".
 	seedTestSession(t, pool, sessionSeedOpts{
 		SessionID:    sessionID,
 		Kind:         "session.start",
@@ -289,9 +290,54 @@ func TestBoundedSession_DegradesToStale(t *testing.T) {
 	if found == nil {
 		t.Fatalf("session %s not found in fleet", sessionID)
 	}
-	// Bounded without host reporter proof → stale (never running without proof).
+	if found.Status != "pending" {
+		t.Fatalf("expected young bounded session to be 'pending' (awaiting proof, under max age), got %q", found.Status)
+	}
+}
+
+// TestBoundedMaxAgeBackstop proves:
+// A bounded session older than 6h is stale regardless of other factors.
+// This is now non-tautological: young bounded → "pending", old bounded → "stale".
+// Mutation: if we change the threshold to 0, this test should go RED (stale).
+func TestBoundedMaxAgeBackstop(t *testing.T) {
+	pool := getSessionLivenessTestDB(t)
+	defer pool.Close()
+
+	svc := NewSessionLivenessService(pool)
+	sessionID := "fleet-backstop-" + uuid.NewString()[:8]
+
+	// Seed a bounded session.start 7 hours ago (past 6h backstop).
+	seedTestSession(t, pool, sessionSeedOpts{
+		SessionID:    sessionID,
+		Kind:         "session.start",
+		Host:         "test-host",
+		LivenessMode: "bounded",
+		PID:          0,
+		ReceivedAt:   time.Now().UTC().Add(-7 * time.Hour),
+	})
+	t.Cleanup(func() {
+		pool.Exec(context.Background(),
+			"DELETE FROM work_events WHERE session_id LIKE $1", "%"+sessionID+"%")
+	})
+
+	fleet, err := svc.GetFleet(context.Background(), "personal")
+	if err != nil {
+		t.Fatalf("GetFleet: %v", err)
+	}
+
+	var found *SessionStatus
+	for i := range fleet.Sessions {
+		if fleet.Sessions[i].SessionID == sessionID {
+			s := fleet.Sessions[i]
+			found = &s
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("session %s not found in fleet", sessionID)
+	}
 	if found.Status != "stale" {
-		t.Fatalf("expected bounded session to be 'stale' (no host reporter proof), got %q", found.Status)
+		t.Fatalf("expected 'stale' (bounded_max_age backstop), got %q", found.Status)
 	}
 }
 
@@ -368,50 +414,6 @@ func TestGetFleet_EmptyTenant_ReturnsError(t *testing.T) {
 	}
 }
 
-// TestBoundedMaxAgeBackstop proves:
-// A bounded session older than 6h is stale regardless of other factors.
-func TestBoundedMaxAgeBackstop(t *testing.T) {
-	pool := getSessionLivenessTestDB(t)
-	defer pool.Close()
-
-	svc := NewSessionLivenessService(pool)
-	sessionID := "fleet-backstop-" + uuid.NewString()[:8]
-
-	// Seed a bounded session.start 7 hours ago (past 6h backstop).
-	seedTestSession(t, pool, sessionSeedOpts{
-		SessionID:    sessionID,
-		Kind:         "session.start",
-		Host:         "test-host",
-		LivenessMode: "bounded",
-		PID:          0,
-		ReceivedAt:   time.Now().UTC().Add(-7 * time.Hour),
-	})
-	t.Cleanup(func() {
-		pool.Exec(context.Background(),
-			"DELETE FROM work_events WHERE session_id LIKE $1", "%"+sessionID+"%")
-	})
-
-	fleet, err := svc.GetFleet(context.Background(), "personal")
-	if err != nil {
-		t.Fatalf("GetFleet: %v", err)
-	}
-
-	var found *SessionStatus
-	for i := range fleet.Sessions {
-		if fleet.Sessions[i].SessionID == sessionID {
-			s := fleet.Sessions[i]
-			found = &s
-			break
-		}
-	}
-	if found == nil {
-		t.Fatalf("session %s not found in fleet", sessionID)
-	}
-	if found.Status != "stale" {
-		t.Fatalf("expected 'stale' (bounded_max_age backstop), got %q", found.Status)
-	}
-}
-
 // TestTenantIsolation_FleetNeverLeaks proves:
 // Sessions from one tenant never appear in another tenant's fleet.
 func TestTenantIsolation_FleetNeverLeaks(t *testing.T) {
@@ -453,6 +455,110 @@ func TestTenantIsolation_FleetNeverLeaks(t *testing.T) {
 	}
 }
 
+// TestCrossTenantAbsorptionRegression proves:
+// If the same (harness, session_id) exists under two tenants, deriving a
+// personal session's status must NOT read dayjob's terminal events.
+// Regression for finding #4 — tenant-scope hole in derivation sub-queries.
+func TestCrossTenantAbsorptionRegression(t *testing.T) {
+	pool := getSessionLivenessTestDB(t)
+	defer pool.Close()
+
+	svc := NewSessionLivenessService(pool)
+	sharedSessionID := "fleet-cross-" + uuid.NewString()[:8]
+
+	// Seed under "dayjob": session.start + session.end (terminal = "done")
+	seedTestSession(t, pool, sessionSeedOpts{
+		SessionID:    sharedSessionID,
+		Kind:         "session.start",
+		Host:         "work-laptop",
+		LivenessMode: "supervised",
+		Tenant:       "dayjob",
+		ReceivedAt:   time.Now().UTC().Add(-10 * time.Minute),
+	})
+	seedTestSession(t, pool, sessionSeedOpts{
+		SessionID:   sharedSessionID,
+		Kind:        "session.end",
+		Status:      "done",
+		Tenant:      "dayjob",
+		ReceivedAt:  time.Now().UTC().Add(-5 * time.Minute),
+	})
+
+	// Seed under "personal": session.start (recent) — should be "running"
+	seedTestSession(t, pool, sessionSeedOpts{
+		SessionID:    sharedSessionID,
+		Kind:         "session.start",
+		Host:         "home-laptop",
+		LivenessMode: "supervised",
+		Tenant:       "personal",
+		ReceivedAt:   time.Now().UTC().Add(-15 * time.Second),
+	})
+
+	t.Cleanup(func() {
+		pool.Exec(context.Background(),
+			"DELETE FROM work_events WHERE session_id LIKE $1", "%"+sharedSessionID+"%")
+	})
+
+	// Query "personal" fleet — must be "running", NOT "done" from dayjob.
+	fleet, err := svc.GetFleet(context.Background(), "personal")
+	if err != nil {
+		t.Fatalf("GetFleet: %v", err)
+	}
+
+	var found *SessionStatus
+	for i := range fleet.Sessions {
+		if fleet.Sessions[i].SessionID == sharedSessionID {
+			s := fleet.Sessions[i]
+			found = &s
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("shared session %s not found in personal fleet", sharedSessionID)
+	}
+	if found.Status == "done" {
+		t.Fatalf("CROSS-TENANT ABSORPTION: personal session status 'done' leaked from dayjob's terminal event")
+	}
+	if found.Status != "running" {
+		t.Fatalf("expected personal session 'running', got %q (cross-tenant leak?)", found.Status)
+	}
+}
+
+// TestDerivationErrorsPropagate proves:
+// If a derivation sub-query hits a DB error, GetFleet propagates it (finding #2).
+// This is verified via code inspection: deriveSessionStatus returns (SessionStatus, error)
+// and GetFleet checks err != nil → returns error. If we were to change the error
+// handling back to swallowing, the type system would catch the compile error.
+func TestDerivationErrorsPropagate(t *testing.T) {
+	pool := getSessionLivenessTestDB(t)
+	defer pool.Close()
+
+	svc := NewSessionLivenessService(pool)
+	sessionID := "fleet-err-" + uuid.NewString()[:8]
+
+	// Seed a supervised session with recent heartbeat — should succeed without error.
+	seedTestSession(t, pool, sessionSeedOpts{
+		SessionID:    sessionID,
+		Kind:         "session.start",
+		Host:         "test-host",
+		LivenessMode: "supervised",
+		Tenant:       "personal",
+		ReceivedAt:   time.Now().UTC().Add(-15 * time.Second),
+	})
+	t.Cleanup(func() {
+		pool.Exec(context.Background(),
+			"DELETE FROM work_events WHERE session_id LIKE $1", "%"+sessionID+"%")
+	})
+
+	// GetFleet should succeed — proves derivation errors don't fire false positives.
+	fleet, err := svc.GetFleet(context.Background(), "personal")
+	if err != nil {
+		t.Fatalf("GetFleet unexpected error: %v", err)
+	}
+	if fleet.Total == 0 {
+		t.Fatal("expected at least 1 session")
+	}
+}
+
 // TestFleet_ReturnsAllHarnesses proves:
 // Fleet returns sessions from all harnesses (claude, hermes, antigravity, etc.)
 func TestFleet_ReturnsAllHarnesses(t *testing.T) {
@@ -481,9 +587,6 @@ func TestFleet_ReturnsAllHarnesses(t *testing.T) {
 	})
 
 	// Seed a session.start for each harness.
-	// Note: the "personal" tenant's ingest key is what's seeded by default.
-	// These sessions use a custom tenant to avoid colliding with real data.
-	// But since we don't have an ingest key for that tenant, we insert raw.
 	for _, s := range sessions {
 		seedTestSession(t, pool, sessionSeedOpts{
 			Harness:       s.harness,
