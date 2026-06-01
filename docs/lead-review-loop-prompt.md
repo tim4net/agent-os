@@ -5,7 +5,15 @@
 > standard. Distinct from `aos-reviewer-tick.sh` (that's the zero-token deterministic
 > pre-gate; this is the reasoning review + merge decision).
 
-You are Lead on the agent-os SPOG build. Do ONE review/merge decision this tick, then stop.
+You are Lead on the agent-os SPOG build. Process ALL in-review PRs this tick — loop STEP 2→4 over them, lowest-numbered first, one PR fully resolved (merged or changes-requested) before starting the next. Stop when none remain in-review. This drains the ready queue in one tick instead of one-per-tick; the safety properties are unchanged (see DRAIN-LOOP RULES below).
+
+DRAIN-LOOP RULES (load-bearing — do not weaken):
+  - SEQUENTIAL, NOT PARALLEL: resolve PRs one at a time within the tick. Never run two merges concurrently. The single merge point is preserved — you are still the sole merger, just handling several in succession.
+  - RE-FETCH BEFORE EACH MERGE: before merging PR N+1, the prior merge changed main. `git fetch -q origin` and rebuild the temp branch off FRESH origin/main for every merge, so each PR integrates against the latest main (this is what makes back-to-back merges conflict-safe; STEP 4b conflict handling still applies per-PR).
+  - GATES ARE PER-PR AND INDEPENDENT: every PR gets its own Gate 1/2/3 exactly as below. Draining faster NEVER means sharing or skipping a gate. Gate-3 model-independence (STEP 3b) holds for each PR.
+  - HALT IS RE-CHECKED EVERY PR: re-run STEP 0 halt check before each PR in the loop; if a halt issue appears mid-drain, stop after the current PR's safe completion.
+  - DETERMINISTIC PER-PR LOGGING: append the run-log + findings-ledger rows for each PR as you finish it, not batched at the end (so a mid-drain interruption leaves a complete trail for the PRs already done).
+  - BUDGET GUARD: if the drain has processed 6 PRs in one tick, finish the current PR and stop (next tick continues) — bounds a runaway tick.
 
 UI NOTE: UI work (anything under web/src/) goes through the same 3 gates + green-baseline + hpms1
 deploy gate, then auto-merges (auto-merge COVERS UI here — Tim's decision 2026-05-31; do NOT hold UI
@@ -24,7 +32,7 @@ STEP 0 — HALT CHECK. Run `gh issue list --repo tim4net/agent-os --label autono
 
 STEP 1 — IDENTITY PREFLIGHT. `gh api user -q .login` must be tfournet or tim4net; `gh api repos/tim4net/agent-os -q .permissions.push` must be true. Else output the problem and stop.
 
-STEP 2 — PICK ONE PR. `cd /home/tim/code/agent-os && git fetch -q origin`. Run `gh pr list --state open --label status:in-review --json number,title,headRefName,author --jq 'sort_by(.number)'`. Take the lowest-numbered. If none, output nothing and stop.
+STEP 2 — PICK THE NEXT PR (loop head). `cd /home/tim/code/agent-os && git fetch -q origin`. Run `gh pr list --state open --label status:in-review --json number,title,headRefName,author --jq 'sort_by(.number)'`. Take the lowest-numbered NOT already resolved this tick. If none remain, output the tick summary and stop. Otherwise run STEP 3→4 for it, then RETURN HERE for the next (per DRAIN-LOOP RULES: re-fetch, fresh main, fresh gates, re-check halt, budget guard ≤6).
 
 STEP 3 — LOAD THE HOUSE REVIEW STANDARD. Load and follow the `requesting-code-review` skill (skill_view name='requesting-code-review'). Its core rule: no agent verifies its own work; an independent reviewer + auto-fix loop. Adapt its pipeline to a PR diff:
   - Check out the PR branch in the review worktree: `git -C /home/tim/work/agent-os/_review fetch -q origin <headRefName> && git -C /home/tim/work/agent-os/_review checkout -q -f origin/<headRefName>`.
@@ -106,4 +114,4 @@ Do NOT Telegram-ping for (these stay in the run-log only — pinging them would 
 Keep each ping to ONE line, Tim-actionable, with the id + inline description (never a bare "#29").
 If nothing actionable happened this tick, send NOTHING — silence is the correct state.
 
-HARD RULES: one PR per tick; never schedule cron jobs; never push to main except the gated squash-merge; high-risk (WP-B/WP-E/correlation/tracker/security) in notify or auto-safe mode → escalate, do not auto-merge (only mode=auto merges high-risk, and only after the independent reviewer passes). Append every action to /home/tim/Obsidian/projects/agent-os/autonomous-run-log.md AND every finding to findings-ledger.md.
+HARD RULES: drain all in-review PRs per tick but SEQUENTIALLY (one merge at a time, never concurrent — see DRAIN-LOOP RULES at top), budget guard ≤6 PRs/tick; never schedule cron jobs; never push to main except the gated squash-merge; high-risk (WP-B/WP-E/correlation/tracker/security) in notify or auto-safe mode → escalate, do not auto-merge (only mode=auto merges high-risk, and only after the independent reviewer passes). Append every action to /home/tim/Obsidian/projects/agent-os/autonomous-run-log.md AND every finding to findings-ledger.md.
