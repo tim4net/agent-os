@@ -56,8 +56,8 @@ export function WorkUnitCard({ unit }: { unit: WorkUnit }) {
         <StatusPill state={state} />
       </div>
 
-      {/* meta row */}
-      <div className="flex items-center gap-3 text-xs text-[var(--color-text-secondary)] flex-wrap">
+      {/* meta row — hairline divider above for scannability (mockup vision-check nit) */}
+      <div className="flex items-center gap-3 text-xs text-[var(--color-text-secondary)] flex-wrap border-t border-[var(--border-subtle)] pt-2.5">
         {(unit.branch || unit.sha) && (
           <span className="font-mono text-[11px] px-2 py-0.5 rounded bg-[var(--bg-elevated)] text-[var(--color-text-secondary)]">
             {unit.branch}{unit.sha ? ` · ${unit.sha.slice(0, 7)}` : ''}
@@ -69,11 +69,11 @@ export function WorkUnitCard({ unit }: { unit: WorkUnit }) {
             {h}
           </span>
         ))}
-        <span className="inline-flex items-center gap-1.5 text-[var(--color-text-muted)]">
+        <span className="inline-flex items-center gap-1.5 text-[var(--color-text-secondary)]">
           <Icon name="bar_chart" size={13} />
           {unit.event_count} events{unit.session_count > 1 ? ` · ${unit.session_count} sessions` : ''}
         </span>
-        <span className="inline-flex items-center gap-1.5 text-[var(--color-text-muted)]">
+        <span className="inline-flex items-center gap-1.5 text-[var(--color-text-secondary)]">
           <Icon name="schedule" size={13} />
           {state === 'running' ? `started ${relTime(unit.first_event_at)}` : duration(unit.first_event_at, unit.last_event_at)}
         </span>
