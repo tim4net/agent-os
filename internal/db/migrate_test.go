@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -284,15 +285,20 @@ func TestMigrateUpPartialDB(t *testing.T) {
 	}
 
 	t.Logf("partial DB: applied %d pending migrations: %v", result.Applied, result.Versions)
-	if result.Applied == 0 {
-		t.Fatal("expected some migrations to be applied on partial DB")
-	}
 
-	// Verify that the gap versions (2-7) were NOT attempted.
+	// Assert the exact applied set: only 13, 14, 15, 16 should have been applied.
+	expectedVersions := map[int64]bool{13: true, 14: true, 15: true, 16: true}
+	if len(result.Versions) != len(expectedVersions) {
+		t.Errorf("expected %d applied versions, got %d: %v", len(expectedVersions), len(result.Versions), result.Versions)
+	}
 	for _, v := range result.Versions {
-		if v >= 2 && v <= 7 {
-			t.Errorf("should not have applied gap version %d", v)
+		if !expectedVersions[v] {
+			t.Errorf("unexpected applied version %d", v)
 		}
+		delete(expectedVersions, v)
+	}
+	for v := range expectedVersions {
+		t.Errorf("expected version %d to be applied but wasn't", v)
 	}
 
 	// Verify total versions in schema_migrations = pre-seeded (6) + newly applied.
@@ -634,4 +640,141 @@ func TestMigrateDownRefusesAbsent(t *testing.T) {
 		t.Errorf("expected 'not applied or is dirty' error, got: %v", err)
 	}
 	t.Logf("MigrateDown correctly refused absent version: %v ✓", err)
+}
+
+// ---------------------------------------------------------------------------
+// Advisory lock release tests
+// ---------------------------------------------------------------------------
+
+// TestMigrateUpReleasesAdvisoryLock verifies that MigrateUp releases the
+// Postgres advisory lock before returning. This is a regression guard for
+// the lock-leak bug where the deferred pg_advisory_unlock used the caller's
+// cancellable context: if the context was cancelled at cleanup time (e.g.
+// a signal-cancellable context from main()), the unlock would fail silently,
+// and the lock-holding connection would be returned to the pool — blocking
+// any subsequent MigrateUp call on another replica.
+//
+// The fix runs the unlock on context.Background() and destroys the connection
+// on failure. This test verifies the lock is released after both a normal
+// MigrateUp and a MigrateUp that returns an error.
+func TestMigrateUpReleasesAdvisoryLock(t *testing.T) {
+	t.Run("normal_completion", func(t *testing.T) {
+		pool := createIsolatedTestDB(t)
+		if pool == nil {
+			return
+		}
+		_, err := MigrateUp(context.Background(), pool)
+		if err != nil {
+			t.Fatalf("MigrateUp: %v", err)
+		}
+		verifyAdvisoryLockReleased(t, pool)
+		t.Log("advisory lock released after normal MigrateUp ✓")
+	})
+
+	t.Run("after_error_dirty", func(t *testing.T) {
+		pool := createIsolatedTestDB(t)
+		if pool == nil {
+			return
+		}
+		// Pre-apply all migrations, then create a dirty row so MigrateUp
+		// returns an error. The lock should still be released.
+		if _, err := MigrateUp(context.Background(), pool); err != nil {
+			t.Fatalf("pre-apply MigrateUp: %v", err)
+		}
+		if _, err := pool.Exec(context.Background(),
+			`UPDATE schema_migrations SET dirty = true WHERE version = 1`); err != nil {
+			t.Fatalf("mark dirty: %v", err)
+		}
+		_, err := MigrateUp(context.Background(), pool)
+		if err == nil {
+			t.Fatal("expected MigrateUp to fail on dirty state")
+		}
+		verifyAdvisoryLockReleased(t, pool)
+		t.Log("advisory lock released after MigrateUp error ✓")
+	})
+}
+
+// TestMigrateUpReleasesAdvisoryLockOnCancelledContext is a regression test
+// that verifies the advisory lock is released even when the parent context
+// is cancelled during the migration loop. With the old code (unlock uses the
+// cancellable ctx), a cancelled context at cleanup time would cause the
+// unlock to fail silently and leak the lock onto a pooled connection.
+//
+// The fix (context.Background for unlock + destroy conn on failure) ensures
+// the lock is always released regardless of the parent context state.
+func TestMigrateUpReleasesAdvisoryLockOnCancelledContext(t *testing.T) {
+	pool := createIsolatedTestDB(t)
+	if pool == nil {
+		return
+	}
+
+	// DON'T pre-apply — let MigrateUp actually apply all 10 migrations.
+	// This takes ~20-50ms, giving a reliable window for the cancel to arrive
+	// during the migration loop (after the advisory lock is acquired but
+	// before the deferred unlock runs). With the old code, the deferred
+	// unlock would use the cancelled ctx and fail; with the fix, it uses
+	// context.Background() and succeeds.
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(5 * time.Millisecond)
+		cancel()
+	}()
+
+	// MigrateUp may succeed (if all migrations applied before cancel) or
+	// fail with context cancelled. Either way, the deferred unlock runs.
+	_, _ = MigrateUp(ctx, pool)
+
+	// Brief wait to ensure the deferred unlock has completed.
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify the advisory lock is NOT held by any session.
+	// Use a completely separate pool to avoid reusing any leaked connection.
+	dsn := os.Getenv("AOS_TEST_DATABASE_URL")
+	if dsn == "" {
+		dsn = os.Getenv("AOS_TEST_DSN")
+	}
+	checkPool, err := pgxpool.New(context.Background(), dsn)
+	if err != nil {
+		t.Fatalf("create check pool: %v", err)
+	}
+	defer checkPool.Close()
+
+	var ok bool
+	if err := checkPool.QueryRow(context.Background(),
+		`SELECT pg_try_advisory_lock($1)`, MigrateAdvisoryLockID).Scan(&ok); err != nil {
+		t.Fatalf("pg_try_advisory_lock: %v", err)
+	}
+	if !ok {
+		t.Fatal("advisory lock still held after MigrateUp with cancelled context — " +
+			"lock leaked (regression: fix should use context.Background for unlock)")
+	}
+	// Release the test-acquired lock.
+	checkPool.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, MigrateAdvisoryLockID)
+	t.Log("advisory lock correctly released despite cancelled context ✓")
+}
+
+// verifyAdvisoryLockReleased checks that the migration advisory lock is not
+// held by any session. Uses pg_try_advisory_lock on a separate connection.
+func verifyAdvisoryLockReleased(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	dsn := os.Getenv("AOS_TEST_DATABASE_URL")
+	if dsn == "" {
+		dsn = os.Getenv("AOS_TEST_DSN")
+	}
+	checkPool, err := pgxpool.New(context.Background(), dsn)
+	if err != nil {
+		t.Fatalf("create check pool: %v", err)
+	}
+	defer checkPool.Close()
+
+	var ok bool
+	if err := checkPool.QueryRow(context.Background(),
+		`SELECT pg_try_advisory_lock($1)`, MigrateAdvisoryLockID).Scan(&ok); err != nil {
+		t.Fatalf("pg_try_advisory_lock: %v", err)
+	}
+	if !ok {
+		t.Fatal("advisory lock leaked — MigrateUp did not release the advisory lock before returning")
+	}
+	// Release the test-acquired lock.
+	checkPool.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, MigrateAdvisoryLockID)
 }

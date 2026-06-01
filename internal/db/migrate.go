@@ -15,6 +15,12 @@ import (
 	"github.com/tim4net/agent-os/internal/migrations"
 )
 
+// MigrateAdvisoryLockID is the Postgres advisory lock ID used to serialize
+// migration runs. The value (3854494529) is a well-known constant scoped to
+// the whole database. All migration functions (up and down) take this lock
+// on a dedicated connection to prevent concurrent runs across API replicas.
+const MigrateAdvisoryLockID int64 = 3854494529
+
 // dbExecutor abstracts Exec/Query/QueryRow shared by *pgxpool.Pool,
 // *pgxpool.Conn, and pgx.Tx so helper functions can operate on any
 // of them without coupling to a concrete type.
@@ -246,19 +252,27 @@ func MigrateUpWithLogger(ctx context.Context, pool *pgxpool.Pool, logger *slog.L
 	}
 
 	// Take a Postgres advisory lock to prevent concurrent migration runs
-	// (e.g. multiple API replicas booting simultaneously). Uses a well-known
-	// lock ID (3854494529 = hash of "agent-os:migrate") scoped to the whole DB.
-	const migrateLockID int64 = 3854494529
-	_, err = conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, migrateLockID)
+	// (e.g. multiple API replicas booting simultaneously).
+	_, err = conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, MigrateAdvisoryLockID)
 	if err != nil {
 		return nil, fmt.Errorf("acquire migration advisory lock: %w", err)
 	}
 	defer func() {
+		// Use context.Background() for the unlock — cleanup must not be
+		// cancellable. If the parent ctx is cancelled/deadlined at cleanup
+		// time (e.g. a signal-cancellable context from main()), the unlock
+		// query would fail with "context canceled" on the old code, the
+		// lock-holding connection would be returned to the pool, and a
+		// subsequent MigrateUp on another replica would block indefinitely.
 		var ok bool
-		if err := conn.QueryRow(ctx, `SELECT pg_advisory_unlock($1)`, migrateLockID).Scan(&ok); err != nil {
-			log.Error("failed to release migration advisory lock", "error", err)
-		} else if !ok {
-			log.Error("advisory unlock returned false — lock was not held by this session")
+		unlockErr := conn.QueryRow(context.Background(), `SELECT pg_advisory_unlock($1)`, MigrateAdvisoryLockID).Scan(&ok)
+		if unlockErr != nil || !ok {
+			log.Error("advisory unlock failed or returned false — destroying connection to prevent lock leak",
+				"error", unlockErr, "ok", ok)
+			// Close the underlying connection so the lock-holding conn is
+			// destroyed, not returned to the pool. conn.Release() (outer
+			// defer) will see the conn is closed and handle it gracefully.
+			conn.Conn().Close(context.Background())
 		}
 	}()
 
@@ -423,17 +437,19 @@ func MigrateDown(ctx context.Context, pool *pgxpool.Pool, version int64, downSQL
 	}
 
 	// Take the same advisory lock as MigrateUp.
-	const migrateLockID int64 = 3854494529
-	_, err = conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, migrateLockID)
+	_, err = conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, MigrateAdvisoryLockID)
 	if err != nil {
 		return fmt.Errorf("acquire migration advisory lock for down: %w", err)
 	}
 	defer func() {
+		// Use context.Background() for the unlock — same rationale as
+		// MigrateUp. Cleanup must not be cancellable.
 		var ok bool
-		if err := conn.QueryRow(ctx, `SELECT pg_advisory_unlock($1)`, migrateLockID).Scan(&ok); err != nil {
-			slog.Default().Error("failed to release migration advisory lock (down)", "error", err)
-		} else if !ok {
-			slog.Default().Error("advisory unlock returned false in MigrateDown — lock was not held by this session")
+		unlockErr := conn.QueryRow(context.Background(), `SELECT pg_advisory_unlock($1)`, MigrateAdvisoryLockID).Scan(&ok)
+		if unlockErr != nil || !ok {
+			slog.Default().Error("advisory unlock failed or returned false (down) — destroying connection to prevent lock leak",
+				"error", unlockErr, "ok", ok)
+			conn.Conn().Close(context.Background())
 		}
 	}()
 
