@@ -623,6 +623,164 @@ func TestHTTPEmitterHealth_InvalidStaleWindow_Returns400(t *testing.T) {
 	}
 }
 
+// TestHTTPEmitterHealth_SupervisedNoteAsLatestRow proves:
+// A supervised session whose latest event is a note (NULL liveness_mode) with a fresh
+// heartbeat is still reported "running" — liveness is derived from per-session
+// aggregation (start/heartbeat), never from the arbitrary latest row.
+// Mutation self-check: this test MUST fail if liveness_mode is read from the latest
+// row instead of aggregated per session.
+func TestHTTPEmitterHealth_SupervisedNoteAsLatestRow(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+	tenant := emitterTestTenant(t, "note-latest")
+	a, pool, _ := newTestAPIWithDB(t)
+	defer pool.Close()
+
+	now := time.Now().UTC()
+	sessID := uuid.NewString()
+	ctx := t.Context()
+
+	// session.start (supervised, 2m ago)
+	eid1 := uuid.New()
+	_, err := pool.Exec(ctx,
+		`INSERT INTO work_events (event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, tenant, ts, received_at)
+		 VALUES ($1, 'agentos.work_event/v1', 'claude', $2, 'testhost-claude', 12345, 'session.start', 'running', 'supervised', $3, $4, $5)`,
+		eid1, sessID, tenant, now.Add(-2*time.Minute), now.Add(-2*time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("seed start: %v", err)
+	}
+
+	// session.heartbeat (supervised, 1m ago — fresh within 5m window)
+	eid2 := uuid.New()
+	_, err = pool.Exec(ctx,
+		`INSERT INTO work_events (event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, tenant, ts, received_at)
+		 VALUES ($1, 'agentos.work_event/v1', 'claude', $2, 'testhost-claude', 12345, 'session.heartbeat', 'running', 'supervised', $3, $4, $5)`,
+		eid2, sessID, tenant, now.Add(-1*time.Minute), now.Add(-1*time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("seed heartbeat: %v", err)
+	}
+
+	// note (NULL liveness_mode, 30s ago — this is the LATEST row)
+	// This must NOT cause the session to be reported stale.
+	eid3 := uuid.New()
+	_, err = pool.Exec(ctx,
+		`INSERT INTO work_events (event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, tenant, ts, received_at)
+		 VALUES ($1, 'agentos.work_event/v1', 'claude', $2, 'testhost-claude', 12345, 'note', 'info', NULL, $3, $4, $5)`,
+		eid3, sessID, tenant, now.Add(-30*time.Second), now.Add(-30*time.Second),
+	)
+	if err != nil {
+		t.Fatalf("seed note: %v", err)
+	}
+
+	req := newTestGET("/?tenant=" + tenant + "&stale_window=5m")
+	rec := httptest.NewRecorder()
+	a.EmitterRoutes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp service.EmitterHealthResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	found := false
+	for _, e := range resp.Emitters {
+		if e.SessionID == sessID {
+			found = true
+			if e.Status != service.EmitterStatusRunning {
+				t.Fatalf("FINDING-1 REGRESSION: supervised session with fresh heartbeat + latest-row note(NULL mode) should be 'running', got %q — liveness_mode is likely read from the latest row instead of per-session aggregation", e.Status)
+			}
+			if e.LivenessMode != "supervised" {
+				t.Fatalf("expected liveness_mode 'supervised' (aggregated from start/heartbeat), got %q", e.LivenessMode)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("session %s not found in response", sessID)
+	}
+}
+
+// TestHTTPEmitterHealth_SupervisedNoteAsLatestRow_Stale proves:
+// A supervised session whose heartbeat is old (>5m) with a recent note (NULL mode, latest
+// row) is correctly reported "stale" — the per-session aggregation still shows the old
+// heartbeat, and status derives from last_heartbeat age, not from the flag.
+func TestHTTPEmitterHealth_SupervisedNoteAsLatestRow_Stale(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+	tenant := emitterTestTenant(t, "note-latest-stale")
+	a, pool, _ := newTestAPIWithDB(t)
+	defer pool.Close()
+
+	now := time.Now().UTC()
+	sessID := uuid.NewString()
+	ctx := t.Context()
+
+	// session.start (supervised, 10m ago)
+	eid1 := uuid.New()
+	_, err := pool.Exec(ctx,
+		`INSERT INTO work_events (event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, tenant, ts, received_at)
+		 VALUES ($1, 'agentos.work_event/v1', 'claude', $2, 'testhost-claude', 12345, 'session.start', 'running', 'supervised', $3, $4, $5)`,
+		eid1, sessID, tenant, now.Add(-10*time.Minute), now.Add(-10*time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("seed start: %v", err)
+	}
+
+	// session.heartbeat (supervised, 10m ago — stale, beyond 5m window)
+	eid2 := uuid.New()
+	_, err = pool.Exec(ctx,
+		`INSERT INTO work_events (event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, tenant, ts, received_at)
+		 VALUES ($1, 'agentos.work_event/v1', 'claude', $2, 'testhost-claude', 12345, 'session.heartbeat', 'running', 'supervised', $3, $4, $5)`,
+		eid2, sessID, tenant, now.Add(-10*time.Minute), now.Add(-10*time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("seed heartbeat: %v", err)
+	}
+
+	// note (NULL liveness_mode, 30s ago — latest row, but doesn't resurrect the session)
+	eid3 := uuid.New()
+	_, err = pool.Exec(ctx,
+		`INSERT INTO work_events (event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, tenant, ts, received_at)
+		 VALUES ($1, 'agentos.work_event/v1', 'claude', $2, 'testhost-claude', 12345, 'note', 'info', NULL, $3, $4, $5)`,
+		eid3, sessID, tenant, now.Add(-30*time.Second), now.Add(-30*time.Second),
+	)
+	if err != nil {
+		t.Fatalf("seed note: %v", err)
+	}
+
+	req := newTestGET("/?tenant=" + tenant + "&stale_window=5m")
+	rec := httptest.NewRecorder()
+	a.EmitterRoutes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp service.EmitterHealthResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	found := false
+	for _, e := range resp.Emitters {
+		if e.SessionID == sessID {
+			found = true
+			if e.Status != service.EmitterStatusStale {
+				t.Fatalf("supervised session with old heartbeat + latest-row note should be 'stale', got %q", e.Status)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("session %s not found in response", sessID)
+	}
+}
+
 // TestHTTPEmitterHealth_ResponseShape proves the response JSON shape.
 func TestHTTPEmitterHealth_ResponseShape(t *testing.T) {
 	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {

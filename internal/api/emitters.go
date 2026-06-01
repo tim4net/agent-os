@@ -36,13 +36,16 @@ func (a *API) EmitterRoutes() http.Handler {
 // emitterHealthQuery is the SQL for computing emitter liveness.
 // Hand-written (sqlc compile-checked in queries/emitters.sql).
 // Executed via raw pgx since generated *.sql.go is not committed (Lead runs codegen).
+//
+// Liveness derivation uses per-session aggregation (not the latest row):
+//   session_mode = MAX(liveness_mode) FILTER (WHERE kind IN ('session.start','session.heartbeat'))
+// This ensures a note/artifact.created with NULL liveness_mode on the latest row
+// does not cause a live supervised emitter to be reported stale.
 const emitterHealthQuery = `
-WITH session_state AS (
+WITH session_agg AS (
     SELECT DISTINCT ON (harness, session_id)
         harness,
         session_id,
-        host,
-        liveness_mode,
         MAX(CASE WHEN kind = 'session.end' AND status IN ('done','failed','cancelled')
                  THEN status END) OVER (PARTITION BY harness, session_id)
             AS terminal_status,
@@ -59,7 +62,18 @@ WITH session_state AS (
         MIN(received_at) OVER (PARTITION BY harness, session_id)
             AS first_seen,
         MAX(pid) OVER (PARTITION BY harness, session_id)
-            AS pid
+            AS pid,
+        -- Per-session liveness_mode: aggregate from start/heartbeat, never from
+        -- arbitrary latest row (note/artifact.created legitimately have NULL mode).
+        MAX(liveness_mode) FILTER (
+            WHERE kind IN ('session.start', 'session.heartbeat')
+        ) OVER (PARTITION BY harness, session_id)
+            AS session_mode,
+        -- Per-session host: derive from start/heartbeat, not from arbitrary latest row.
+        MAX(host) FILTER (
+            WHERE kind IN ('session.start', 'session.heartbeat')
+        ) OVER (PARTITION BY harness, session_id)
+            AS session_host
     FROM work_events
     WHERE ($1::text = '' OR tenant = $1::text)
     ORDER BY harness, session_id, received_at DESC
@@ -68,8 +82,8 @@ deduped AS (
     SELECT DISTINCT ON (harness, session_id)
         harness,
         session_id,
-        host,
-        liveness_mode,
+        session_host AS host,
+        session_mode AS liveness_mode,
         terminal_status,
         last_heartbeat,
         last_event_received_at,
@@ -77,7 +91,7 @@ deduped AS (
         tenant,
         first_seen,
         pid
-    FROM session_state
+    FROM session_agg
     ORDER BY harness, session_id
 )
 SELECT

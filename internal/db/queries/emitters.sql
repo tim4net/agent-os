@@ -9,13 +9,15 @@
 -- @stale_window: supervised sessions with no heartbeat in this window are stale.
 --   Default = 5 minutes (contract §4).
 -- @tenant: empty string returns all tenants; otherwise scopes to one.
-WITH session_state AS (
+WITH session_agg AS (
     -- For each (harness, session_id), compute the session-level state.
+    -- IMPORTANT: liveness_mode and host are aggregated per session from
+    -- start/heartbeat events, NOT read from the arbitrary latest row.
+    -- A note/artifact.created (NULL liveness_mode) as the latest row must
+    -- NOT cause a live supervised emitter to be reported stale.
     SELECT DISTINCT ON (harness, session_id)
         harness,
         session_id,
-        host,
-        liveness_mode,
         -- Latest terminal event, if any (session.end).
         MAX(CASE WHEN kind = 'session.end' AND status IN ('done','failed','cancelled')
                  THEN status END) OVER (PARTITION BY harness, session_id)
@@ -39,7 +41,18 @@ WITH session_state AS (
             AS first_seen,
         -- PID from latest event (if any).
         MAX(pid) OVER (PARTITION BY harness, session_id)
-            AS pid
+            AS pid,
+        -- Per-session liveness_mode: aggregate from start/heartbeat, never from
+        -- arbitrary latest row (note/artifact.created legitimately have NULL mode).
+        MAX(liveness_mode) FILTER (
+            WHERE kind IN ('session.start', 'session.heartbeat')
+        ) OVER (PARTITION BY harness, session_id)
+            AS session_mode,
+        -- Per-session host: derive from start/heartbeat, not from arbitrary latest row.
+        MAX(host) FILTER (
+            WHERE kind IN ('session.start', 'session.heartbeat')
+        ) OVER (PARTITION BY harness, session_id)
+            AS session_host
     FROM work_events
     WHERE (sqlc.arg('tenant')::text = '' OR tenant = sqlc.arg('tenant')::text)
     ORDER BY harness, session_id, received_at DESC
@@ -48,8 +61,8 @@ deduped AS (
     SELECT DISTINCT ON (harness, session_id)
         harness,
         session_id,
-        host,
-        liveness_mode,
+        session_host AS host,
+        session_mode AS liveness_mode,
         terminal_status,
         last_heartbeat,
         last_event_received_at,
@@ -57,7 +70,7 @@ deduped AS (
         tenant,
         first_seen,
         pid
-    FROM session_state
+    FROM session_agg
     ORDER BY harness, session_id
 )
 SELECT
