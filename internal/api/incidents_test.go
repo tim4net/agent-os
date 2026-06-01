@@ -76,6 +76,7 @@ func TestIncidents_NoFailedSessions_ReturnsEmptyGreen(t *testing.T) {
 	}
 	a, pool, _ := newTestAPIWithDB(t)
 	defer pool.Close()
+	seedTestIngestKey(t, pool)
 
 	req := httptest.NewRequest("GET", "/?tenant=personal", nil)
 	rec := httptest.NewRecorder()
@@ -105,6 +106,7 @@ func TestIncidents_FailedSessionSurfaces(t *testing.T) {
 	}
 	a, pool, bus := newTestAPIWithDB(t)
 	defer pool.Close()
+	seedTestIngestKey(t, pool)
 
 	// Ingest a session.start followed by a session.end with status=failed.
 	sessionID := uuid.NewString()
@@ -205,6 +207,7 @@ func TestIncidents_DoneSessionDoesNotSurface(t *testing.T) {
 	}
 	a, pool, _ := newTestAPIWithDB(t)
 	defer pool.Close()
+	seedTestIngestKey(t, pool)
 
 	// Ingest a session.start + done session.end
 	sessionID := uuid.NewString()
@@ -249,6 +252,7 @@ func TestIncidents_TenantIsolation(t *testing.T) {
 	}
 	a, pool, _ := newTestAPIWithDB(t)
 	defer pool.Close()
+	seedTestIngestKey(t, pool)
 
 	// Ingest a failed session for tenant "personal"
 	sessionID := uuid.NewString()
@@ -284,13 +288,15 @@ func TestIncidents_TenantIsolation(t *testing.T) {
 	}
 }
 
-// TestIncidents_Pagination tests that limit and offset work correctly.
+// TestIncidents_Pagination tests that limit and offset work correctly —
+// pages do not overlap by session_id.
 func TestIncidents_Pagination(t *testing.T) {
 	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
 		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
 	}
 	a, pool, _ := newTestAPIWithDB(t)
 	defer pool.Close()
+	seedTestIngestKey(t, pool)
 
 	// Create 3 failed sessions
 	for i := 0; i < 3; i++ {
@@ -341,6 +347,61 @@ func TestIncidents_Pagination(t *testing.T) {
 	}
 }
 
+// TestIncidents_NewestFirst tests that incidents are ordered by received_at DESC
+// (most recent failure first). This is a mutation self-check: if the subquery
+// wrapper were removed and DISTINCT ON ordering leaked through, this test would fail.
+func TestIncidents_NewestFirst(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+	a, pool, _ := newTestAPIWithDB(t)
+	defer pool.Close()
+	seedTestIngestKey(t, pool)
+
+	// Ingest 3 failed sessions with known time ordering.
+	var sessionIDs []string
+	for i := 0; i < 3; i++ {
+		sid := uuid.NewString()
+		sessionIDs = append(sessionIDs, sid)
+		startJSON := validWorkEventJSON(uuid.NewString())
+		startReq := map[string]interface{}{}
+		json.Unmarshal([]byte(startJSON), &startReq)
+		startReq["session_id"] = sid
+
+		failBody := failedSessionWorkEvent(uuid.NewString(), sid)
+		failReq := map[string]interface{}{}
+		json.Unmarshal([]byte(failBody), &failReq)
+		failReq["session_id"] = sid
+
+		ingestWorkEvent(t, a, string(startJSON))
+		ingestWorkEvent(t, a, string(failBody))
+	}
+
+	req := httptest.NewRequest("GET", "/?tenant=personal&limit=10", nil)
+	rec := httptest.NewRecorder()
+	a.IncidentRoutes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp IncidentsResponse
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if len(resp.Incidents) < 2 {
+		t.Fatalf("expected at least 2 incidents for ordering check, got %d", len(resp.Incidents))
+	}
+
+	// Verify each incident is more recent than the next.
+	for i := 0; i < len(resp.Incidents)-1; i++ {
+		a := resp.Incidents[i].ReceivedAt
+		b := resp.Incidents[i+1].ReceivedAt
+		if a.Before(b) {
+			t.Errorf("incident %d (received_at=%v) should be >= incident %d (received_at=%v); ordering is wrong",
+				i, a, i+1, b)
+		}
+	}
+}
+
 // TestIncidents_ResponseShape tests the response JSON structure is correct.
 func TestIncidents_ResponseShape(t *testing.T) {
 	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
@@ -348,6 +409,7 @@ func TestIncidents_ResponseShape(t *testing.T) {
 	}
 	a, pool, _ := newTestAPIWithDB(t)
 	defer pool.Close()
+	seedTestIngestKey(t, pool)
 
 	req := httptest.NewRequest("GET", "/?tenant=personal", nil)
 	rec := httptest.NewRecorder()
@@ -383,6 +445,7 @@ func TestIncidents_AllTenantsFilter(t *testing.T) {
 	}
 	a, pool, _ := newTestAPIWithDB(t)
 	defer pool.Close()
+	seedTestIngestKey(t, pool)
 
 	// Ingest a failed session for personal
 	personalSID := uuid.NewString()
@@ -434,6 +497,7 @@ func TestIncidents_ClampAbsurdLimit(t *testing.T) {
 	}
 	a, pool, _ := newTestAPIWithDB(t)
 	defer pool.Close()
+	seedTestIngestKey(t, pool)
 
 	// Request with absurd limit
 	req := httptest.NewRequest("GET", "/?tenant=personal&limit=999999999", nil)

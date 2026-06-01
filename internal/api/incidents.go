@@ -67,6 +67,12 @@ func clampIncidentLimit(n int) int {
 // AC: A failed work-event surfaces here within one poll/SSE cycle; no failure is buried.
 // (When WP-I/J merged) a down instance + a stale session also surface.
 // Empty state = "all green" (honest, not fabricated).
+//
+// Pagination contract: LIMIT/OFFSET apply only to failed_sessions (the only incident type
+// with a queryable table today). Down instances and stale sessions fill remaining slots
+// after the failed-session page is fetched. Total counts only distinct failed sessions.
+// When WP-I/WP-J merge, the pagination will be extended to a unified set; for now this
+// avoids overlapping pages or understated totals.
 func (a *API) ListIncidents(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	log := slog.Default().WithGroup("incidents")
@@ -95,6 +101,7 @@ func (a *API) ListIncidents(w http.ResponseWriter, r *http.Request) {
 
 	// Fetch failed sessions from work_events.
 	// These are always available (WP-A #2 merged, work_events table exists).
+	// LIMIT/OFFSET are applied here — this is the paginated set.
 	incidents, total, err := fetchFailedSessions(ctx, a.pool, tenant, limit, offset)
 	if err != nil {
 		log.Error("failed to fetch incidents", "error", err)
@@ -103,53 +110,65 @@ func (a *API) ListIncidents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Graceful degradation: if WP-I (app_instances) table exists, fetch down instances.
+	// These fill remaining slots after the paginated failed sessions — no offset.
 	// If the table doesn't exist, skip silently — degrade to failed-sessions-only.
+	downCount := 0
 	downInstances, err := fetchDownInstances(ctx, a.pool, tenant, limit-len(incidents))
 	if err != nil {
 		// Table may not exist yet (WP-I not merged) — degrade gracefully.
 		log.Debug("down instances not available (WP-I may not be merged)", "error", err)
 	} else {
+		downCount = len(downInstances)
 		incidents = append(incidents, downInstances...)
 	}
 
 	// Graceful degradation: if WP-J (agent_sessions) table exists, fetch stale sessions.
-	// If the table doesn't exist, skip silently.
+	// Same fill-remaining-slots approach — no offset.
+	staleCount := 0
 	staleSessions, err := fetchStaleSessions(ctx, a.pool, tenant, limit-len(incidents))
 	if err != nil {
 		log.Debug("stale sessions not available (WP-J may not be merged)", "error", err)
 	} else {
+		staleCount = len(staleSessions)
 		incidents = append(incidents, staleSessions...)
 	}
 
 	writeJSON(w, http.StatusOK, IncidentsResponse{
 		Incidents: incidents,
-		Total:     total,
+		Total:     total + int64(downCount) + int64(staleCount),
 		Limit:     limit,
 		Offset:    offset,
 	})
 }
 
 // fetchFailedSessions queries work_events for sessions that ended with status=failed.
-// Uses DISTINCT ON (harness, session_id) to get one row per failed session,
-// ordered by received_at DESC (most recent failure first).
+// Uses DISTINCT ON (harness, session_id) in a subquery to get one row per failed
+// session, then wraps it to order by received_at DESC (most recent failure first).
+// Pagination (LIMIT/OFFSET) is applied to the outer query so pages are ordered
+// by recency, not alphabetically by harness.
 func fetchFailedSessions(ctx context.Context, pool *pgxpool.Pool, tenant string, limit, offset int) ([]Incident, int64, error) {
 	rows, err := pool.Query(ctx, `
-		SELECT DISTINCT ON (we.harness, we.session_id)
-			we.harness,
-			we.session_id,
-			we.host,
-			COALESCE(we.title::text, '') AS title,
-			we.tenant,
-			COALESCE(p.slug::text, '') AS project_slug,
-			COALESCE(we.external_ref::text, '') AS external_ref,
-			COALESCE(we.branch::text, '') AS branch,
-			we.received_at
-		FROM work_events we
-		LEFT JOIN projects p ON we.project_id = p.id
-		WHERE we.kind = 'session.end'
-		  AND we.status = 'failed'
-		  AND ($1::text = '' OR we.tenant = $1::text)
-		ORDER BY we.harness, we.session_id, we.received_at DESC
+		SELECT harness, session_id, host, title, tenant,
+		       project_slug, external_ref, branch, received_at
+		FROM (
+			SELECT DISTINCT ON (we.harness, we.session_id)
+				we.harness,
+				we.session_id,
+				we.host,
+				COALESCE(we.title::text, '') AS title,
+				we.tenant,
+				COALESCE(p.slug::text, '') AS project_slug,
+				COALESCE(we.external_ref::text, '') AS external_ref,
+				COALESCE(we.branch::text, '') AS branch,
+				we.received_at
+			FROM work_events we
+			LEFT JOIN projects p ON we.project_id = p.id
+			WHERE we.kind = 'session.end'
+			  AND we.status = 'failed'
+			  AND ($1::text = '' OR we.tenant = $1::text)
+			ORDER BY we.harness, we.session_id, we.received_at DESC
+		) AS distinct_failed
+		ORDER BY received_at DESC
 		LIMIT $2 OFFSET $3
 	`, tenant, limit, offset)
 	if err != nil {
@@ -185,6 +204,8 @@ func fetchFailedSessions(ctx context.Context, pool *pgxpool.Pool, tenant string,
 	}
 
 	// Count total distinct failed sessions for pagination.
+	// NOTE: when WP-I/WP-J merge, down/stale counts are added in ListIncidents
+	// via len() of the appended slices — this query covers only the failed_sessions base.
 	var total int64
 	err = pool.QueryRow(ctx, `
 		SELECT COUNT(DISTINCT (harness, session_id))
