@@ -23,17 +23,15 @@ type Querier interface {
 	// event per (harness, session_id) before rolling up, so a session that emits
 	// start=$0.05 then end=$0.07 contributes $0.07, not $0.12.
 	AggregateSpend(ctx context.Context, arg AggregateSpendParams) ([]AggregateSpendRow, error)
+	ClaimNextWorkUnit(ctx context.Context) (WorkUnit, error)
 	CleanStaleDelegations(ctx context.Context) error
+	CompleteWorkUnit(ctx context.Context, id int64) (WorkUnit, error)
 	// Count active (non-revoked) keys for a tenant.
 	CountActiveIngestKeys(ctx context.Context, tenant string) (int64, error)
 	// Counts app instances matching the tenant filter (for pagination total).
 	CountAppInstances(ctx context.Context, tenant string) (int64, error)
 	CountArtifacts(ctx context.Context, dollar_1 string) (int64, error)
 	CountDelegations(ctx context.Context, arg CountDelegationsParams) (int64, error)
-	// Returns total count of distinct (harness, session_id) matching the tenant filter.
-	CountEmitterHealthSessions(ctx context.Context, tenant string) (int64, error)
-	// Counts liveness records matching the tenant filter.
-	CountHostLiveness(ctx context.Context, tenant string) (int64, error)
 	// Counts distinct (harness, session_id) pairs that have at least one
 	// session lifecycle event for a given tenant.
 	CountSessions(ctx context.Context, tenant string) (int64, error)
@@ -77,47 +75,21 @@ type Querier interface {
 	DeleteSkill(ctx context.Context, id pgtype.UUID) error
 	DeleteTask(ctx context.Context, id pgtype.UUID) error
 	DeleteWorkflow(ctx context.Context, id pgtype.UUID) error
+	EnqueueWorkUnit(ctx context.Context, arg EnqueueWorkUnitParams) (WorkUnit, error)
 	EnsureAgent(ctx context.Context, arg EnsureAgentParams) (Agent, error)
 	// Idempotent resolution used by the ingest project resolver (contract §1).
 	EnsureProjectBySlug(ctx context.Context, arg EnsureProjectBySlugParams) (Project, error)
+	FailWorkUnit(ctx context.Context, arg FailWorkUnitParams) (WorkUnit, error)
 	GetAgent(ctx context.Context, id pgtype.UUID) (Agent, error)
 	GetAgentByName(ctx context.Context, name string) (Agent, error)
 	// Fetches a single app instance by ID.
 	GetAppInstance(ctx context.Context, id pgtype.UUID) (AppInstance, error)
 	GetArtifact(ctx context.Context, id pgtype.UUID) (Artifact, error)
 	GetArtifactByPath(ctx context.Context, filePath pgtype.Text) (Artifact, error)
-	// Returns the latest host-liveness alive status for a bounded session.
-	// Joins the session's (host, pid) from work_events (kind=session.start) with
-	// host_liveness to get the latest alive report. COALESCE(NULL, false) means
-	// "no reporter proof → not alive" (contract §4: never running without proof).
-	//
-	// Derivation rule (consumed by deriveBoundedStatus in session_liveness.go):
-	//   alive=true  → session is running (positive proof from host reporter)
-	//   alive=false → session is stale (process killed/crashed)
-	//   no row      → no reporter proof → stale (NEVER running without proof)
-	//
-	// NOTE: seen_at freshness — the reporter only POSTs alive=true on first-seen
-	// and cwd-change. Long-running processes do NOT re-POST alive=true. The
-	// derivation must account for this (see session_liveness.go BoundedMaxAge
-	// backstop and the proposed seen_at TTL in the PR-body wiring diff).
-	GetBoundedSessionHostLiveness(ctx context.Context, arg GetBoundedSessionHostLivenessParams) (bool, error)
+	GetControlState(ctx context.Context) (ControlState, error)
 	GetConversation(ctx context.Context, id pgtype.UUID) (Conversation, error)
 	GetDelegation(ctx context.Context, id pgtype.UUID) (Delegation, error)
-	// Returns per-session liveness state derived from work_events.
-	// Pure read — no migration needed (WP-M).
-	// Computes liveness as a PURE FUNCTION of (persisted events, server clock now).
-	// Contract §4: running requires positive proof (heartbeat within timeout);
-	// absence of proof ⇒ stale, never "running" (ADR-001 F10 / ADR-003 D3).
-	// Terminal (session.end) is absorbing: once seen, later non-terminal events are
-	// ignored for liveness purposes.
-	// @stale_window: supervised sessions with no heartbeat in this window are stale.
-	//   Default = 5 minutes (contract §4).
-	// @tenant: required — scopes to one tenant (handler rejects empty).
-	GetEmitterHealth(ctx context.Context, arg GetEmitterHealthParams) ([]GetEmitterHealthRow, error)
 	GetGoal(ctx context.Context, id pgtype.UUID) (Goal, error)
-	// Fetches a single host-liveness row by (host, pid).
-	// Optional tenant filter: returns rows only for matching tenant (or all if empty).
-	GetHostLiveness(ctx context.Context, arg GetHostLivenessParams) (HostLiveness, error)
 	// Look up a (non-revoked) ingest key by its SHA-256 hash.
 	// Returns NULL (pgx.ErrNoRows) if not found or revoked.
 	GetIngestKeyByHash(ctx context.Context, keyHash string) (IngestKey, error)
@@ -176,13 +148,11 @@ type Querier interface {
 	ListConversations(ctx context.Context, dollar_1 pgtype.UUID) ([]Conversation, error)
 	ListDelegations(ctx context.Context, arg ListDelegationsParams) ([]Delegation, error)
 	ListGoals(ctx context.Context) ([]Goal, error)
-	// Lists all liveness records for a tenant, ordered by seen_at DESC.
-	// Returns all if tenant is empty.
-	ListHostLiveness(ctx context.Context, arg ListHostLivenessParams) ([]HostLiveness, error)
 	// List all (including revoked) keys for a tenant, newest first.
 	ListIngestKeysByTenant(ctx context.Context, tenant string) ([]IngestKey, error)
 	ListMemoryIndex(ctx context.Context) ([]MemoryIndex, error)
 	ListMessages(ctx context.Context, conversationID pgtype.UUID) ([]Message, error)
+	ListOrchestratorWorkUnits(ctx context.Context) ([]WorkUnit, error)
 	ListPipelineItems(ctx context.Context, arg ListPipelineItemsParams) ([]PipelineItem, error)
 	ListProjects(ctx context.Context) ([]Project, error)
 	ListSkillSummaries(ctx context.Context) ([]ListSkillSummariesRow, error)
@@ -218,6 +188,7 @@ type Querier interface {
 	// Revoke an ingest key by setting revoked_at to now.
 	RevokeIngestKey(ctx context.Context, id int64) error
 	SearchMemory(ctx context.Context, arg SearchMemoryParams) ([]MemoryIndex, error)
+	SetControlMode(ctx context.Context, mode ControlMode) (ControlState, error)
 	UpdateAgent(ctx context.Context, arg UpdateAgentParams) (Agent, error)
 	UpdateAgentConfig(ctx context.Context, arg UpdateAgentConfigParams) (Agent, error)
 	UpdateAgentStatus(ctx context.Context, arg UpdateAgentStatusParams) (Agent, error)
@@ -246,10 +217,6 @@ type Querier interface {
 	// Creates the instance if not known, or updates session/branch/sha.
 	// Status is set to 'unknown' only on creation (needs a real probe to go 'up').
 	UpsertAppInstanceOnServerStarted(ctx context.Context, arg UpsertAppInstanceOnServerStartedParams) (AppInstance, error)
-	// Upserts a host-liveness report keyed on (host, pid).
-	// This is the liveness *feed* (WP-N); session-state derivation is a
-	// separate consumer concern (WP-J / follow-on WPs).
-	UpsertHostLiveness(ctx context.Context, arg UpsertHostLivenessParams) (HostLiveness, error)
 	UpsertMemory(ctx context.Context, arg UpsertMemoryParams) (MemoryIndex, error)
 	UpsertSkill(ctx context.Context, arg UpsertSkillParams) (Skill, error)
 	// Upsert a tracker item on (project_id, external_ref). Updates title/status/type/url/payload and bumps synced_at.

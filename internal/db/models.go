@@ -5,8 +5,98 @@
 package db
 
 import (
+	"database/sql/driver"
+	"fmt"
+
 	"github.com/jackc/pgx/v5/pgtype"
 )
+
+type ControlMode string
+
+const (
+	ControlModeContinuous ControlMode = "continuous"
+	ControlModeTick       ControlMode = "tick"
+	ControlModeStopped    ControlMode = "stopped"
+)
+
+func (e *ControlMode) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = ControlMode(s)
+	case string:
+		*e = ControlMode(s)
+	default:
+		return fmt.Errorf("unsupported scan type for ControlMode: %T", src)
+	}
+	return nil
+}
+
+type NullControlMode struct {
+	ControlMode ControlMode `json:"control_mode"`
+	Valid       bool        `json:"valid"` // Valid is true if ControlMode is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullControlMode) Scan(value interface{}) error {
+	if value == nil {
+		ns.ControlMode, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.ControlMode.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullControlMode) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.ControlMode), nil
+}
+
+type WorkUnitStatus string
+
+const (
+	WorkUnitStatusQueued   WorkUnitStatus = "queued"
+	WorkUnitStatusInFlight WorkUnitStatus = "in_flight"
+	WorkUnitStatusDone     WorkUnitStatus = "done"
+	WorkUnitStatusFailed   WorkUnitStatus = "failed"
+)
+
+func (e *WorkUnitStatus) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = WorkUnitStatus(s)
+	case string:
+		*e = WorkUnitStatus(s)
+	default:
+		return fmt.Errorf("unsupported scan type for WorkUnitStatus: %T", src)
+	}
+	return nil
+}
+
+type NullWorkUnitStatus struct {
+	WorkUnitStatus WorkUnitStatus `json:"work_unit_status"`
+	Valid          bool           `json:"valid"` // Valid is true if WorkUnitStatus is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullWorkUnitStatus) Scan(value interface{}) error {
+	if value == nil {
+		ns.WorkUnitStatus, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.WorkUnitStatus.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullWorkUnitStatus) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.WorkUnitStatus), nil
+}
 
 type Agent struct {
 	ID           pgtype.UUID        `json:"id"`
@@ -54,6 +144,12 @@ type Artifact struct {
 	MimeType    pgtype.Text        `json:"mime_type"`
 	Metadata    []byte             `json:"metadata"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+type ControlState struct {
+	Mode           ControlMode        `json:"mode"`
+	CadenceSeconds int32              `json:"cadence_seconds"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }
 
 type Conversation struct {
@@ -215,6 +311,17 @@ type WorkEvent struct {
 	Payload       []byte             `json:"payload"`
 	Ts            pgtype.Timestamptz `json:"ts"`
 	ReceivedAt    pgtype.Timestamptz `json:"received_at"`
+}
+
+type WorkUnit struct {
+	ID          int64              `json:"id"`
+	WpRef       string             `json:"wp_ref"`
+	Status      WorkUnitStatus     `json:"status"`
+	Payload     []byte             `json:"payload"`
+	ClaimedAt   pgtype.Timestamptz `json:"claimed_at"`
+	CompletedAt pgtype.Timestamptz `json:"completed_at"`
+	Error       pgtype.Text        `json:"error"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
 type Workflow struct {
