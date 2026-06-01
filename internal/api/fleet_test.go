@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 	"time"
 
@@ -45,8 +44,6 @@ func TestHTTPFleet_EmptyFleet_ReturnsEmpty(t *testing.T) {
 	a, pool, _ := newTestAPIWithDB(t)
 	defer pool.Close()
 	seedTestIngestKey(t, pool)
-	// fleet_test helper: set pool on API so route handlers can use it.
-	a.pool = pool
 
 	tenant := "fleet-empty-" + uuid.NewString()[:8]
 	req := httptest.NewRequest("GET", "/?tenant="+tenant, nil)
@@ -75,7 +72,6 @@ func TestHTTPFleet_SupervisedRunning_Returns200(t *testing.T) {
 	a, pool, _ := newTestAPIWithDB(t)
 	defer pool.Close()
 	seedTestIngestKey(t, pool)
-	a.pool = pool
 
 	sessionID := "fleet-ht-" + uuid.NewString()[:8]
 	seedSessionStart(t, pool, sessionID, "supervised", time.Now().UTC().Add(-30*time.Second))
@@ -116,7 +112,6 @@ func TestHTTPFleet_StaleSupervisor_ReturnsStale(t *testing.T) {
 	a, pool, _ := newTestAPIWithDB(t)
 	defer pool.Close()
 	seedTestIngestKey(t, pool)
-	a.pool = pool
 
 	sessionID := "fleet-stale-ht-" + uuid.NewString()[:8]
 	// Session started 10 minutes ago, no heartbeat since → stale.
@@ -151,7 +146,6 @@ func TestHTTPFleet_TerminalDone(t *testing.T) {
 	a, pool, _ := newTestAPIWithDB(t)
 	defer pool.Close()
 	seedTestIngestKey(t, pool)
-	a.pool = pool
 
 	sessionID := "fleet-done-ht-" + uuid.NewString()[:8]
 	seedSessionStart(t, pool, sessionID, "supervised", time.Now().UTC().Add(-2*time.Minute))
@@ -186,7 +180,6 @@ func TestHTTPFleet_TenantIsolation(t *testing.T) {
 	a, pool, _ := newTestAPIWithDB(t)
 	defer pool.Close()
 	seedTestIngestKey(t, pool)
-	a.pool = pool
 
 	dayjobSession := "fleet-dayjob-ht-" + uuid.NewString()[:8]
 	seedSessionStartTenant(t, pool, dayjobSession, "supervised", "dayjob",
@@ -221,7 +214,6 @@ func TestHTTPFleet_CrossTenantAbsorptionRegression(t *testing.T) {
 	a, pool, _ := newTestAPIWithDB(t)
 	defer pool.Close()
 	seedTestIngestKey(t, pool)
-	a.pool = pool
 
 	// Use the SAME harness + session_id under two different tenants.
 	sharedSessionID := "fleet-cross-" + uuid.NewString()[:8]
@@ -266,24 +258,35 @@ func TestHTTPFleet_CrossTenantAbsorptionRegression(t *testing.T) {
 	}
 }
 
-// TestHTTPFleet_BoundedBackstop_500OnDBError proves:
+// TestHTTPFleet_DerivationError_PropagatesTo500 proves:
 // A derivation DB error propagates to 500, not silently swallowed to 200.
 // Regression for finding #2 (errors must propagate, never swallowed to sentinel/200).
-func TestHTTPFleet_BoundedBackstop_500OnDBError(t *testing.T) {
-	// This test verifies that if derivation returns an error, GetFleet
-	// propagates it → the handler returns 500.
-	// We don't need to corrupt the DB; we just verify the error path exists
-	// by checking that a malformed tenant still goes through derivation correctly.
-	// The real proof is in the code: deriveSessionStatus returns (SessionStatus, error),
-	// and GetFleet propagates derivation errors. This route test confirms the
-	// handler catches the propagated error and returns 500.
-	//
-	// To actually force a derivation error, we'd need to make the DB fail mid-query
-	// which isn't feasible in a deterministic test. Instead, we verify via
-	// code inspection that the error path is exercised. The service-level tests
-	// in session_liveness_test.go cover the error propagation contract.
-	t.Skip("derivation error path verified by code inspection + service tests; " +
-		"forcing a mid-query DB failure is non-deterministic")
+// Uses a closed pool to force a real DB connection error during derivation.
+func TestHTTPFleet_DerivationError_PropagatesTo500(t *testing.T) {
+	a, pool, _ := newTestAPIWithDB(t)
+	seedTestIngestKey(t, pool)
+
+	// Seed a supervised session so querySessions returns rows,
+	// but derivation sub-queries hit the closed pool → error → 500.
+	sessionID := "fleet-err-500-" + uuid.NewString()[:8]
+	seedSessionStart(t, pool, sessionID, "supervised", time.Now().UTC().Add(-30*time.Second))
+	t.Cleanup(func() {
+		// Use a fresh pool for cleanup since the test pool is closed.
+		cleanPool := getTestDB(t)
+		defer cleanPool.Close()
+		cleanPool.Exec(t.Context(), "DELETE FROM work_events WHERE session_id = $1", sessionID)
+	})
+
+	// Close the pool to force DB errors during derivation.
+	pool.Close()
+
+	req := httptest.NewRequest("GET", "/?tenant=personal", nil)
+	rec := httptest.NewRecorder()
+	a.FleetRoutes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 on derivation DB error, got %d; body: %s", rec.Code, rec.Body.String())
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -360,20 +363,4 @@ func findSession(fleet service.FleetResponse, sessionID string) *service.Session
 		}
 	}
 	return nil
-}
-
-// getTestDBNoSkip returns a pool or panics (used in test helpers).
-func getTestDBNoSkip(t *testing.T) *pgxpool.Pool {
-	t.Helper()
-	dsn := os.Getenv("AOS_TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("AOS_TEST_DATABASE_URL not set")
-	}
-	ctx, cancel := t.Context(), func() {}
-	_ = cancel
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Fatalf("failed to connect: %v", err)
-	}
-	return pool
 }
