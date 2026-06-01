@@ -781,6 +781,162 @@ func TestHTTPEmitterHealth_SupervisedNoteAsLatestRow_Stale(t *testing.T) {
 	}
 }
 
+// TestHTTPEmitterHealth_ReceivedAtVsTs_FreshServerOldEmitter proves:
+// received_at is the SOLE liveness clock — even when ts (emitter-supplied, spoofable)
+// is fresh, an old received_at (server-authoritative) still yields "stale".
+// Mutation self-check: swap received_at→ts in the query and this test goes RED.
+func TestHTTPEmitterHealth_ReceivedAtVsTs_FreshServerOldEmitter(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+	tenant := emitterTestTenant(t, "ts-diff-stale")
+	a, pool, _ := newTestAPIWithDB(t)
+	defer pool.Close()
+
+	now := time.Now().UTC()
+	sessID := uuid.NewString()
+	ctx := t.Context()
+
+	// session.start: ts=now-30s (emitter claims recent), received_at=now-10m (server says old)
+	eid1 := uuid.New()
+	_, err := pool.Exec(ctx,
+		`INSERT INTO work_events (event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, tenant, ts, received_at)
+		 VALUES ($1, 'agentos.work_event/v1', 'claude', $2, 'testhost-claude', 12345, 'session.start', 'running', 'supervised', $3, $4, $5)`,
+		eid1, sessID, tenant, now.Add(-30*time.Second), now.Add(-10*time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("seed start: %v", err)
+	}
+
+	req := newTestGET("/?tenant=" + tenant + "&stale_window=5m")
+	rec := httptest.NewRecorder()
+	a.EmitterRoutes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp service.EmitterHealthResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	found := false
+	for _, e := range resp.Emitters {
+		if e.SessionID == sessID {
+			found = true
+			if e.Status != service.EmitterStatusStale {
+				t.Fatalf("RECEIVED_AT INVARIANT: session with old received_at but fresh ts must be 'stale' (server clock drives liveness, not emitter-supplied ts), got %q", e.Status)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("session %s not found in response", sessID)
+	}
+}
+
+// TestHTTPEmitterHealth_ReceivedAtVsTs_OldServerFreshEmitter proves:
+// received_at is the SOLE liveness clock — even when ts (emitter-supplied) is stale,
+// a fresh received_at (server-authoritative) still yields "running".
+// Mutation self-check: swap received_at→ts in the query and this test goes RED.
+func TestHTTPEmitterHealth_ReceivedAtVsTs_OldServerFreshEmitter(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+	tenant := emitterTestTenant(t, "ts-diff-running")
+	a, pool, _ := newTestAPIWithDB(t)
+	defer pool.Close()
+
+	now := time.Now().UTC()
+	sessID := uuid.NewString()
+	ctx := t.Context()
+
+	// session.start: ts=now-10m (emitter claims old), received_at=now-30s (server says recent)
+	eid1 := uuid.New()
+	_, err := pool.Exec(ctx,
+		`INSERT INTO work_events (event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, tenant, ts, received_at)
+		 VALUES ($1, 'agentos.work_event/v1', 'claude', $2, 'testhost-claude', 12345, 'session.start', 'running', 'supervised', $3, $4, $5)`,
+		eid1, sessID, tenant, now.Add(-10*time.Minute), now.Add(-30*time.Second),
+	)
+	if err != nil {
+		t.Fatalf("seed start: %v", err)
+	}
+
+	req := newTestGET("/?tenant=" + tenant + "&stale_window=5m")
+	rec := httptest.NewRecorder()
+	a.EmitterRoutes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp service.EmitterHealthResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	found := false
+	for _, e := range resp.Emitters {
+		if e.SessionID == sessID {
+			found = true
+			if e.Status != service.EmitterStatusRunning {
+				t.Fatalf("RECEIVED_AT INVARIANT: session with fresh received_at but old ts must be 'running' (server clock drives liveness), got %q", e.Status)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("session %s not found in response", sessID)
+	}
+}
+
+// TestHTTPEmitterHealth_StaleWindow_TooSmall proves:
+// stale_window < 1s returns 400.
+func TestHTTPEmitterHealth_StaleWindow_TooSmall(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+	a, pool, _ := newTestAPIWithDB(t)
+	defer pool.Close()
+
+	tenant := emitterTestTenant(t, "sw-small")
+	req := newTestGET("/?tenant=" + tenant + "&stale_window=500ms")
+	rec := httptest.NewRecorder()
+	a.EmitterRoutes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for stale_window < 1s, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]string
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if !strings.Contains(resp["error"], "at least 1 second") {
+		t.Fatalf("expected 'at least 1 second' error, got: %s", resp["error"])
+	}
+}
+
+// TestHTTPEmitterHealth_StaleWindow_TooLarge proves:
+// stale_window > 24h returns 400.
+func TestHTTPEmitterHealth_StaleWindow_TooLarge(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+	a, pool, _ := newTestAPIWithDB(t)
+	defer pool.Close()
+
+	tenant := emitterTestTenant(t, "sw-large")
+	req := newTestGET("/?tenant=" + tenant + "&stale_window=48h")
+	rec := httptest.NewRecorder()
+	a.EmitterRoutes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for stale_window > 24h, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]string
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if !strings.Contains(resp["error"], "at most 24 hours") {
+		t.Fatalf("expected 'at most 24 hours' error, got: %s", resp["error"])
+	}
+}
+
 // TestHTTPEmitterHealth_ResponseShape proves the response JSON shape.
 func TestHTTPEmitterHealth_ResponseShape(t *testing.T) {
 	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {

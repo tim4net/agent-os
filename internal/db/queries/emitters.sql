@@ -8,7 +8,7 @@
 -- ignored for liveness purposes.
 -- @stale_window: supervised sessions with no heartbeat in this window are stale.
 --   Default = 5 minutes (contract §4).
--- @tenant: empty string returns all tenants; otherwise scopes to one.
+-- @tenant: required — scopes to one tenant (handler rejects empty).
 WITH session_agg AS (
     -- For each (harness, session_id), compute the session-level state.
     -- IMPORTANT: liveness_mode and host are aggregated per session from
@@ -54,7 +54,7 @@ WITH session_agg AS (
         ) OVER (PARTITION BY harness, session_id)
             AS session_host
     FROM work_events
-    WHERE (sqlc.arg('tenant')::text = '' OR tenant = sqlc.arg('tenant')::text)
+    WHERE tenant = sqlc.arg('tenant')::text
     ORDER BY harness, session_id, received_at DESC
 ),
 deduped AS (
@@ -116,4 +116,4 @@ LIMIT sqlc.arg('lim')::int OFFSET sqlc.arg('off')::int;
 -- Returns total count of distinct (harness, session_id) matching the tenant filter.
 SELECT COUNT(DISTINCT (harness, session_id))::bigint AS total
 FROM work_events
-WHERE (sqlc.arg('tenant')::text = '' OR tenant = sqlc.arg('tenant')::text);
+WHERE tenant = sqlc.arg('tenant')::text;

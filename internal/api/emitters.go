@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5"
 
 	"github.com/tim4net/agent-os/internal/service"
 )
@@ -35,7 +34,7 @@ func (a *API) EmitterRoutes() http.Handler {
 
 // emitterHealthQuery is the SQL for computing emitter liveness.
 // Hand-written (sqlc compile-checked in queries/emitters.sql).
-// Executed via raw pgx since generated *.sql.go is not committed (Lead runs codegen).
+// Executed via raw pgx pool.Query (no generated *.sql.go committed — Lead runs codegen).
 //
 // Liveness derivation uses per-session aggregation (not the latest row):
 //   session_mode = MAX(liveness_mode) FILTER (WHERE kind IN ('session.start','session.heartbeat'))
@@ -75,7 +74,7 @@ WITH session_agg AS (
         ) OVER (PARTITION BY harness, session_id)
             AS session_host
     FROM work_events
-    WHERE ($1::text = '' OR tenant = $1::text)
+    WHERE tenant = $1::text
     ORDER BY harness, session_id, received_at DESC
 ),
 deduped AS (
@@ -131,7 +130,7 @@ LIMIT $3::int OFFSET $4::int
 const countEmitterHealthQuery = `
 SELECT COUNT(DISTINCT (harness, session_id))::bigint AS total
 FROM work_events
-WHERE ($1::text = '' OR tenant = $1::text)
+WHERE tenant = $1::text
 `
 
 // ListEmitterHealth handles GET /api/emitters?tenant=...&stale_window=5m&limit=50&offset=0
@@ -228,15 +227,12 @@ func (a *API) ListEmitterHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get total count
+	// Get total count (COUNT always returns a row, never ErrNoRows)
 	var total int64
 	if err := a.pool.QueryRow(ctx, countEmitterHealthQuery, tenant).Scan(&total); err != nil {
-		if err != pgx.ErrNoRows {
-			slog.Default().Error("emitters: count failed", "error", err)
-			writeError(w, http.StatusInternalServerError, "failed to count emitter sessions")
-			return
-		}
-		total = 0
+		slog.Default().Error("emitters: count failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to count emitter sessions")
+		return
 	}
 
 	if emitters == nil {
