@@ -43,6 +43,14 @@ STEP 3 — IMPLEMENT (in a local worktree you own — create it off fresh `main`
   - `git -C "$AOS_WT/wp-<x>" config user.name tim4net`
   - `git -C "$AOS_WT/wp-<x>" config user.email "235552675+tim4net@users.noreply.github.com"`
   - Edit ONLY the files under the issue's "Owned files". Touch nothing else.
+  - SURGICAL DIFF (promoted from the surgical-diff-discipline rule): even within your owned
+    files, every changed line must trace to an AC of this WP or to a named correctness/security
+    reason. NO drive-by edits — no reformatting, renames, comment rewrites, import reordering, or
+    "while I'm here" cleanup that the AC doesn't require. "Smallest diff" means scoped to the root
+    cause, NOT fewest lines: a larger change is fine when correctness demands it — but say why in
+    the PR body. If you spot unrelated dead code or an adjacent improvement, NOTE it in the PR body
+    (or file an issue) — do not change it. Mixing orthogonal cleanup into a WP diff is a Gate-2
+    `scope-creep` FAIL.
   - For anything under "Off-limits" (router.go, config.go, cmd/*, App.tsx, client.ts,
     sqlc.yaml): do NOT edit — instead write the proposed change as a diff in your PR body.
   - CODEGEN RULE: hand-write only `internal/db/queries/<wp>.sql`. You MAY run
