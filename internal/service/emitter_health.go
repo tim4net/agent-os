@@ -9,10 +9,10 @@ import (
 type EmitterStatus string
 
 const (
-	EmitterStatusRunning EmitterStatus = "running"
-	EmitterStatusStale   EmitterStatus = "stale"
-	EmitterStatusDone    EmitterStatus = "done"
-	EmitterStatusFailed  EmitterStatus = "failed"
+	EmitterStatusRunning   EmitterStatus = "running"
+	EmitterStatusStale     EmitterStatus = "stale"
+	EmitterStatusDone      EmitterStatus = "done"
+	EmitterStatusFailed    EmitterStatus = "failed"
 	EmitterStatusCancelled EmitterStatus = "cancelled"
 )
 

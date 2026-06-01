@@ -13,15 +13,15 @@ import (
 
 // EmitterHealthRow is the raw row returned by the emitter health SQL query.
 type EmitterHealthRow struct {
-	Harness              string     `json:"harness"`
-	SessionID            string     `json:"session_id"`
-	Host                 *string    `json:"host"`
-	LivenessMode         *string    `json:"liveness_mode"`
-	PID                  int        `json:"pid"`
-	Status               string     `json:"status"`
-	LastEventReceivedAt  *time.Time `json:"last_event_received_at"`
-	LastHeartbeat        *time.Time `json:"last_heartbeat"`
-	FirstSeen            *time.Time `json:"first_seen"`
+	Harness             string     `json:"harness"`
+	SessionID           string     `json:"session_id"`
+	Host                *string    `json:"host"`
+	LivenessMode        *string    `json:"liveness_mode"`
+	PID                 int        `json:"pid"`
+	Status              string     `json:"status"`
+	LastEventReceivedAt *time.Time `json:"last_event_received_at"`
+	LastHeartbeat       *time.Time `json:"last_heartbeat"`
+	FirstSeen           *time.Time `json:"first_seen"`
 }
 
 // EmitterRoutes returns a Chi router for emitter health endpoints (WP-M).
@@ -37,7 +37,9 @@ func (a *API) EmitterRoutes() http.Handler {
 // Executed via raw pgx pool.Query (no generated *.sql.go committed — Lead runs codegen).
 //
 // Liveness derivation uses per-session aggregation (not the latest row):
-//   session_mode = MAX(liveness_mode) FILTER (WHERE kind IN ('session.start','session.heartbeat'))
+//
+//	session_mode = MAX(liveness_mode) FILTER (WHERE kind IN ('session.start','session.heartbeat'))
+//
 // This ensures a note/artifact.created with NULL liveness_mode on the latest row
 // does not cause a live supervised emitter to be reported stale.
 const emitterHealthQuery = `
@@ -251,5 +253,3 @@ func (a *API) ListEmitterHealth(w http.ResponseWriter, r *http.Request) {
 		Offset:   offset,
 	})
 }
-
-

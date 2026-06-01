@@ -1000,10 +1000,11 @@ func TestHTTPEmitterHealth_EmptyResult(t *testing.T) {
 	}
 }
 
-// TestHTTPEmitterHealth_NullHostSession proves:
-// A session whose start/heartbeat rows have NULL host does not 500 (nullable-scan-crash
-// regression). The response should have host="" and the session should still be returned
-// with correct status derivation.
+// TestHTTPEmitterHealth_NullHostSession proves the nullable-scan-crash guard:
+// A session with ONLY non-start/non-heartbeat events (e.g. note, artifact.created)
+// has no rows matching the FILTER in session_host's aggregation, so session_host
+// is NULL. The query must not 500; the response should have host="" and the
+// correct status derivation.
 func TestHTTPEmitterHealth_NullHostSession(t *testing.T) {
 	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
 		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
@@ -1016,26 +1017,18 @@ func TestHTTPEmitterHealth_NullHostSession(t *testing.T) {
 	sessID := uuid.NewString()
 	ctx := t.Context()
 
-	// session.start with NULL host (per-session aggregation will yield NULL session_host)
-	eid1 := uuid.New()
+	// Seed a session with only a `note` event — no session.start or session.heartbeat.
+	// The host column is NOT NULL on the row, but the per-session FILTER
+	// (WHERE kind IN ('session.start','session.heartbeat')) matches zero rows,
+	// so session_host aggregates to NULL.
+	eid := uuid.New()
 	_, err := pool.Exec(ctx,
-		`INSERT INTO work_events (event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, tenant, ts, received_at)
-		 VALUES ($1, 'agentos.work_event/v1', 'claude', $2, NULL, 12345, 'session.start', 'running', 'supervised', $3, $4, $5)`,
-		eid1, sessID, tenant, now.Add(-1*time.Minute), now.Add(-1*time.Minute),
+		`INSERT INTO work_events (event_id, schema_version, harness, session_id, host, pid, kind, status, tenant, ts, received_at)
+		 VALUES ($1, 'agentos.work_event/v1', 'claude', $2, 'some-host', 12345, 'note', 'running', $3, $4, $5)`,
+		eid, sessID, tenant, now.Add(-30*time.Second), now.Add(-30*time.Second),
 	)
 	if err != nil {
-		t.Fatalf("seed start (null host): %v", err)
-	}
-
-	// session.heartbeat with NULL host (fresh within 5m window → running)
-	eid2 := uuid.New()
-	_, err = pool.Exec(ctx,
-		`INSERT INTO work_events (event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, tenant, ts, received_at)
-		 VALUES ($1, 'agentos.work_event/v1', 'claude', $2, NULL, 12345, 'session.heartbeat', 'running', 'supervised', $3, $4, $5)`,
-		eid2, sessID, tenant, now.Add(-30*time.Second), now.Add(-30*time.Second),
-	)
-	if err != nil {
-		t.Fatalf("seed heartbeat (null host): %v", err)
+		t.Fatalf("seed note event: %v", err)
 	}
 
 	req := newTestGET("/?tenant=" + tenant + "&stale_window=5m")
@@ -1043,7 +1036,7 @@ func TestHTTPEmitterHealth_NullHostSession(t *testing.T) {
 	a.EmitterRoutes().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200 for NULL-host session, got %d; body: %s", rec.Code, rec.Body.String())
+		t.Fatalf("expected 200 for NULL-session-host session, got %d; body: %s", rec.Code, rec.Body.String())
 	}
 
 	var resp service.EmitterHealthResponse
@@ -1055,13 +1048,13 @@ func TestHTTPEmitterHealth_NullHostSession(t *testing.T) {
 	for _, e := range resp.Emitters {
 		if e.SessionID == sessID {
 			found = true
-			// Must NOT crash — NULL host is safely defaulted to empty string.
+			// Must NOT crash — NULL session_host is safely defaulted to empty string.
 			if e.Host != "" {
-				t.Fatalf("expected host='' for NULL-host session, got %q", e.Host)
+				t.Fatalf("expected host='' for NULL-session-host, got %q", e.Host)
 			}
-			// Liveness derivation should still work — supervised + fresh heartbeat → running.
-			if e.Status != service.EmitterStatusRunning {
-				t.Fatalf("NULL-host session should still be 'running', got %q", e.Status)
+			// No liveness_mode either (same FILTER), so status should be stale.
+			if e.Status != service.EmitterStatusStale {
+				t.Fatalf("no-start/heartbeat session should be 'stale', got %q", e.Status)
 			}
 		}
 	}
