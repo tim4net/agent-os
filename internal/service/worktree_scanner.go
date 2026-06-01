@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strings"
 	"sync"
 )
@@ -77,7 +78,9 @@ func (s *WorktreeScanner) Scan(ctx context.Context) ([]WorktreeInfo, error) {
 		// Check if dirty
 		statusCmd := exec.CommandContext(ctx, "git", "-C", wt.Path, "status", "--porcelain")
 		statusOut, statusErr := statusCmd.Output()
-		if statusErr == nil && len(strings.TrimSpace(string(statusOut))) > 0 {
+		if statusErr != nil {
+			s.lastErr = fmt.Errorf("git status for %s: %w", wt.Path, statusErr)
+		} else if len(strings.TrimSpace(string(statusOut))) > 0 {
 			info.Dirty = true
 		}
 
@@ -121,14 +124,10 @@ func parseWorktreeList(output string) ([]Worktree, error) {
 					wt.HEAD = parts[0]
 				}
 			} else if strings.HasPrefix(line, "branch ") {
-				ref := strings.TrimPrefix(line, "branch ")
-				// refs/heads/<branch> → <branch>
-				if idx := strings.LastIndex(ref, "/"); idx >= 0 {
-					wt.Branch = ref[idx+1:]
-				} else {
-					wt.Branch = ref
+					ref := strings.TrimPrefix(line, "branch ")
+					// refs/heads/<branch> → <branch>
+					wt.Branch = strings.TrimPrefix(ref, "refs/heads/")
 				}
-			}
 		}
 		if wt.Path != "" {
 			// Default HEAD if not parsed
@@ -153,10 +152,7 @@ func detectDefaultBranch(ctx context.Context, gitDir string) string {
 	if err == nil {
 		ref := strings.TrimSpace(string(out))
 		// refs/remotes/origin/main → main
-		if idx := strings.LastIndex(ref, "/"); idx >= 0 {
-			return ref[idx+1:]
-		}
-		return ref
+		return strings.TrimPrefix(ref, "refs/remotes/origin/")
 	}
 
 	// Fallback: current branch of the repo
@@ -171,24 +167,13 @@ func detectDefaultBranch(ctx context.Context, gitDir string) string {
 
 // extractExternalRef attempts to extract a Shortcut-style external reference
 // (SC-<n>) from a branch name. Returns empty string if none found.
+// Uses regex anchored to segment boundary to avoid false-positives like
+// "misc-123" matching as "SC-123".
 func extractExternalRef(branch string) string {
-	// Match patterns like SC-12345 in branch names
-	lower := strings.ToLower(branch)
-	if idx := strings.Index(lower, "sc-"); idx >= 0 {
-		// Extract SC-<digits> from the branch
-		// Pattern: SC-<digits>, stopping at first non-digit character after SC-
-		remaining := branch[idx:]
-		end := 0
-		// Skip past "sc-" prefix (3 chars)
-		if len(remaining) >= 3 {
-			end = 3 // past "sc-"
-			for end < len(remaining) && remaining[end] >= '0' && remaining[end] <= '9' {
-				end++
-			}
-		}
-		if end > 3 { // Must have at least one digit after "SC-"
-			return remaining[:end]
-		}
+	re := regexp.MustCompile(`(?i)(?:^|[/_-])(SC-\d+)`)
+	m := re.FindStringSubmatch(branch)
+	if len(m) >= 2 {
+		return m[1]
 	}
 	return ""
 }

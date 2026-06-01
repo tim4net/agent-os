@@ -24,14 +24,18 @@ RETURNING *;
 
 -- name: GetHostLiveness :one
 -- Fetches a single host-liveness row by (host, pid).
+-- Optional tenant filter: returns rows only for matching tenant (or all if empty).
 SELECT * FROM host_liveness
-WHERE host = sqlc.arg('host') AND pid = sqlc.arg('pid');
+WHERE host = sqlc.arg('host') AND pid = sqlc.arg('pid')
+AND (sqlc.arg('tenant')::text = '' OR tenant = sqlc.arg('tenant')::text);
 
 -- name: GetHostLivenessBySession :one
 -- Fetches the liveness record for a bounded session by session_id.
+-- Optional tenant filter: returns rows only for matching tenant (or all if empty).
 -- Returns no rows if no reporter covers that session.
 SELECT * FROM host_liveness
-WHERE session_id = sqlc.arg('session_id') AND session_id != '';
+WHERE session_id = sqlc.arg('session_id') AND session_id != ''
+AND (sqlc.arg('tenant')::text = '' OR tenant = sqlc.arg('tenant')::text);
 
 -- name: ListHostLiveness :many
 -- Lists all liveness records for a tenant, ordered by seen_at DESC.
@@ -50,5 +54,7 @@ WHERE (sqlc.arg('tenant')::text = '' OR tenant = sqlc.arg('tenant')::text);
 -- name: ListAliveHostLiveness :many
 -- Lists only alive processes for a host. Used by the worktree scanner
 -- to correlate worktrees with running bounded processes.
+-- Optional tenant filter: returns rows only for matching tenant (or all if empty).
 SELECT * FROM host_liveness
-WHERE host = sqlc.arg('host') AND alive = TRUE;
+WHERE host = sqlc.arg('host') AND alive = TRUE
+AND (sqlc.arg('tenant')::text = '' OR tenant = sqlc.arg('tenant')::text);

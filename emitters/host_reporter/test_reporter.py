@@ -216,3 +216,53 @@ class TestHostReporter:
 
         # Should only have required fields
         assert set(received_body.keys()) == {"host", "pid", "alive"}
+
+    def test_gone_pid_crash_detection(self) -> None:
+        """When a previously-seen PID disappears, poll_once sends alive=false.
+
+        Simulates two poll cycles:
+          1. First poll discovers PID 123 → POST alive=true
+          2. Second poll discovers nothing → POST alive=false for PID 123
+        """
+        posts: list[dict[str, Any]] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            body = json.loads(request.content)
+            posts.append(body)
+            return httpx.Response(200, json={"id": 1})
+
+        transport = httpx.MockTransport(handler)
+        reporter = self._make_reporter(transport)
+
+        # Monkeypatch discover_processes: first call returns PID 123,
+        # second call returns empty (process gone).
+        call_count = 0
+        original_discover = reporter.discover_processes
+
+        def fake_discover() -> list[tuple[int, str]]:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return [(123, "/work")]
+            return []
+
+        reporter.discover_processes = fake_discover  # type: ignore[assignment]
+
+        # First poll: PID 123 discovered → alive=true
+        reporter.poll_once()
+        # Second poll: PID 123 gone → alive=false
+        reporter.poll_once()
+
+        # We expect at least 2 POSTs: one alive=true, one alive=false
+        assert len(posts) >= 2, f"expected >= 2 POSTs, got {len(posts)}"
+
+        first = posts[0]
+        assert first["pid"] == 123
+        assert first["alive"] is True
+
+        # Find the gone-PID post (should be the second POST)
+        gone_posts = [p for p in posts if p["pid"] == 123 and p["alive"] is False]
+        assert len(gone_posts) == 1, (
+            f"expected exactly 1 alive=false POST for pid 123, got {len(gone_posts)}"
+        )
+        assert gone_posts[0]["pid"] == 123

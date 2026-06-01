@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -41,36 +42,24 @@ func newTestAPIWithDBForHostLiveness(t *testing.T) (*API, *pgxpool.Pool) {
 	return a, pool
 }
 
-// ensureHostLivenessTable creates the host_liveness table if it doesn't exist.
-// Needed for tests running before the migration runner has been applied.
+// ensureHostLivenessTable creates the host_liveness table by reading and
+// executing the actual migration file (N3: real migration, no hand-rolled DDL).
 func ensureHostLivenessTable(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	ctx := context.Background()
-	// Try to create — if already exists, it's a no-op (IF NOT EXISTS).
-	_, err := pool.Exec(ctx, `
-		CREATE TABLE IF NOT EXISTS host_liveness (
-			id          BIGSERIAL       PRIMARY KEY,
-			host        TEXT            NOT NULL,
-			pid         INT             NOT NULL,
-			session_id  TEXT            NOT NULL DEFAULT '',
-			harness     TEXT            NOT NULL DEFAULT '',
-			cwd         TEXT            NOT NULL DEFAULT '',
-			tenant      TEXT            NOT NULL DEFAULT 'personal',
-			alive       BOOLEAN         NOT NULL DEFAULT TRUE,
-			seen_at     TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
-			UNIQUE (host, pid)
-		)
-	`)
+	migrationPath := filepath.Join("..", "..", "internal", "migrations", "000020_host_liveness.up.sql")
+	// Resolve relative to the test binary's working directory
+	absPath, err := filepath.Abs(migrationPath)
 	if err != nil {
-		t.Fatalf("ensureHostLivenessTable: %v", err)
+		t.Fatalf("resolve migration path: %v", err)
 	}
-	_, err = pool.Exec(ctx, `CREATE INDEX IF NOT EXISTS idx_host_liveness_host ON host_liveness (host)`)
+	sqlBytes, err := os.ReadFile(absPath)
 	if err != nil {
-		t.Fatalf("ensureHostLivenessTable: %v", err)
+		t.Fatalf("read migration file %s: %v", absPath, err)
 	}
-	_, err = pool.Exec(ctx, `CREATE INDEX IF NOT EXISTS idx_host_liveness_tenant ON host_liveness (tenant)`)
+	_, err = pool.Exec(ctx, string(sqlBytes))
 	if err != nil {
-		t.Fatalf("ensureHostLivenessTable: %v", err)
+		t.Fatalf("execute host_liveness migration: %v", err)
 	}
 }
 
