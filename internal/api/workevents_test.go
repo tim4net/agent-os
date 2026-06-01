@@ -50,7 +50,6 @@ func newTestAPIWithDB(t *testing.T) (*API, *pgxpool.Pool, *service.EventBus) {
 		queries: queries,
 		pool:    pool,
 		bus:     bus,
-		pool:    pool,
 	}
 	return a, pool, bus
 }

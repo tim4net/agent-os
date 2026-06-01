@@ -999,3 +999,73 @@ func TestHTTPEmitterHealth_EmptyResult(t *testing.T) {
 		t.Fatalf("expected total=0, got %d", resp.Total)
 	}
 }
+
+// TestHTTPEmitterHealth_NullHostSession proves:
+// A session whose start/heartbeat rows have NULL host does not 500 (nullable-scan-crash
+// regression). The response should have host="" and the session should still be returned
+// with correct status derivation.
+func TestHTTPEmitterHealth_NullHostSession(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+	tenant := emitterTestTenant(t, "null-host")
+	a, pool, _ := newTestAPIWithDB(t)
+	defer pool.Close()
+
+	now := time.Now().UTC()
+	sessID := uuid.NewString()
+	ctx := t.Context()
+
+	// session.start with NULL host (per-session aggregation will yield NULL session_host)
+	eid1 := uuid.New()
+	_, err := pool.Exec(ctx,
+		`INSERT INTO work_events (event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, tenant, ts, received_at)
+		 VALUES ($1, 'agentos.work_event/v1', 'claude', $2, NULL, 12345, 'session.start', 'running', 'supervised', $3, $4, $5)`,
+		eid1, sessID, tenant, now.Add(-1*time.Minute), now.Add(-1*time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("seed start (null host): %v", err)
+	}
+
+	// session.heartbeat with NULL host (fresh within 5m window → running)
+	eid2 := uuid.New()
+	_, err = pool.Exec(ctx,
+		`INSERT INTO work_events (event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, tenant, ts, received_at)
+		 VALUES ($1, 'agentos.work_event/v1', 'claude', $2, NULL, 12345, 'session.heartbeat', 'running', 'supervised', $3, $4, $5)`,
+		eid2, sessID, tenant, now.Add(-30*time.Second), now.Add(-30*time.Second),
+	)
+	if err != nil {
+		t.Fatalf("seed heartbeat (null host): %v", err)
+	}
+
+	req := newTestGET("/?tenant=" + tenant + "&stale_window=5m")
+	rec := httptest.NewRecorder()
+	a.EmitterRoutes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for NULL-host session, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp service.EmitterHealthResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	found := false
+	for _, e := range resp.Emitters {
+		if e.SessionID == sessID {
+			found = true
+			// Must NOT crash — NULL host is safely defaulted to empty string.
+			if e.Host != "" {
+				t.Fatalf("expected host='' for NULL-host session, got %q", e.Host)
+			}
+			// Liveness derivation should still work — supervised + fresh heartbeat → running.
+			if e.Status != service.EmitterStatusRunning {
+				t.Fatalf("NULL-host session should still be 'running', got %q", e.Status)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("session %s not found in response", sessID)
+	}
+}

@@ -15,7 +15,7 @@ import (
 type EmitterHealthRow struct {
 	Harness              string     `json:"harness"`
 	SessionID            string     `json:"session_id"`
-	Host                 string     `json:"host"`
+	Host                 *string    `json:"host"`
 	LivenessMode         *string    `json:"liveness_mode"`
 	PID                  int        `json:"pid"`
 	Status               string     `json:"status"`
@@ -209,10 +209,15 @@ func (a *API) ListEmitterHealth(w http.ResponseWriter, r *http.Request) {
 			lm = *row.LivenessMode
 		}
 
+		host := ""
+		if row.Host != nil {
+			host = *row.Host
+		}
+
 		emitters = append(emitters, service.EmitterSession{
 			Harness:             row.Harness,
 			SessionID:           row.SessionID,
-			Host:                row.Host,
+			Host:                host,
 			LivenessMode:        lm,
 			PID:                 row.PID,
 			Status:              service.EmitterStatus(row.Status),

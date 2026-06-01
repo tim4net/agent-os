@@ -45,7 +45,3 @@ type EmitterHealthResponse struct {
 // A supervised session with no heartbeat in this window is considered stale.
 // Contract §4: default is 5 minutes.
 const DefaultSupervisedStaleWindow = 5 * time.Minute
-
-// BoundedMaxAge is the backstop ceiling for bounded emitters without
-// host-process-reporter coverage (WP-N). Contract §4: default is 6 hours.
-const BoundedMaxAge = 6 * time.Hour
