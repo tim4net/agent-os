@@ -140,6 +140,15 @@ func computeAppliedVersions(ctx context.Context, db dbExecutor, allFiles []Migra
 		if !raw[0].Dirty {
 			// golang-migrate watermark: single non-dirty row means all
 			// embedded versions up to and including this value are applied.
+			//
+			// Heuristic scope: this interpretation is correct for the current
+			// deployment (hpms1 is the only live DB, managed by golang-migrate,
+			// which stores exactly one watermark row). The expansion is
+			// atomic (single tx inside the advisory lock) and the assumed
+			// version list is logged, so a misfire is detectable. A future
+			// native single-row state or mixed-format scenario should be
+			// gated behind an explicit "migrate adopt" subcommand rather than
+			// extending this heuristic.
 			result.IsWatermark = true
 			result.WatermarkVersion = raw[0].Version
 			for _, f := range allFiles {
