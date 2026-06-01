@@ -1,7 +1,7 @@
 -- name: UpsertHostLiveness :one
 -- Upserts a host-liveness report keyed on (host, pid).
--- If the process is gone (alive=FALSE) and no session.end has been received,
--- the liveness derivation will mark the session as stale (contract §4).
+-- This is the liveness *feed* (WP-N); session-state derivation is a
+-- separate consumer concern (WP-J / follow-on WPs).
 INSERT INTO host_liveness (host, pid, session_id, harness, cwd, tenant, alive)
 VALUES (
     sqlc.arg('host'),
@@ -29,14 +29,6 @@ SELECT * FROM host_liveness
 WHERE host = sqlc.arg('host') AND pid = sqlc.arg('pid')
 AND (sqlc.arg('tenant')::text = '' OR tenant = sqlc.arg('tenant')::text);
 
--- name: GetHostLivenessBySession :one
--- Fetches the liveness record for a bounded session by session_id.
--- Optional tenant filter: returns rows only for matching tenant (or all if empty).
--- Returns no rows if no reporter covers that session.
-SELECT * FROM host_liveness
-WHERE session_id = sqlc.arg('session_id') AND session_id != ''
-AND (sqlc.arg('tenant')::text = '' OR tenant = sqlc.arg('tenant')::text);
-
 -- name: ListHostLiveness :many
 -- Lists all liveness records for a tenant, ordered by seen_at DESC.
 -- Returns all if tenant is empty.
@@ -51,10 +43,3 @@ OFFSET sqlc.arg('off')::int;
 SELECT COUNT(*)::bigint FROM host_liveness
 WHERE (sqlc.arg('tenant')::text = '' OR tenant = sqlc.arg('tenant')::text);
 
--- name: ListAliveHostLiveness :many
--- Lists only alive processes for a host. Used by the worktree scanner
--- to correlate worktrees with running bounded processes.
--- Optional tenant filter: returns rows only for matching tenant (or all if empty).
-SELECT * FROM host_liveness
-WHERE host = sqlc.arg('host') AND alive = TRUE
-AND (sqlc.arg('tenant')::text = '' OR tenant = sqlc.arg('tenant')::text);

@@ -6,7 +6,7 @@ for bounded-session crash detection (contract §4).
 The reporter polls /proc on the local host to discover running agent processes
 and reports their liveness to the Agent OS server. When a previously-seen
 process disappears (kill, crash, exit), the reporter sends alive=false so the
-server marks the bounded session as stale.
+server can consume this signal for session-state derivation.
 """
 
 from __future__ import annotations
@@ -67,7 +67,7 @@ class HostReporter:
 
     Discovers agent processes (by scanning /proc or a configured PID dir)
     and periodically POSTs their status. When a process disappears, sends
-    alive=false so the server can mark the bounded session as stale.
+    alive=false so the server can consume this signal for session-state derivation.
 
     Args:
         endpoint: POST target URL for liveness reports.

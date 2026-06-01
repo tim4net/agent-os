@@ -56,7 +56,6 @@ func (a *API) HostLivenessRoutes() http.Handler {
 
 // PostHostLiveness handles POST /api/host/liveness.
 // Receives a liveness report from a host-reporter agent and upserts it.
-// Used by the liveness derivation (contract §4) to determine bounded-session status.
 func (a *API) PostHostLiveness(w http.ResponseWriter, r *http.Request) {
 	var req LivenessReportRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
