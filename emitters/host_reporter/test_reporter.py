@@ -320,3 +320,65 @@ class TestHostReporter:
         alive_false = [p for p in posts if p.get("alive") is False]
         assert len(alive_true) == 1, f"expected 1 alive=true POST, got {len(alive_true)}"
         assert len(alive_false) == 2, f"expected 2 alive=false POSTs (retry), got {len(alive_false)}"
+
+    def test_proc_scan_failure_no_false_death(self) -> None:
+        """When /proc scan fails, poll_once sends ZERO alive=false POSTs.
+
+        A transient scan failure must not fabricate death for healthy
+        processes. Simulates three poll cycles:
+          1. First poll discovers PID 123 → POST alive=true (success)
+          2. Second poll: discover_processes returns None (scan error)
+             → no POSTs at all, PID 123 stays cached
+          3. Third poll: discover_processes returns empty (genuine no-procs)
+             → POST alive=false for PID 123
+        """
+        posts: list[dict[str, Any]] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            body = json.loads(request.content)
+            posts.append(body)
+            return httpx.Response(200, json={"id": 1})
+
+        transport = httpx.MockTransport(handler)
+        reporter = self._make_reporter(transport)
+
+        call_count = 0
+
+        def fake_discover() -> list[tuple[int, str]] | None:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return [(123, "/work")]
+            if call_count == 2:
+                # Simulate /proc scan failure — returns None
+                return None
+            # Third call: genuinely no processes
+            return []
+
+        reporter.discover_processes = fake_discover  # type: ignore[assignment]
+
+        # Poll 1: PID 123 discovered → alive=true
+        reporter.poll_once()
+        assert 123 in reporter._seen_pids
+        alive_after_1 = [p for p in posts if p.get("alive") is True]
+        assert len(alive_after_1) == 1
+
+        # Poll 2: scan failure → NO POSTs, PID stays cached
+        reporter.poll_once()
+        assert 123 in reporter._seen_pids, (
+            "PID 123 must remain cached when scan fails"
+        )
+        # No new POSTs during the failed scan cycle
+        assert len(posts) == 1, (
+            f"expected 0 POSTs during scan failure, but got {len(posts) - 1} new"
+        )
+
+        # Poll 3: genuine empty → alive=false for PID 123
+        reporter.poll_once()
+        assert 123 not in reporter._seen_pids, (
+            "PID 123 should be removed after genuine gone detection"
+        )
+        alive_false = [p for p in posts if p.get("alive") is False]
+        assert len(alive_false) == 1, (
+            f"expected 1 alive=false POST, got {len(alive_false)}"
+        )

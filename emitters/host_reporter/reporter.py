@@ -122,11 +122,15 @@ class HostReporter:
             logger.warning("host_reporter POST failed: %s", exc)
             return -1
 
-    def discover_processes(self) -> list[tuple[int, str]]:
+    def discover_processes(self) -> list[tuple[int, str]] | None:
         """Discover running agent processes by scanning /proc.
 
         Returns a list of (pid, cwd) tuples for processes whose cmdline
         contains known agent harness keywords.
+
+        Returns None when the /proc scan itself fails (e.g. unreadable
+        directory), so the caller can distinguish "no processes found"
+        from "we couldn't tell."
         """
         procs: list[tuple[int, str]] = []
         # Agent harness keywords to look for in process command lines
@@ -160,13 +164,25 @@ class HostReporter:
                 except (PermissionError, FileNotFoundError, ProcessLookupError):
                     continue
         except Exception:
-            logger.debug("host_reporter: failed to scan /proc, returning empty")
+            logger.warning(
+                "host_reporter: failed to scan /proc — skipping this cycle"
+            )
+            return None
 
         return procs
 
     def poll_once(self) -> None:
         """Run a single poll cycle: discover processes, report changes."""
         discovered = self.discover_processes()
+
+        # If the scan failed entirely, skip the gone-pid sweep — we cannot
+        # distinguish "all processes exited" from "we couldn't read /proc."
+        if discovered is None:
+            logger.warning(
+                "host_reporter: /proc scan failed, skipping gone-pid sweep"
+            )
+            return
+
         current_pids: set[int] = set()
 
         for pid, cwd in discovered:
