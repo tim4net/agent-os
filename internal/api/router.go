@@ -163,6 +163,9 @@ func (a *API) Router() http.Handler {
 	// Tracker routes (WP-E, read-only Shortcut reader, contract §8, ADR-001 D4/D5).
 	r.Mount("/trackers", a.TrackerRoutes())
 
+	// Incident routes (WP-L, #26 — failure surfacing, "what's broken now").
+	r.Mount("/incidents", a.IncidentRoutes())
+
 	// Timeline routes
 	r.Mount("/timeline", a.TimelineRoutes())
 
