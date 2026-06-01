@@ -59,3 +59,47 @@ GROUP BY
 HAVING SUM(cost_usd) > 0
 ORDER BY SUM(cost_usd) DESC
 LIMIT sqlc.arg('lim') OFFSET sqlc.arg('off');
+
+-- name: CountSpendGroups :one
+-- Returns the total count of non-zero-cost groups matching the given filters,
+-- without applying LIMIT/OFFSET. Used when the main query returns zero rows
+-- (offset past end) so Total is still accurate.
+WITH latest_per_session AS (
+    SELECT DISTINCT ON (harness, session_id)
+        harness,
+        COALESCE(project_id::text, '') AS project_key,
+        tenant,
+        ts::date                       AS day,
+        cost_usd,
+        (payload->'telemetry'->>'turns')::int AS turns,
+        external_ref
+    FROM work_events
+    WHERE cost_usd IS NOT NULL
+      AND (sqlc.arg('tenant')::text = '' OR tenant = sqlc.arg('tenant')::text)
+      AND (sqlc.arg('external_ref')::text = '' OR external_ref = sqlc.arg('external_ref')::text)
+    ORDER BY harness, session_id, received_at DESC
+),
+spend_source AS (
+    SELECT
+        harness,
+        project_key,
+        tenant,
+        day,
+        cost_usd,
+        turns
+    FROM latest_per_session
+)
+SELECT COUNT(*)::bigint AS total_groups
+FROM (
+    SELECT 1
+    FROM spend_source
+    GROUP BY
+        CASE sqlc.arg('group_by')
+            WHEN 'agent'  THEN harness
+            WHEN 'project' THEN project_key
+            WHEN 'tenant' THEN tenant
+            WHEN 'day'    THEN day::text
+            ELSE harness
+        END::text
+    HAVING SUM(cost_usd) > 0
+) AS groups;

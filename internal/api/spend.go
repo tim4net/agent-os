@@ -102,7 +102,12 @@ func (a *API) GetSpend(w http.ResponseWriter, r *http.Request) {
 	result := make([]SpendRow, 0, len(rows))
 	var totalGroups int64
 	for i, row := range rows {
-		cost, _ := row.TotalCostUsd.Float64Value()
+		cost, err := row.TotalCostUsd.Float64Value()
+		if err != nil {
+			slog.Default().Error("spend: numeric convert failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to read spend total")
+			return
+		}
 		result = append(result, SpendRow{
 			DimensionKey: row.DimensionKey,
 			TotalCostUsd: cost.Float64,
@@ -113,6 +118,22 @@ func (a *API) GetSpend(w http.ResponseWriter, r *http.Request) {
 		if i == 0 {
 			totalGroups = row.TotalGroups
 		}
+	}
+
+	// When offset ≥ group count, the main query returns zero rows and totalGroups
+	// stays 0. Fall back to a dedicated count query for an accurate Total.
+	if len(rows) == 0 {
+		total, err := a.queries.CountSpendGroups(r.Context(), db.CountSpendGroupsParams{
+			GroupBy:     groupBy,
+			Tenant:      tenant,
+			ExternalRef: externalRef,
+		})
+		if err != nil {
+			slog.Default().Error("spend: count groups failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to count spend groups")
+			return
+		}
+		totalGroups = total
 	}
 
 	writeJSON(w, http.StatusOK, SpendResponse{

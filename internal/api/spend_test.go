@@ -738,6 +738,42 @@ func TestHTTPSpend_DatabaseError_Returns500(t *testing.T) {
 	}
 }
 
+// Review R3 finding #2: Total reports correct group count when offset ≥ group count.
+func TestHTTPSpend_Total_AccurateWhenOffsetPastEnd(t *testing.T) {
+	tenant := testTenant(t, "offset-end")
+	a, pool, _ := newTestAPIWithDB(t)
+	defer pool.Close()
+
+	// Seed 3 agents.
+	seedWorkEvent(t, pool, "claude", tenant, 0.05, 5, time.Now())
+	seedWorkEvent(t, pool, "hermes", tenant, 0.03, 3, time.Now())
+	seedWorkEvent(t, pool, "codex", tenant, 0.02, 2, time.Now())
+
+	// Request with offset=5 (past the 3 groups) → 0 rows, but Total should be 3.
+	req := newTestGET("/?group_by=agent&tenant=" + tenant + "&limit=50&offset=5")
+	rec := httptest.NewRecorder()
+	a.SpendRoutes().ServeHTTP(rec, req)
+
+	if rec.Code != 200 {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp SpendResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	if len(resp.Rows) != 0 {
+		t.Fatalf("expected 0 rows (offset past end), got %d", len(resp.Rows))
+	}
+	if resp.Total != 3 {
+		t.Fatalf("expected Total=3 (true group count despite offset past end), got %d", resp.Total)
+	}
+	if resp.Offset != 5 {
+		t.Fatalf("expected Offset=5, got %d", resp.Offset)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
