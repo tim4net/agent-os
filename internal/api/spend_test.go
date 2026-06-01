@@ -344,8 +344,8 @@ func TestHTTPSpend_GroupByProject(t *testing.T) {
 	projAlphaID := uuid.New()
 	projBetaID := uuid.New()
 	for _, p := range []struct{ id, slug, name string }{
-		{projAlphaID.String(), "test-proj-alpha", "Test Project Alpha"},
-		{projBetaID.String(), "test-proj-beta", "Test Project Beta"},
+		{projAlphaID.String(), "test-proj-alpha-" + uuid.NewString()[:8], "Test Project Alpha"},
+		{projBetaID.String(), "test-proj-beta-" + uuid.NewString()[:8], "Test Project Beta"},
 	} {
 		_, err := pool.Exec(ctx,
 			`INSERT INTO projects (id, slug, name, tenant) VALUES ($1, $2, $3, $4)`,
