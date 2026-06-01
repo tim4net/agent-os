@@ -280,23 +280,24 @@ ORDER BY r.rn`
 	var incidents []Incident
 	var total int64
 	for rows.Next() {
-		var incType string
+		var incTypeT pgtype.Text
 		var harness, sessionID, host pgtype.Text
 		var title, status, tenant pgtype.Text
 		var projectSlug, externalRef, branch pgtype.Text
 		var receivedAt pgtype.Timestamptz
 
 		if err := rows.Scan(
-			&incType, &harness, &sessionID, &host,
+			&incTypeT, &harness, &sessionID, &host,
 			&title, &status, &tenant, &projectSlug, &externalRef,
 			&branch, &receivedAt, &total,
 		); err != nil {
 			return nil, 0, err
 		}
 
+		incType := incTypeT.String
 		// When the offset is past the end of incidents, the LEFT JOIN produces
-		// one row with total but NULL ranked columns (incType = ""). Skip it.
-		if incType == "" {
+		// one row with total but NULL ranked columns. Skip it.
+		if !incTypeT.Valid || incType == "" {
 			continue
 		}
 
