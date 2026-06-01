@@ -20,8 +20,6 @@ DO UPDATE SET
     tenant      = EXCLUDED.tenant,
     alive       = EXCLUDED.alive,
     seen_at     = NOW()
-WHERE host_liveness.host = EXCLUDED.host
-  AND host_liveness.pid = EXCLUDED.pid
 RETURNING *;
 
 -- name: GetHostLiveness :one

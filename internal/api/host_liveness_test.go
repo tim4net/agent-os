@@ -87,6 +87,9 @@ func seedHostLiveness(t *testing.T, pool *pgxpool.Pool, host string, pid int32, 
 	if err != nil {
 		t.Fatalf("seedHostLiveness: %v", err)
 	}
+	t.Cleanup(func() {
+		pool.Exec(ctx, "DELETE FROM host_liveness WHERE host = $1 AND pid = $2", host, pid)
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -141,6 +144,10 @@ func TestHTTPHostLiveness_PostNew_Returns200(t *testing.T) {
 }
 
 func TestHTTPHostLiveness_PostMissingHost_Returns400(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+
 	a, pool := newTestAPIWithDBForHostLiveness(t)
 	defer pool.Close()
 	ensureHostLivenessTable(t, pool)
@@ -161,6 +168,10 @@ func TestHTTPHostLiveness_PostMissingHost_Returns400(t *testing.T) {
 }
 
 func TestHTTPHostLiveness_PostInvalidPID_Returns400(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+
 	a, pool := newTestAPIWithDBForHostLiveness(t)
 	defer pool.Close()
 	ensureHostLivenessTable(t, pool)
@@ -182,6 +193,10 @@ func TestHTTPHostLiveness_PostInvalidPID_Returns400(t *testing.T) {
 }
 
 func TestHTTPHostLiveness_PostBadJSON_Returns400(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+
 	a, pool := newTestAPIWithDBForHostLiveness(t)
 	defer pool.Close()
 	ensureHostLivenessTable(t, pool)
@@ -239,6 +254,10 @@ func TestHTTPHostLiveness_PostUpsert_UpdatesExisting(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHTTPHostLiveness_ListEmpty_Returns200(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+
 	a, pool := newTestAPIWithDBForHostLiveness(t)
 	defer pool.Close()
 	ensureHostLivenessTable(t, pool)

@@ -61,10 +61,18 @@ func (s *WorktreeScanner) Scan(ctx context.Context) ([]WorktreeInfo, error) {
 		return nil, s.lastErr
 	}
 
-	// Step 2: check dirty status for each worktree
+	// Step 2: determine the default branch name so we can set IsMain.
+	defaultBranch := detectDefaultBranch(ctx, s.gitDir)
+
+	// Step 3: check dirty status for each worktree
 	results := make([]WorktreeInfo, 0, len(worktrees))
 	for _, wt := range worktrees {
 		info := WorktreeInfo{Worktree: wt}
+
+		// Mark default-branch worktrees
+		if wt.Branch != "" && wt.Branch == defaultBranch {
+			info.IsMain = true
+		}
 
 		// Check if dirty
 		statusCmd := exec.CommandContext(ctx, "git", "-C", wt.Path, "status", "--porcelain")
@@ -132,6 +140,33 @@ func parseWorktreeList(output string) ([]Worktree, error) {
 		}
 	}
 	return worktrees, nil
+}
+
+// detectDefaultBranch returns the default branch name for a repository.
+// It tries `git symbolic-ref refs/remotes/origin/HEAD` first (works in clones),
+// then falls back to `git branch --show-current` (works in local repos).
+// Returns empty string if detection fails (non-fatal).
+func detectDefaultBranch(ctx context.Context, gitDir string) string {
+	// Try origin/HEAD symbolic ref (yields "origin/main" → "main")
+	cmd := exec.CommandContext(ctx, "git", "-C", gitDir, "symbolic-ref", "refs/remotes/origin/HEAD")
+	out, err := cmd.Output()
+	if err == nil {
+		ref := strings.TrimSpace(string(out))
+		// refs/remotes/origin/main → main
+		if idx := strings.LastIndex(ref, "/"); idx >= 0 {
+			return ref[idx+1:]
+		}
+		return ref
+	}
+
+	// Fallback: current branch of the repo
+	cmd = exec.CommandContext(ctx, "git", "-C", gitDir, "branch", "--show-current")
+	out, err = cmd.Output()
+	if err == nil {
+		return strings.TrimSpace(string(out))
+	}
+
+	return ""
 }
 
 // extractExternalRef attempts to extract a Shortcut-style external reference

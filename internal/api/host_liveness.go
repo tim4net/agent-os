@@ -153,8 +153,11 @@ func (a *API) ListHostLiveness(w http.ResponseWriter, r *http.Request) {
 }
 
 // hostLivenessToResponse converts a db.HostLiveness row to a JSON response struct.
+// Follows the same pgtype.Timestamptz serialization pattern as instanceToResponse
+// (instances.go): NOT NULL timestamptz columns are always valid, so we access
+// .Time directly without guarding on .Valid.
 func hostLivenessToResponse(rec db.HostLiveness) HostLivenessResponse {
-	resp := HostLivenessResponse{
+	return HostLivenessResponse{
 		ID:        rec.ID,
 		Host:      rec.Host,
 		PID:       rec.Pid,
@@ -163,9 +166,6 @@ func hostLivenessToResponse(rec db.HostLiveness) HostLivenessResponse {
 		CWD:       rec.Cwd,
 		Tenant:    rec.Tenant,
 		Alive:     rec.Alive,
+		SeenAt:    rec.SeenAt.Time.UTC().Format(time.RFC3339),
 	}
-	if rec.SeenAt.Valid {
-		resp.SeenAt = rec.SeenAt.Time.UTC().Format(time.RFC3339)
-	}
-	return resp
 }
