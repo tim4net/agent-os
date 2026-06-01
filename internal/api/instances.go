@@ -2,13 +2,14 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/tim4net/agent-os/internal/db"
@@ -103,8 +104,13 @@ func appInstanceToResponse(inst db.AppInstance) InstanceResponse {
 }
 
 // ListInstances handles GET /api/instances?tenant=...&limit=50&offset=0
+// Tenant is required — empty tenant is rejected with 400 (ADR-002).
 func (a *API) ListInstances(w http.ResponseWriter, r *http.Request) {
 	tenant := r.URL.Query().Get("tenant")
+	if tenant == "" {
+		writeError(w, http.StatusBadRequest, "tenant query parameter is required")
+		return
+	}
 
 	limit := 50
 	offset := 0
@@ -167,7 +173,12 @@ func (a *API) GetInstance(w http.ResponseWriter, r *http.Request) {
 
 	inst, err := a.queries.GetAppInstance(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "instance not found")
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "instance not found")
+		} else {
+			slog.Default().Error("instances: get failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to get instance")
+		}
 		return
 	}
 
@@ -263,7 +274,12 @@ func (a *API) ProbeInstance(w http.ResponseWriter, r *http.Request) {
 
 	inst, err := a.queries.GetAppInstance(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "instance not found")
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "instance not found")
+		} else {
+			slog.Default().Error("instances: get failed for probe", "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to get instance")
+		}
 		return
 	}
 
@@ -301,6 +317,3 @@ func (a *API) ProbeInstance(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, resp)
 }
-
-// Suppress unused import guard
-var _ = strings.NewReader

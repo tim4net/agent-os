@@ -6,12 +6,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/tim4net/agent-os/internal/db"
@@ -654,5 +654,315 @@ func withInstanceBranch(b string) seedInstanceOpt {
 	return func(c *seedInstanceConfig) { c.branch = b }
 }
 
-// Suppress unused import
-var _ = os.Getenv
+// ---------------------------------------------------------------------------
+// Tenant required — empty tenant rejected (ADR-002, review finding 1)
+// ---------------------------------------------------------------------------
+
+func TestHTTPInstances_EmptyTenant_Returns400(t *testing.T) {
+	a, pool := newTestAPIWithDBForInstances(t)
+	defer pool.Close()
+
+	// No tenant param at all
+	req := httptest.NewRequest("GET", "/", nil)
+	rec := httptest.NewRecorder()
+	a.InstanceRoutes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]string
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if !strings.Contains(resp["error"], "tenant") {
+		t.Fatalf("expected error about tenant, got: %s", resp["error"])
+	}
+}
+
+func TestHTTPInstances_DayjobTenantNeverLeaks(t *testing.T) {
+	personalTenant := instanceTestTenant(t, "personal")
+	dayjobTenant := "dayjob" // literal dayjob — not personal
+	a, pool := newTestAPIWithDBForInstances(t)
+	defer pool.Close()
+
+	// Seed a personal instance and a dayjob instance
+	personalID := seedAppInstance(t, pool, "personal-host", "http://localhost:8080/health", personalTenant, "up")
+	dayjobID := seedAppInstance(t, pool, "dayjob-host", "http://dayjob.corp:8080/health", dayjobTenant, "up")
+
+	// Query for personal tenant — must never contain dayjob rows
+	req := httptest.NewRequest("GET", "/?tenant="+personalTenant, nil)
+	rec := httptest.NewRecorder()
+	a.InstanceRoutes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp InstancesListResponse
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	for _, inst := range resp.Instances {
+		if inst.Tenant == "dayjob" || inst.ID == dayjobID {
+			t.Fatalf("dayjob instance leaked into personal view: id=%s tenant=%q", inst.ID, inst.Tenant)
+		}
+	}
+	// Should only see the personal instance
+	if resp.Total != 1 {
+		t.Fatalf("expected 1 instance for personal tenant, got %d", resp.Total)
+	}
+	if len(resp.Instances) != 1 {
+		t.Fatalf("expected 1 instance, got %d", len(resp.Instances))
+	}
+	if resp.Instances[0].ID != personalID {
+		t.Fatalf("expected personal instance %s, got %s", personalID, resp.Instances[0].ID)
+	}
+
+	// Also verify empty-tenant is blocked (no dayjob leak via unscoped query)
+	req2 := httptest.NewRequest("GET", "/", nil)
+	rec2 := httptest.NewRecorder()
+	a.InstanceRoutes().ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for empty tenant, got %d", rec2.Code)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AC2: UpsertAppInstanceOnServerStarted (anti-fake-status, review finding 2)
+// ---------------------------------------------------------------------------
+
+func TestUpsertAppInstanceOnServerStarted_Create_SetsUnknown(t *testing.T) {
+	tenant := instanceTestTenant(t, "started-create")
+	_, pool := newTestAPIWithDBForInstances(t)
+	defer pool.Close()
+	queries := db.New(pool)
+
+	// First call: no existing row → creates with status 'unknown'
+	inst, err := queries.UpsertAppInstanceOnServerStarted(context.Background(), db.UpsertAppInstanceOnServerStartedParams{
+		Harness:   "claude",
+		SessionID: uuid.NewString(),
+		Host:      "testhost-started",
+		Pid:       pgtype.Int4{Int32: 42, Valid: true},
+		Label:     "test-server",
+		HealthUrl: "http://testhost:3000/health",
+		Branch:    pgtype.Text{String: "main", Valid: true},
+		Sha:       pgtype.Text{String: "abc123", Valid: true},
+		Cwd:       pgtype.Text{String: "/home/test", Valid: true},
+		Tenant:    tenant,
+	})
+	if err != nil {
+		t.Fatalf("UpsertAppInstanceOnServerStarted (create): %v", err)
+	}
+	if inst.Status != "unknown" {
+		t.Fatalf("expected status 'unknown' on create, got %q", inst.Status)
+	}
+	if inst.Host != "testhost-started" {
+		t.Fatalf("expected host 'testhost-started', got %q", inst.Host)
+	}
+}
+
+func TestUpsertAppInstanceOnServerStarted_UpRow_NoStatusReset(t *testing.T) {
+	tenant := instanceTestTenant(t, "started-up-noset")
+	_, pool := newTestAPIWithDBForInstances(t)
+	defer pool.Close()
+	queries := db.New(pool)
+
+	// Seed an 'up' instance (simulating a probed-healthy server)
+	seedAppInstance(t, pool, "uphost", "http://uphost:3000/health", tenant, "up")
+
+	// Call UpsertAppInstanceOnServerStarted — up should NOT be reset
+	inst, err := queries.UpsertAppInstanceOnServerStarted(context.Background(), db.UpsertAppInstanceOnServerStartedParams{
+		Harness:   "claude",
+		SessionID: uuid.NewString(),
+		Host:      "uphost",
+		Pid:       pgtype.Int4{Int32: 99, Valid: true},
+		Label:     "uphost-label",
+		HealthUrl: "http://uphost:3000/health",
+		Branch:    pgtype.Text{String: "feature", Valid: true},
+		Sha:       pgtype.Text{String: "def456", Valid: true},
+		Cwd:       pgtype.Text{String: "/home/uphost", Valid: true},
+		Tenant:    tenant,
+	})
+	if err != nil {
+		t.Fatalf("UpsertAppInstanceOnServerStarted (up): %v", err)
+	}
+	if inst.Status != "up" {
+		t.Fatalf("expected status 'up' preserved (not reset), got %q", inst.Status)
+	}
+	if inst.Label != "uphost-label" {
+		t.Fatalf("expected updated label 'uphost-label', got %q", inst.Label)
+	}
+}
+
+func TestUpsertAppInstanceOnServerStarted_DownRow_FlipsToUnknown(t *testing.T) {
+	tenant := instanceTestTenant(t, "started-down-flip")
+	_, pool := newTestAPIWithDBForInstances(t)
+	defer pool.Close()
+	queries := db.New(pool)
+
+	// Seed a 'down' instance (simulating a stopped server)
+	seedAppInstance(t, pool, "downhost", "http://downhost:3000/health", tenant, "down")
+
+	// Call UpsertAppInstanceOnServerStarted — down should flip to unknown
+	inst, err := queries.UpsertAppInstanceOnServerStarted(context.Background(), db.UpsertAppInstanceOnServerStartedParams{
+		Harness:   "claude",
+		SessionID: uuid.NewString(),
+		Host:      "downhost",
+		Pid:       pgtype.Int4{Int32: 55, Valid: true},
+		Label:     "downhost-label",
+		HealthUrl: "http://downhost:3000/health",
+		Branch:    pgtype.Text{String: "reboot", Valid: true},
+		Sha:       pgtype.Text{String: "ghi789", Valid: true},
+		Cwd:       pgtype.Text{String: "/home/downhost", Valid: true},
+		Tenant:    tenant,
+	})
+	if err != nil {
+		t.Fatalf("UpsertAppInstanceOnServerStarted (down→unknown): %v", err)
+	}
+	if inst.Status != "unknown" {
+		t.Fatalf("expected status 'unknown' (flipped from down), got %q", inst.Status)
+	}
+}
+
+func TestUpsertAppInstanceOnServerStarted_Idempotent_SingleRow(t *testing.T) {
+	tenant := instanceTestTenant(t, "started-idem")
+	_, pool := newTestAPIWithDBForInstances(t)
+	defer pool.Close()
+	queries := db.New(pool)
+
+	params := db.UpsertAppInstanceOnServerStartedParams{
+		Harness:   "claude",
+		SessionID: uuid.NewString(),
+		Host:      "idemhost",
+		Pid:       pgtype.Int4{Int32: 10, Valid: true},
+		Label:     "idem-server",
+		HealthUrl: "http://idemhost:3000/health",
+		Branch:    pgtype.Text{String: "main", Valid: true},
+		Sha:       pgtype.Text{String: "same", Valid: true},
+		Cwd:       pgtype.Text{String: "/app", Valid: true},
+		Tenant:    tenant,
+	}
+
+	// Call twice with same host+health_url+tenant
+	inst1, err := queries.UpsertAppInstanceOnServerStarted(context.Background(), params)
+	if err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+
+	params.SessionID = uuid.NewString() // different session
+	inst2, err := queries.UpsertAppInstanceOnServerStarted(context.Background(), params)
+	if err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+
+	if inst1.ID.String() != inst2.ID.String() {
+		t.Fatalf("idempotent upsert should return same ID: %s vs %s", inst1.ID, inst2.ID)
+	}
+
+	// Verify only one row in DB
+	rows, err := queries.ListAppInstances(context.Background(), db.ListAppInstancesParams{Tenant: tenant, Lim: 100, Off: 0})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected 1 row after idempotent upsert, got %d", len(rows))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AC2: MarkInstanceDownByServerStopped (host+tenant scoping, review finding 2)
+// ---------------------------------------------------------------------------
+
+func TestMarkInstanceDownByServerStopped_SetsDown(t *testing.T) {
+	tenant := instanceTestTenant(t, "stopped-down")
+	_, pool := newTestAPIWithDBForInstances(t)
+	defer pool.Close()
+	queries := db.New(pool)
+
+	// Seed an 'up' instance
+	idStr := seedAppInstance(t, pool, "stophost", "http://stophost:3000/health", tenant, "up")
+
+	// Mark down by host+tenant
+	err := queries.MarkInstanceDownByServerStopped(context.Background(), db.MarkInstanceDownByServerStoppedParams{
+		Host:   "stophost",
+		Tenant: tenant,
+	})
+	if err != nil {
+		t.Fatalf("MarkInstanceDownByServerStopped: %v", err)
+	}
+
+	// Verify status changed to 'down'
+	var id pgtype.UUID
+	if err := id.Scan(idStr); err != nil {
+		t.Fatalf("invalid UUID %q: %v", idStr, err)
+	}
+	inst, err := queries.GetAppInstance(context.Background(), id)
+	if err != nil {
+		t.Fatalf("GetAppInstance: %v", err)
+	}
+	if inst.Status != "down" {
+		t.Fatalf("expected status 'down', got %q", inst.Status)
+	}
+}
+
+func TestMarkInstanceDownByServerStopped_TenantScoped(t *testing.T) {
+	tenantA := instanceTestTenant(t, "stopped-scope-a")
+	tenantB := instanceTestTenant(t, "stopped-scope-b")
+	_, pool := newTestAPIWithDBForInstances(t)
+	defer pool.Close()
+	queries := db.New(pool)
+
+	// Seed instances in two tenants with same host
+	seedAppInstance(t, pool, "sharedhost", "http://sharedhost:3000/health", tenantA, "up")
+	idBStr := seedAppInstance(t, pool, "sharedhost", "http://sharedhost:3000/health", tenantB, "up")
+
+	// Mark down only for tenantA
+	err := queries.MarkInstanceDownByServerStopped(context.Background(), db.MarkInstanceDownByServerStoppedParams{
+		Host:   "sharedhost",
+		Tenant: tenantA,
+	})
+	if err != nil {
+		t.Fatalf("MarkInstanceDownByServerStopped: %v", err)
+	}
+
+	// tenantA instance should be down
+	rowsA, _ := queries.ListAppInstances(context.Background(), db.ListAppInstancesParams{Tenant: tenantA, Lim: 100, Off: 0})
+	if len(rowsA) != 1 || rowsA[0].Status != "down" {
+		t.Fatalf("tenantA instance should be down, got status %q", rowsA[0].Status)
+	}
+
+	// tenantB instance should still be up (not affected)
+	var idB pgtype.UUID
+	if err := idB.Scan(idBStr); err != nil {
+		t.Fatalf("invalid UUID %q: %v", idBStr, err)
+	}
+	instB, _ := queries.GetAppInstance(context.Background(), idB)
+	if instB.Status != "up" {
+		t.Fatalf("tenantB instance should remain up, got status %q", instB.Status)
+	}
+}
+
+func TestMarkInstanceDownByServerStopped_NoHealthURL_Skipped(t *testing.T) {
+	tenant := instanceTestTenant(t, "stopped-nohealth")
+	_, pool := newTestAPIWithDBForInstances(t)
+	defer pool.Close()
+	queries := db.New(pool)
+
+	// Seed an instance with empty health_url (should be skipped by WHERE clause)
+	ctx := context.Background()
+	_, err := pool.Exec(ctx,
+		`INSERT INTO app_instances (id, harness, session_id, host, pid, label, health_url, tenant, status)
+		 VALUES ($1, $2, $3, $4, $5, $6, '', $7, 'up')`,
+		uuid.NewString(), "claude", uuid.NewString(), "nohealthhost", 1, "no-health", tenant)
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// MarkInstanceDownByServerStopped should be a no-op (0 rows updated)
+	err = queries.MarkInstanceDownByServerStopped(ctx, db.MarkInstanceDownByServerStoppedParams{
+		Host:   "nohealthhost",
+		Tenant: tenant,
+	})
+	if err != nil {
+		t.Fatalf("MarkInstanceDownByServerStopped: %v", err)
+	}
+
+	// Instance should still be up
+	rows, _ := queries.ListAppInstances(context.Background(), db.ListAppInstancesParams{Tenant: tenant, Lim: 100, Off: 0})
+	if len(rows) != 1 || rows[0].Status != "up" {
+		t.Fatalf("instance with no health_url should remain up, got status %q", rows[0].Status)
+	}
+}
