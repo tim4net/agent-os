@@ -331,17 +331,36 @@ func TestHTTPSpend_GroupByDay_RollsUpByDate(t *testing.T) {
 }
 
 // Blocking #3: group_by=project with ≥2 distinct non-NULL projects + one NULL.
+// project_id is a UUID column with FK to projects(id), so we must seed real
+// projects rows and use their UUIDs. The query's project_key = COALESCE(project_id::text, ''),
+// so we assert dimension_key against the UUID string values.
 func TestHTTPSpend_GroupByProject(t *testing.T) {
 	tenant := testTenant(t, "project")
 	a, pool, _ := newTestAPIWithDB(t)
 	defer pool.Close()
+	ctx := context.Background()
+
+	// Seed real parent rows in projects to satisfy the FK constraint.
+	projAlphaID := uuid.New()
+	projBetaID := uuid.New()
+	for _, p := range []struct{ id, slug, name string }{
+		{projAlphaID.String(), "test-proj-alpha", "Test Project Alpha"},
+		{projBetaID.String(), "test-proj-beta", "Test Project Beta"},
+	} {
+		_, err := pool.Exec(ctx,
+			`INSERT INTO projects (id, slug, name, tenant) VALUES ($1, $2, $3, $4)`,
+			p.id, p.slug, p.name, tenant)
+		if err != nil {
+			t.Fatalf("seed project %s: %v", p.slug, err)
+		}
+	}
 
 	// Seed 3 events with distinct projects + one NULL project.
 	// project-alpha: $0.06, 4 turns
-	seedWorkEvent(t, pool, "claude", tenant, 0.06, 4, time.Now(), withProjectID("proj-alpha"))
+	seedWorkEvent(t, pool, "claude", tenant, 0.06, 4, time.Now(), withProjectID(projAlphaID.String()))
 	// project-beta: $0.03, 2 turns
-	seedWorkEvent(t, pool, "claude", tenant, 0.03, 2, time.Now(), withProjectID("proj-beta"))
-	// NULL project: $0.01, 1 turn
+	seedWorkEvent(t, pool, "claude", tenant, 0.03, 2, time.Now(), withProjectID(projBetaID.String()))
+	// NULL project: $0.01, 1 turn (no withProjectID → NULL)
 	seedWorkEvent(t, pool, "claude", tenant, 0.01, 1, time.Now())
 
 	req := newTestGET("/?group_by=project&tenant=" + tenant)
@@ -366,13 +385,21 @@ func TestHTTPSpend_GroupByProject(t *testing.T) {
 		byKey[r.DimensionKey] = r
 	}
 
-	// proj-alpha: $0.06
-	if !testFeq(byKey["proj-alpha"].TotalCostUsd, 0.06) {
-		t.Fatalf("proj-alpha cost: expected 0.06, got %f", byKey["proj-alpha"].TotalCostUsd)
+	// proj-alpha (by UUID string): $0.06
+	alpha, ok := byKey[projAlphaID.String()]
+	if !ok {
+		t.Fatalf("expected project %s, got keys: %v", projAlphaID.String(), keys(byKey))
 	}
-	// proj-beta: $0.03
-	if !testFeq(byKey["proj-beta"].TotalCostUsd, 0.03) {
-		t.Fatalf("proj-beta cost: expected 0.03, got %f", byKey["proj-beta"].TotalCostUsd)
+	if !testFeq(alpha.TotalCostUsd, 0.06) {
+		t.Fatalf("proj-alpha cost: expected 0.06, got %f", alpha.TotalCostUsd)
+	}
+	// proj-beta (by UUID string): $0.03
+	beta, ok := byKey[projBetaID.String()]
+	if !ok {
+		t.Fatalf("expected project %s, got keys: %v", projBetaID.String(), keys(byKey))
+	}
+	if !testFeq(beta.TotalCostUsd, 0.03) {
+		t.Fatalf("proj-beta cost: expected 0.03, got %f", beta.TotalCostUsd)
 	}
 	// NULL project → empty string key: $0.01
 	nullProj, ok := byKey[""]
