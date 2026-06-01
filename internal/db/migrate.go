@@ -9,9 +9,20 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/tim4net/agent-os/internal/migrations"
 )
+
+// dbExecutor abstracts Exec/Query/QueryRow shared by *pgxpool.Pool,
+// *pgxpool.Conn, and pgx.Tx so helper functions can operate on any
+// of them without coupling to a concrete type.
+type dbExecutor interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
 
 // MigrationFile represents a single parsed migration file.
 type MigrationFile struct {
@@ -69,8 +80,8 @@ func parseMigrations() ([]MigrationFile, error) {
 
 // ensureSchemaMigrationsTable creates the schema_migrations tracking table
 // if it does not exist. Compatible with golang-migrate format.
-func ensureSchemaMigrationsTable(ctx context.Context, pool *pgxpool.Pool) error {
-	_, err := pool.Exec(ctx, `
+func ensureSchemaMigrationsTable(ctx context.Context, db dbExecutor) error {
+	_, err := db.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			version bigint PRIMARY KEY,
 			dirty   boolean NOT NULL DEFAULT false
@@ -82,28 +93,77 @@ func ensureSchemaMigrationsTable(ctx context.Context, pool *pgxpool.Pool) error 
 	return nil
 }
 
-// appliedVersions reads the set of successfully applied (non-dirty) migration versions.
-func appliedVersions(ctx context.Context, pool *pgxpool.Pool) (map[int64]bool, error) {
-	rows, err := pool.Query(ctx, `SELECT version FROM schema_migrations WHERE dirty = false`)
+// appliedSet is the result of computing which migration versions are applied.
+type appliedSet struct {
+	Versions         map[int64]bool // set of applied (non-dirty) versions
+	IsWatermark      bool           // true if the tracking table uses golang-migrate watermark format
+	WatermarkVersion int64          // the watermark value (0 if not watermark)
+}
+
+// computeAppliedVersions reads schema_migrations and determines which versions
+// are considered applied. It handles both formats:
+//   - Row-per-version (our native format): each applied version has its own row.
+//   - golang-migrate watermark: a single non-dirty row whose version represents
+//     the highest applied migration. All embedded versions <= that watermark
+//     are treated as applied.
+//
+// If the table is empty, no versions are considered applied.
+func computeAppliedVersions(ctx context.Context, db dbExecutor, allFiles []MigrationFile) (*appliedSet, error) {
+	rows, err := db.Query(ctx, `SELECT version, dirty FROM schema_migrations ORDER BY version`)
 	if err != nil {
-		return nil, fmt.Errorf("query applied versions: %w", err)
+		return nil, fmt.Errorf("query schema_migrations: %w", err)
 	}
 	defer rows.Close()
 
-	versions := make(map[int64]bool)
-	for rows.Next() {
-		var v int64
-		if err := rows.Scan(&v); err != nil {
-			return nil, fmt.Errorf("scan version: %w", err)
-		}
-		versions[v] = true
+	type rawRow struct {
+		Version int64
+		Dirty   bool
 	}
-	return versions, rows.Err()
+	var raw []rawRow
+	for rows.Next() {
+		var r rawRow
+		if err := rows.Scan(&r.Version, &r.Dirty); err != nil {
+			return nil, fmt.Errorf("scan schema_migrations row: %w", err)
+		}
+		raw = append(raw, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	result := &appliedSet{Versions: make(map[int64]bool)}
+
+	switch len(raw) {
+	case 0:
+		// Empty table — fresh DB, no migrations applied.
+	case 1:
+		if !raw[0].Dirty {
+			// golang-migrate watermark: single non-dirty row means all
+			// embedded versions up to and including this value are applied.
+			result.IsWatermark = true
+			result.WatermarkVersion = raw[0].Version
+			for _, f := range allFiles {
+				if f.Version <= raw[0].Version {
+					result.Versions[f.Version] = true
+				}
+			}
+		}
+		// Single dirty row — nothing is considered clean.
+	default:
+		// Row-per-version format (our native): each non-dirty row is applied.
+		for _, r := range raw {
+			if !r.Dirty {
+				result.Versions[r.Version] = true
+			}
+		}
+	}
+
+	return result, nil
 }
 
 // dirtyVersions reads the set of dirty migration versions.
-func dirtyVersions(ctx context.Context, pool *pgxpool.Pool) (map[int64]bool, error) {
-	rows, err := pool.Query(ctx, `SELECT version FROM schema_migrations WHERE dirty = true`)
+func dirtyVersions(ctx context.Context, db dbExecutor) (map[int64]bool, error) {
+	rows, err := db.Query(ctx, `SELECT version FROM schema_migrations WHERE dirty = true`)
 	if err != nil {
 		return nil, fmt.Errorf("query dirty versions: %w", err)
 	}
@@ -120,11 +180,11 @@ func dirtyVersions(ctx context.Context, pool *pgxpool.Pool) (map[int64]bool, err
 	return versions, rows.Err()
 }
 
-// markDirty records a migration version as dirty in a fresh transaction.
+// markDirty records a migration version as dirty using the given executor.
 // This MUST be called after the failed migration's transaction is already rolled back,
 // because Postgres aborts a transaction after any statement error.
-func markDirty(ctx context.Context, pool *pgxpool.Pool, version int64) error {
-	_, err := pool.Exec(ctx,
+func markDirty(ctx context.Context, db dbExecutor, version int64) error {
+	_, err := db.Exec(ctx,
 		`INSERT INTO schema_migrations(version, dirty) VALUES($1, true) ON CONFLICT (version) DO UPDATE SET dirty = true`,
 		version,
 	)
@@ -136,8 +196,8 @@ func markDirty(ctx context.Context, pool *pgxpool.Pool, version int64) error {
 
 // MigrateResult holds the outcome of a MigrateUp call.
 type MigrateResult struct {
-	Applied int      // number of migrations applied this run
-	Versions []int64 // versions that were applied
+	Applied  int      // number of migrations applied this run
+	Versions []int64  // versions that were applied
 }
 
 // MigrateUp applies all pending up-migrations to the database.
@@ -147,6 +207,8 @@ type MigrateResult struct {
 // embedded files that exist are applied.
 //
 // This function is safe to call at server boot or via a CLI subcommand.
+// It takes a Postgres advisory lock (session-scoped, on a dedicated connection)
+// to prevent concurrent migration runs across multiple API replicas.
 func MigrateUp(ctx context.Context, pool *pgxpool.Pool) (*MigrateResult, error) {
 	return MigrateUpWithLogger(ctx, pool, nil)
 }
@@ -158,12 +220,43 @@ func MigrateUpWithLogger(ctx context.Context, pool *pgxpool.Pool, logger *slog.L
 		log = slog.Default()
 	}
 
-	if err := ensureSchemaMigrationsTable(ctx, pool); err != nil {
+	// Acquire a dedicated connection for the entire migration run.
+	// This is critical for the advisory lock: pg_advisory_lock is
+	// session-scoped, so the lock, all migration transactions, and the
+	// unlock MUST run on the same connection. Using pool.Exec for each
+	// would land on different pooled connections, causing silent unlock
+	// failures and lock leaks.
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("acquire connection for migration: %w", err)
+	}
+	defer conn.Release()
+
+	if err := ensureSchemaMigrationsTable(ctx, conn); err != nil {
 		return nil, err
 	}
 
+	// Take a Postgres advisory lock to prevent concurrent migration runs
+	// (e.g. multiple API replicas booting simultaneously). Uses a well-known
+	// lock ID (3854494529 = hash of "agent-os:migrate") scoped to the whole DB.
+	const migrateLockID int64 = 3854494529
+	_, err = conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, migrateLockID)
+	if err != nil {
+		return nil, fmt.Errorf("acquire migration advisory lock: %w", err)
+	}
+	defer func() {
+		var ok bool
+		if err := conn.QueryRow(ctx, `SELECT pg_advisory_unlock($1)`, migrateLockID).Scan(&ok); err != nil {
+			log.Error("failed to release migration advisory lock", "error", err)
+		} else if !ok {
+			log.Error("advisory unlock returned false — lock was not held by this session")
+		}
+	}()
+
+	// ---- All TOCTOU-sensitive reads happen INSIDE the lock ----
+
 	// Check for existing dirty state.
-	dirty, err := dirtyVersions(ctx, pool)
+	dirty, err := dirtyVersions(ctx, conn)
 	if err != nil {
 		return nil, err
 	}
@@ -176,31 +269,40 @@ func MigrateUpWithLogger(ctx context.Context, pool *pgxpool.Pool, logger *slog.L
 		return nil, fmt.Errorf("database has dirty migration(s) [%s] — fix manually before continuing", strings.Join(dirtyList, ", "))
 	}
 
-	// Take a Postgres advisory lock to prevent concurrent migration runs
-	// (e.g. multiple API replicas booting simultaneously). Uses a well-known
-	// lock ID (3854494529 = hash of "agent-os:migrate") scoped to the whole DB.
-	// Released automatically when the connection (or pool) closes.
-	const migrateLockID int64 = 3854494529
-	_, err = pool.Exec(ctx, `SELECT pg_advisory_lock($1)`, migrateLockID)
-	if err != nil {
-		return nil, fmt.Errorf("acquire migration advisory lock: %w", err)
-	}
-	defer func() {
-		_, unlockErr := pool.Exec(ctx, `SELECT pg_advisory_unlock($1)`, migrateLockID)
-		if unlockErr != nil {
-			log.Error("failed to release migration advisory lock", "error", unlockErr)
-		}
-	}()
-
-	applied, err := appliedVersions(ctx, pool)
-	if err != nil {
-		return nil, err
-	}
-
+	// Compute the applied version set, handling both row-per-version and
+	// golang-migrate watermark formats.
 	allFiles, err := parseMigrations()
 	if err != nil {
 		return nil, err
 	}
+	appliedResult, err := computeAppliedVersions(ctx, conn, allFiles)
+	if err != nil {
+		return nil, err
+	}
+
+	// If the tracking table uses golang-migrate watermark format (single
+	// non-dirty row), expand it to row-per-version entries for forward
+	// compatibility. This ensures subsequent runs in row-per-version mode
+	// (triggered by >1 rows) see all applied versions. This runs inside the
+	// advisory lock so it's serialized and atomic.
+	if appliedResult.IsWatermark {
+		log.Info("detected golang-migrate watermark format — expanding to row-per-version",
+			"watermark", appliedResult.WatermarkVersion)
+		for _, f := range allFiles {
+			if f.Version <= appliedResult.WatermarkVersion && strings.HasSuffix(f.Name, ".up.sql") {
+				if _, err := conn.Exec(ctx,
+					`INSERT INTO schema_migrations(version, dirty) VALUES($1, false) ON CONFLICT (version) DO NOTHING`,
+					f.Version,
+				); err != nil {
+					return nil, fmt.Errorf("expand watermark version %d: %w", f.Version, err)
+				}
+			}
+		}
+		// The watermark row is now redundant but harmless — keeping it avoids
+		// a pointless DELETE that could fail if something goes wrong.
+	}
+
+	applied := appliedResult.Versions
 
 	// Filter to up-migrations that haven't been applied yet.
 	var pending []MigrationFile
@@ -219,8 +321,8 @@ func MigrateUpWithLogger(ctx context.Context, pool *pgxpool.Pool, logger *slog.L
 	for _, f := range pending {
 		log.Info("applying migration", "version", f.Version, "file", f.Name)
 
-		// Begin a transaction for this migration.
-		tx, err := pool.Begin(ctx)
+		// Begin a transaction for this migration on the dedicated connection.
+		tx, err := conn.Begin(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("begin tx for migration %d: %w", f.Version, err)
 		}
@@ -229,9 +331,13 @@ func MigrateUpWithLogger(ctx context.Context, pool *pgxpool.Pool, logger *slog.L
 		_, err = tx.Exec(ctx, f.Content)
 		if err != nil {
 			// The migration SQL failed — the transaction is now aborted in Postgres.
-			// Roll back the failed tx first, then record dirty=true in a NEW transaction.
-			tx.Rollback(ctx)
-			if markErr := markDirty(ctx, pool, f.Version); markErr != nil {
+			// Roll back the failed tx, then record dirty=true on the dedicated conn
+			// (which is still usable after the rollback).
+			if rbErr := tx.Rollback(ctx); rbErr != nil {
+				log.Error("failed to rollback failed migration tx",
+					"version", f.Version, "error", rbErr)
+			}
+			if markErr := markDirty(ctx, conn, f.Version); markErr != nil {
 				log.Error("failed to mark migration dirty after failure",
 					"version", f.Version, "originalError", err, "markError", markErr)
 				return nil, fmt.Errorf("migration %d (%s) failed: %w (AND failed to mark dirty: %v)", f.Version, f.Name, err, markErr)
@@ -239,13 +345,16 @@ func MigrateUpWithLogger(ctx context.Context, pool *pgxpool.Pool, logger *slog.L
 			return nil, fmt.Errorf("migration %d (%s) failed: %w (marked dirty — fix manually)", f.Version, f.Name, err)
 		}
 
-		// Record the version as clean.
+		// Record the version as clean (atomic with the migration SQL in the same tx).
 		_, err = tx.Exec(ctx,
 			`INSERT INTO schema_migrations(version, dirty) VALUES($1, false) ON CONFLICT (version) DO UPDATE SET dirty = false`,
 			f.Version,
 		)
 		if err != nil {
-			tx.Rollback(ctx)
+			if rbErr := tx.Rollback(ctx); rbErr != nil {
+				log.Error("failed to rollback tx after record failure",
+					"version", f.Version, "error", rbErr)
+			}
 			return nil, fmt.Errorf("record migration %d: %w", f.Version, err)
 		}
 
@@ -261,9 +370,10 @@ func MigrateUpWithLogger(ctx context.Context, pool *pgxpool.Pool, logger *slog.L
 	return result, nil
 }
 
-// MigrateDown rolls back a single migration (the highest applied version).
-// This is ONLY for explicit operator use — never called automatically.
-// The caller must provide the exact version to roll back.
+// MigrateDown rolls back a single migration. This is ONLY for explicit
+// operator use — never called automatically. The caller must provide the
+// exact version to roll back (or empty string to auto-lookup the down SQL
+// from embedded files).
 func MigrateDown(ctx context.Context, pool *pgxpool.Pool, version int64, downSQL string) error {
 	// Read the down migration content if not provided.
 	if downSQL == "" {
@@ -302,14 +412,20 @@ func MigrateDown(ctx context.Context, pool *pgxpool.Pool, version int64, downSQL
 
 	_, err = tx.Exec(ctx, downSQL)
 	if err != nil {
-		tx.Rollback(ctx)
+		if rbErr := tx.Rollback(ctx); rbErr != nil {
+			slog.Default().Error("failed to rollback down migration tx",
+				"version", version, "error", rbErr)
+		}
 		return fmt.Errorf("down migration %d failed: %w", version, err)
 	}
 
 	// Remove the version record.
 	_, err = tx.Exec(ctx, `DELETE FROM schema_migrations WHERE version = $1`, version)
 	if err != nil {
-		tx.Rollback(ctx)
+		if rbErr := tx.Rollback(ctx); rbErr != nil {
+			slog.Default().Error("failed to rollback tx after delete failure in down migration",
+				"version", version, "error", rbErr)
+		}
 		return fmt.Errorf("remove version %d record: %w", version, err)
 	}
 
