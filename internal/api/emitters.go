@@ -125,6 +125,10 @@ WHERE ($1::text = '' OR tenant = $1::text)
 // Pure read — no writes. Status is a pure function of (events, server clock now).
 func (a *API) ListEmitterHealth(w http.ResponseWriter, r *http.Request) {
 	tenant := r.URL.Query().Get("tenant")
+	if tenant == "" {
+		writeError(w, http.StatusBadRequest, "tenant query parameter is required")
+		return
+	}
 	staleWindow := service.DefaultSupervisedStaleWindow
 
 	if sw := r.URL.Query().Get("stale_window"); sw != "" {

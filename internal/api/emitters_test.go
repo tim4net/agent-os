@@ -54,23 +54,6 @@ func seedEmitterSession(t *testing.T, harness, tenant, kind, status, livenessMod
 	return sessionID
 }
 
-// seedEmitterHeartbeat adds a heartbeat event to an existing session.
-func seedEmitterHeartbeat(t *testing.T, harness, sessionID, tenant, receivedAt time.Time) {
-	t.Helper()
-	ctx := t.Context()
-	pool := getTestDB(t)
-
-	eventID := uuid.New()
-	_, err := pool.Exec(ctx,
-		`INSERT INTO work_events (event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, tenant, ts, received_at)
-		 VALUES ($1, 'agentos.work_event/v1', $2, $3, 'testhost-$2', 12345, 'session.heartbeat', 'running', 'supervised', $4, $5, $6)`,
-		eventID, harness, sessionID, tenant, receivedAt.UTC(), receivedAt.UTC(),
-	)
-	if err != nil {
-		t.Fatalf("seedEmitterHeartbeat: %v", err)
-	}
-}
-
 // emitterTestTenant returns a unique tenant name for emitter health tests.
 func emitterTestTenant(t *testing.T, suffix string) string {
 	t.Helper()
@@ -89,9 +72,6 @@ func TestHTTPEmitterHealth_SupervisedRunning(t *testing.T) {
 
 	// Seed session.start 2 minutes ago + heartbeat 1 minute ago → within 5m window → running
 	now := time.Now().UTC()
-	seedEmitterSession(t, "claude", tenant, "session.start", "running", "supervised", now.Add(-2*time.Minute))
-	// The seedEmitterSession returns the session_id, but we need it for the heartbeat.
-	// Re-seed with known session_id approach:
 	sessID := uuid.NewString()
 	ctx := t.Context()
 	eid1 := uuid.New()
@@ -238,13 +218,24 @@ func TestHTTPEmitterHealth_StaleToRunningTransition(t *testing.T) {
 	req1 := newTestGET("/?tenant=" + tenant + "&stale_window=5m")
 	rec1 := httptest.NewRecorder()
 	a.EmitterRoutes().ServeHTTP(rec1, req1)
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("phase1: expected 200, got %d; body: %s", rec1.Code, rec1.Body.String())
+	}
 	var resp1 service.EmitterHealthResponse
-	json.Unmarshal(rec1.Body.Bytes(), &resp1)
-
+	if err := json.Unmarshal(rec1.Body.Bytes(), &resp1); err != nil {
+		t.Fatalf("phase1: failed to parse response: %v", err)
+	}
+	foundPhase1 := false
 	for _, e := range resp1.Emitters {
-		if e.SessionID == sessID && e.Status != service.EmitterStatusStale {
-			t.Fatalf("phase1: expected stale, got %q", e.Status)
+		if e.SessionID == sessID {
+			foundPhase1 = true
+			if e.Status != service.EmitterStatusStale {
+				t.Fatalf("phase1: expected stale, got %q", e.Status)
+			}
 		}
+	}
+	if !foundPhase1 {
+		t.Fatalf("phase1: session %s not found in response", sessID)
 	}
 
 	// Phase 2: Resume — fresh heartbeat within the window
@@ -450,6 +441,105 @@ func TestHTTPEmitterHealth_TenantIsolation(t *testing.T) {
 	}
 	if !foundB {
 		t.Fatal("tenant B session not found in its own results")
+	}
+}
+
+// TestHTTPEmitterHealth_EmptyTenantReturns400 proves ADR-002:
+// GET /api/emitters with no tenant query parameter → 400.
+func TestHTTPEmitterHealth_EmptyTenantReturns400(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+	a, pool, _ := newTestAPIWithDB(t)
+	defer pool.Close()
+
+	req := newTestGET("/")
+	rec := httptest.NewRecorder()
+	a.EmitterRoutes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for empty tenant, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]string
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if !strings.Contains(resp["error"], "tenant") {
+		t.Fatalf("expected 'tenant' in error message, got: %s", resp["error"])
+	}
+}
+
+// TestHTTPEmitterHealth_CrossTenantNeverLeaks proves ADR-002:
+// Seeding two tenants and querying each one never returns the other tenant's sessions.
+func TestHTTPEmitterHealth_CrossTenantNeverLeaks(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+	tenantA := emitterTestTenant(t, "leak-a")
+	tenantB := emitterTestTenant(t, "leak-b")
+	a, pool, _ := newTestAPIWithDB(t)
+	defer pool.Close()
+
+	now := time.Now().UTC()
+	ctx := t.Context()
+
+	// Seed two sessions for tenant A
+	sessA1 := uuid.NewString()
+	sessA2 := uuid.NewString()
+	for _, sess := range []string{sessA1, sessA2} {
+		eid := uuid.New()
+		_, err := pool.Exec(ctx,
+			`INSERT INTO work_events (event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, tenant, ts, received_at)
+			 VALUES ($1, 'agentos.work_event/v1', 'claude', $2, 'testhost-leak-a', 12345, 'session.start', 'running', 'supervised', $3, $4, $5)`,
+			eid, sess, tenantA, now.Add(-1*time.Minute), now.Add(-1*time.Minute),
+		)
+		if err != nil {
+			t.Fatalf("seed A: %v", err)
+		}
+	}
+
+	// Seed one session for tenant B
+	sessB1 := uuid.NewString()
+	eidB := uuid.New()
+	_, err := pool.Exec(ctx,
+		`INSERT INTO work_events (event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, tenant, ts, received_at)
+		 VALUES ($1, 'agentos.work_event/v1', 'hermes', $2, 'testhost-leak-b', 12345, 'session.start', 'running', 'supervised', $3, $4, $5)`,
+		eidB, sessB1, tenantB, now.Add(-1*time.Minute), now.Add(-1*time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("seed B: %v", err)
+	}
+
+	// Query tenant A — must only see A sessions
+	reqA := newTestGET("/?tenant=" + tenantA + "&stale_window=5m")
+	recA := httptest.NewRecorder()
+	a.EmitterRoutes().ServeHTTP(recA, reqA)
+	var respA service.EmitterHealthResponse
+	if err := json.Unmarshal(recA.Body.Bytes(), &respA); err != nil {
+		t.Fatalf("parse A response: %v", err)
+	}
+	for _, e := range respA.Emitters {
+		if e.SessionID == sessB1 {
+			t.Fatal("tenant B session leaked into tenant A query")
+		}
+	}
+	if len(respA.Emitters) < 2 {
+		t.Fatalf("expected at least 2 sessions for tenant A, got %d", len(respA.Emitters))
+	}
+
+	// Query tenant B — must only see B sessions
+	reqB := newTestGET("/?tenant=" + tenantB + "&stale_window=5m")
+	recB := httptest.NewRecorder()
+	a.EmitterRoutes().ServeHTTP(recB, reqB)
+	var respB service.EmitterHealthResponse
+	if err := json.Unmarshal(recB.Body.Bytes(), &respB); err != nil {
+		t.Fatalf("parse B response: %v", err)
+	}
+	for _, e := range respB.Emitters {
+		if e.SessionID == sessA1 || e.SessionID == sessA2 {
+			t.Fatal("tenant A session leaked into tenant B query")
+		}
+	}
+	if len(respB.Emitters) < 1 {
+		t.Fatalf("expected at least 1 session for tenant B, got %d", len(respB.Emitters))
 	}
 }
 
