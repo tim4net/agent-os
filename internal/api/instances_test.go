@@ -24,9 +24,11 @@ import (
 // ---------------------------------------------------------------------------
 
 // instanceTestTenant returns a unique tenant name for a test.
+// Uses uuid.NewString() for per-run uniqueness so tests are re-run-safe
+// against persistent databases (avoids uq_app_instances_host_url_tenant conflicts).
 func instanceTestTenant(t *testing.T, suffix string) string {
 	t.Helper()
-	return "test-inst-" + suffix + "-" + t.Name()[:16]
+	return "test-inst-" + suffix + "-" + uuid.NewString()[:8]
 }
 
 // seedAppInstance inserts an app_instance row directly into the DB for tests.
