@@ -30,6 +30,9 @@ type Querier interface {
 	CountAppInstances(ctx context.Context, tenant string) (int64, error)
 	CountArtifacts(ctx context.Context, dollar_1 string) (int64, error)
 	CountDelegations(ctx context.Context, arg CountDelegationsParams) (int64, error)
+	// Counts distinct (harness, session_id) pairs that have at least one
+	// session lifecycle event for a given tenant.
+	CountSessions(ctx context.Context, tenant string) (int64, error)
 	// Returns the total count of non-zero-cost groups matching the given filters,
 	// without applying LIMIT/OFFSET. Used when the main query returns zero rows
 	// (offset past end) so Total is still accurate.
@@ -86,11 +89,26 @@ type Querier interface {
 	// Returns NULL (pgx.ErrNoRows) if not found or revoked.
 	GetIngestKeyByHash(ctx context.Context, keyHash string) (IngestKey, error)
 	GetLastUserMessage(ctx context.Context, conversationID pgtype.UUID) (Message, error)
+	// Returns the latest session.start or session.heartbeat received_at for a
+	// supervised (harness, session_id, tenant). Used to compute supervised liveness.
+	// Tenant-scoped to prevent cross-tenant absorption (ADR-002).
+	// Returns pgx.ErrNoRows if no start/heartbeat exists.
+	GetLatestHeartbeat(ctx context.Context, arg GetLatestHeartbeatParams) (pgtype.Timestamptz, error)
 	GetLatestWorkflowRun(ctx context.Context, workflowID pgtype.UUID) (WorkflowRun, error)
 	GetMemoryByPath(ctx context.Context, filePath string) (MemoryIndex, error)
 	GetPipelineItem(ctx context.Context, id pgtype.UUID) (PipelineItem, error)
 	GetProject(ctx context.Context, id pgtype.UUID) (Project, error)
 	GetProjectBySlug(ctx context.Context, slug string) (Project, error)
+	// Returns the received_at of the first session.start event for a session.
+	// Used to compute bounded_max_age (6h backstop from contract §4).
+	// Tenant-scoped to prevent cross-tenant absorption (ADR-002).
+	// Returns pgx.ErrNoRows if no session.start exists.
+	GetSessionStartTime(ctx context.Context, arg GetSessionStartTimeParams) (pgtype.Timestamptz, error)
+	// Returns the latest session.end event for a (harness, session_id, tenant), if any.
+	// Used to check if a session is in a terminal (absorbing) state.
+	// Tenant-scoped to prevent cross-tenant absorption (ADR-002).
+	// Returns pgx.ErrNoRows if no terminal event exists.
+	GetSessionTerminalEvent(ctx context.Context, arg GetSessionTerminalEventParams) (GetSessionTerminalEventRow, error)
 	GetSkill(ctx context.Context, id pgtype.UUID) (Skill, error)
 	GetTask(ctx context.Context, id pgtype.UUID) (Task, error)
 	GetTrackerItem(ctx context.Context, arg GetTrackerItemParams) (TrackerItem, error)
@@ -105,6 +123,17 @@ type Querier interface {
 	GetWorkflowRun(ctx context.Context, id pgtype.UUID) (WorkflowRun, error)
 	// Upsert by event_id: inserts new row, on conflict does nothing and returns nothing (pgx.ErrNoRows).
 	InsertWorkEvent(ctx context.Context, arg InsertWorkEventParams) (WorkEvent, error)
+	// Agent session liveness queries for the fleet monitor (WP-J, F10).
+	// NOTE: The SessionLivenessService (session_liveness.go) uses inline raw SQL
+	// rather than these sqlc-generated queries. This file exists as the declared
+	// contract for the liveness queries. If the service SQL drifts from these
+	// declarations, the tests in session_liveness_test.go will catch it. A future
+	// refactor may wire these generated queries directly.
+	// Returns all sessions for a tenant that have a session.start event, ordered by
+	// the latest event received_at descending. The caller derives liveness from
+	// the returned events in application code (contract §4: pure function of events + clock).
+	// Tenant is required (never empty — ADR-002).
+	ListActiveSessions(ctx context.Context, tenant string) ([]ListActiveSessionsRow, error)
 	ListAgents(ctx context.Context) ([]Agent, error)
 	// Lists app instances scoped to a tenant. Returns all if tenant is empty.
 	// Supports pagination with limit/offset.

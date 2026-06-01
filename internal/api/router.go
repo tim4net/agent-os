@@ -182,5 +182,8 @@ func (a *API) Router() http.Handler {
 	// Instance registry + health prober (WP-I, ADR-003)
 	r.Mount("/instances", a.InstanceRoutes())
 
+	// Fleet/session liveness monitor (WP-J, F10)
+	r.Mount("/fleet", a.FleetRoutes())
+
 	return r
 }
