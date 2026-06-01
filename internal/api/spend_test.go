@@ -59,8 +59,13 @@ func seedWorkEvent(t *testing.T, pool *pgxpool.Pool, harness, tenant string, cos
 	projectFilter := "NULL"
 	args := []interface{}{pgEID, harness, cfg.sessionID, tenant, costUsd, payload, ts.UTC().Format(time.RFC3339)}
 	if cfg.projectID != "" {
+		// Wrap as pgtype.UUID for consistent pgx uuid encoding (same as event_id above).
+		var pgPID pgtype.UUID
+		if err := pgPID.Scan(cfg.projectID); err != nil {
+			t.Fatalf("invalid project UUID %q: %v", cfg.projectID, err)
+		}
 		projectFilter = "$8"
-		args = append(args, cfg.projectID)
+		args = append(args, pgPID)
 	}
 	if cfg.externalRef != "" {
 		externalIdx := len(args) + 1
@@ -509,6 +514,11 @@ func TestHTTPSpend_ResponseShape(t *testing.T) {
 	if resp.Offset != 0 {
 		t.Fatalf("expected offset=0, got %d", resp.Offset)
 	}
+	// Total should reflect the true group count (from COUNT(*) OVER() window),
+	// not the page size.
+	if resp.Total != 1 {
+		t.Fatalf("expected Total=1 (one seeded group), got %d", resp.Total)
+	}
 	if len(resp.Rows) == 0 {
 		t.Fatal("expected at least 1 row")
 	}
@@ -711,6 +721,21 @@ func TestHTTPSpend_MixedCostGroup(t *testing.T) {
 	// behavior — the zero-cost session is counted because it contributes 0 to
 	// the sum but the GROUP still has positive total. This is by design.
 	// We verify the total cost is correct; event_count being 2 is fine.
+}
+
+// Non-blocking #6: 500 DB-error branch — forced-error via closed pool.
+func TestHTTPSpend_DatabaseError_Returns500(t *testing.T) {
+	a, pool, _ := newTestAPIWithDB(t)
+	// Close the pool to force all queries to fail with a connection error.
+	pool.Close()
+
+	req := newTestGET("/?group_by=agent&tenant=some-tenant")
+	rec := httptest.NewRecorder()
+	a.SpendRoutes().ServeHTTP(rec, req)
+
+	if rec.Code != 500 {
+		t.Fatalf("expected 500 on DB error, got %d; body: %s", rec.Code, rec.Body.String())
+	}
 }
 
 // ---------------------------------------------------------------------------
