@@ -4,10 +4,12 @@ CREATE TYPE control_mode AS ENUM ('continuous', 'tick', 'stopped');
 CREATE TYPE work_unit_status AS ENUM ('queued', 'in_flight', 'done', 'failed');
 
 -- Singleton row: always exactly one row controlling orchestrator behaviour.
+-- The `id` boolean PK with CHECK(id) structurally prevents a second row.
 CREATE TABLE control_state (
-    mode            control_mode NOT NULL DEFAULT 'stopped',
-    cadence_seconds INT          NOT NULL DEFAULT 60,
-    updated_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+    id              BOOLEAN        PRIMARY KEY DEFAULT TRUE CHECK (id),
+    mode            control_mode   NOT NULL DEFAULT 'stopped',
+    cadence_seconds INT            NOT NULL DEFAULT 60,
+    updated_at      TIMESTAMPTZ    NOT NULL DEFAULT NOW()
 );
 
 -- Work-unit queue: the orchestrator claims rows via SKIP LOCKED.

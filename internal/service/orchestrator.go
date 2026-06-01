@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -110,9 +111,12 @@ func (o *Orchestrator) SetMode(ctx context.Context, mode ControlMode) (*db.Contr
 
 // RunLoop drives the orchestrator based on the current control_state mode.
 //   - stopped: return immediately.
-//   - tick: claim and dispatch exactly ONE unit, then return.
+//   - tick: claim and dispatch exactly ONE unit, then return. The caller (an
+//     external scheduler or cron) is responsible for honoring cadence_seconds
+//     and re-invoking RunLoop at the desired interval.
 //   - continuous: loop claiming and dispatching until context is cancelled or
-//     mode changes to non-continuous.
+//     mode changes to non-continuous. On empty queue, idle-waits cadence_seconds
+//     and retries.
 //
 // The dispatchFn is inert — callers provide their own processing logic.
 func RunLoop(ctx context.Context, queries *db.Queries, dispatchFn func(ctx context.Context, unit *db.WorkUnit) error, log *slog.Logger) error {
@@ -158,7 +162,10 @@ func RunLoop(ctx context.Context, queries *db.Queries, dispatchFn func(ctx conte
 			row, err := queries.ClaimNextWorkUnit(ctx)
 			if err != nil {
 				if errors.Is(err, pgx.ErrNoRows) {
-					return nil
+					// Queue is empty — idle-wait and retry so newly-enqueued
+					// work is picked up without restarting the loop.
+					time.Sleep(time.Duration(state.CadenceSeconds) * time.Second)
+					continue
 				}
 				return err
 			}

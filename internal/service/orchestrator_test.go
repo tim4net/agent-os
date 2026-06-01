@@ -88,7 +88,7 @@ func TestOrchestratorEnqueueClaimComplete(t *testing.T) {
 
 // TestOrchestratorConcurrentClaim proves SKIP LOCKED prevents double-claiming:
 // enqueue N units, launch M goroutines all claiming concurrently, assert every
-// claimed unit ID is unique.
+// claimed unit ID is unique and all N units were claimed.
 func TestOrchestratorConcurrentClaim(t *testing.T) {
 	pool := getOrchestratorTestDB(t)
 	queries := db.New(pool)
@@ -109,11 +109,13 @@ func TestOrchestratorConcurrentClaim(t *testing.T) {
 		ids = append(ids, unit.ID)
 	}
 
-	// M goroutines each claim one unit
-	var mu sync.Mutex
-	claimedIDs := make(map[int64]bool)
+	// M goroutines each claim one unit, returning the claimed ID (or -1).
+	type result struct {
+		id  int64
+		err error
+	}
+	ch := make(chan result, M)
 	var wg sync.WaitGroup
-	var claimErrors int64
 
 	for i := 0; i < M; i++ {
 		wg.Add(1)
@@ -121,35 +123,54 @@ func TestOrchestratorConcurrentClaim(t *testing.T) {
 			defer wg.Done()
 			unit, err := orch.ClaimNext(ctx)
 			if err != nil {
-				atomic.AddInt64(&claimErrors, 1)
+				ch <- result{-1, err}
 				return
 			}
 			if unit == nil {
-				return // no unit available
+				ch <- result{-1, nil} // no unit available
+				return
 			}
-			mu.Lock()
-			claimedIDs[unit.ID] = true
-			mu.Unlock()
+			ch <- result{unit.ID, nil}
 		}()
 	}
 	wg.Wait()
+	close(ch)
 
-	if claimErrors > 0 {
-		t.Fatalf("%d goroutines encountered claim errors", claimErrors)
+	// Collect all claimed IDs into a slice, then count duplicates.
+	var claimedIDs []int64
+	for r := range ch {
+		if r.err != nil {
+			t.Fatalf("claim error: %v", r.err)
+		}
+		if r.id != -1 {
+			claimedIDs = append(claimedIDs, r.id)
+		}
 	}
 
-	// No unit should be double-claimed — the map has unique keys.
-	// Also, the number of claimed units should be <= N.
-	if len(claimedIDs) > N {
-		t.Fatalf("claimed %d units but only %d enqueued — double claim detected", len(claimedIDs), N)
+	// Build occurrence map — every ID must appear exactly once.
+	counts := make(map[int64]int)
+	for _, id := range claimedIDs {
+		counts[id]++
 	}
 
-	// Each claimed ID must be from the original set
+	// Assert no double-claims.
+	for id, cnt := range counts {
+		if cnt > 1 {
+			t.Fatalf("double-claim of unit %d (appeared %d times)", id, cnt)
+		}
+	}
+
+	// Assert all N units were claimed.
+	if len(counts) != N {
+		t.Fatalf("claimed %d unique units but expected all %d enqueued units", len(counts), N)
+	}
+
+	// Each claimed ID must be from the original set.
 	originalSet := make(map[int64]bool)
 	for _, id := range ids {
 		originalSet[id] = true
 	}
-	for id := range claimedIDs {
+	for id := range counts {
 		if !originalSet[id] {
 			t.Fatalf("claimed ID %d was not in the original set", id)
 		}
@@ -193,9 +214,6 @@ func TestOrchestratorStoppedMode(t *testing.T) {
 	}
 
 	// Verify the unit is still queued
-	unitCheck, err := queries.CompleteWorkUnit(ctx, unit.ID) // will fail if not in_flight
-	_ = unitCheck
-	// Just re-read by listing — simpler to check via direct query
 	var status string
 	err = pool.QueryRow(ctx, "SELECT status FROM work_units WHERE id = $1", unit.ID).Scan(&status)
 	if err != nil {
@@ -203,6 +221,108 @@ func TestOrchestratorStoppedMode(t *testing.T) {
 	}
 	if status != "queued" {
 		t.Fatalf("expected status 'queued' after stopped RunLoop, got '%s'", status)
+	}
+}
+
+// TestOrchestratorTickModeDispatchesOne proves that tick mode claims and dispatches
+// exactly one unit per RunLoop invocation, leaving remaining units queued.
+func TestOrchestratorTickModeDispatchesOne(t *testing.T) {
+	pool := getOrchestratorTestDB(t)
+	queries := db.New(pool)
+	orch := NewOrchestrator(queries)
+
+	ctx := context.Background()
+
+	// Set tick mode
+	_, err := orch.SetMode(ctx, ModeTick)
+	if err != nil {
+		t.Fatalf("SetMode tick: %v", err)
+	}
+
+	// Enqueue 2 units
+	unit1, err := orch.Enqueue(ctx, "wp-tick-1", json.RawMessage(`{"n":1}`))
+	if err != nil {
+		t.Fatalf("Enqueue 1: %v", err)
+	}
+	_, err = orch.Enqueue(ctx, "wp-tick-2", json.RawMessage(`{"n":2}`))
+	if err != nil {
+		t.Fatalf("Enqueue 2: %v", err)
+	}
+
+	// RunLoop once in tick mode — should dispatch exactly one unit.
+	var dispatchedCount int64
+	err = RunLoop(ctx, queries, func(ctx context.Context, u *db.WorkUnit) error {
+		atomic.AddInt64(&dispatchedCount, 1)
+		return nil
+	}, slog.Default())
+	if err != nil {
+		t.Fatalf("RunLoop: %v", err)
+	}
+
+	if dispatchedCount != 1 {
+		t.Fatalf("tick should dispatch exactly 1 unit, dispatched %d", dispatchedCount)
+	}
+
+	// Verify unit1 (oldest) was dispatched (status=in_flight), unit2 still queued.
+	var status1, status2 string
+	err = pool.QueryRow(ctx, "SELECT status FROM work_units WHERE id = $1", unit1.ID).Scan(&status1)
+	if err != nil {
+		t.Fatalf("read unit1 status: %v", err)
+	}
+	if status1 != "in_flight" {
+		t.Fatalf("expected first unit status 'in_flight' after tick, got '%s'", status1)
+	}
+	err = pool.QueryRow(ctx, "SELECT status FROM work_units WHERE id > $1 ORDER BY id LIMIT 1", unit1.ID).Scan(&status2)
+	if err != nil {
+		t.Fatalf("read unit2 status: %v", err)
+	}
+	if status2 != "queued" {
+		t.Fatalf("expected second unit still 'queued' after tick, got '%s'", status2)
+	}
+}
+
+// TestOrchestratorContinuousStopsOnModeChange proves that continuous mode
+// re-checks the stop flag each iteration: the dispatchFn flips mode to stopped
+// after 2 dispatches and the loop terminates without dispatching more.
+func TestOrchestratorContinuousStopsOnModeChange(t *testing.T) {
+	pool := getOrchestratorTestDB(t)
+	queries := db.New(pool)
+	orch := NewOrchestrator(queries)
+
+	ctx := context.Background()
+
+	// Set continuous mode
+	_, err := orch.SetMode(ctx, ModeContinuous)
+	if err != nil {
+		t.Fatalf("SetMode continuous: %v", err)
+	}
+
+	// Enqueue 5 units
+	for i := 0; i < 5; i++ {
+		_, err := orch.Enqueue(ctx, fmt.Sprintf("wp-continuous-%d", i), json.RawMessage(`{}`))
+		if err != nil {
+			t.Fatalf("Enqueue %d: %v", i, err)
+		}
+	}
+
+	// dispatchFn flips to stopped after the 2nd dispatch.
+	var dispatchedCount int64
+	err = RunLoop(ctx, queries, func(ctx context.Context, u *db.WorkUnit) error {
+		n := atomic.AddInt64(&dispatchedCount, 1)
+		if n >= 2 {
+			// Switch to stopped — the loop must notice and exit.
+			_, _ = orch.SetMode(ctx, ModeStopped)
+		}
+		return nil
+	}, slog.Default())
+	if err != nil {
+		t.Fatalf("RunLoop: %v", err)
+	}
+
+	// The loop should have dispatched exactly 2 (the 2nd callback set stopped,
+	// then the loop re-reads mode and exits before claiming the 3rd).
+	if dispatchedCount != 2 {
+		t.Fatalf("continuous loop should stop after mode change at dispatch 2, got %d", dispatchedCount)
 	}
 }
 
