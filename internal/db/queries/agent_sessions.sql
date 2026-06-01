@@ -1,3 +1,10 @@
+-- Agent session liveness queries for the fleet monitor (WP-J, F10).
+-- NOTE: The SessionLivenessService (session_liveness.go) uses inline raw SQL
+-- rather than these sqlc-generated queries. This file exists as the declared
+-- contract for the liveness queries. If the service SQL drifts from these
+-- declarations, the tests in session_liveness_test.go will catch it. A future
+-- refactor may wire these generated queries directly.
+
 -- name: ListActiveSessions :many
 -- Returns all sessions for a tenant that have a session.start event, ordered by
 -- the latest event received_at descending. The caller derives liveness from

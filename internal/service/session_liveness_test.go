@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -296,8 +295,13 @@ func TestBoundedSession_NoProof_ReturnsStale(t *testing.T) {
 
 // TestBoundedMaxAgeBackstop proves:
 // A bounded session older than 6h is stale regardless of other factors.
-// The bounded_max_age backstop ensures even old sessions with no terminal
-// event are classified as stale.
+// NOTE: without WP-N (host reporter), ALL bounded sessions are stale (young
+// and old) because there is no positive-proof source. This test seeds a 7h-old
+// bounded session and asserts stale. The backstop age check is currently a
+// debug-only log (no behavioral distinction from young-bounded → stale) since
+// bounded→running requires host-reporter confirmation (WP-N).
+// Mutation self-check: if deriveBoundedStatus ever returned non-stale for
+// old sessions, this test would catch it.
 func TestBoundedMaxAgeBackstop(t *testing.T) {
 	pool := getSessionLivenessTestDB(t)
 	defer pool.Close()
@@ -751,5 +755,4 @@ func TestFleet_ReturnsAllHarnesses(t *testing.T) {
 			t.Fatalf("harness %q not found in fleet", s.harness)
 		}
 	}
-	_ = fmt.Sprintf // suppress unused import (test file)
 }
