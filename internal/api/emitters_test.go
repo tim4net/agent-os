@@ -20,40 +20,6 @@ import (
 // Contract §4: running requires positive proof; absence of proof → stale.
 // ---------------------------------------------------------------------------
 
-// seedEmitterSession seeds a work_events session directly into the DB for
-// emitter health tests. Returns the session_id used.
-// Parameters:
-//   - harness: the emitter harness name
-//   - tenant: tenant slug (unique per test to avoid cross-contamination)
-//   - kind: event kind (session.start, session.heartbeat, session.end)
-//   - status: event status (running, done, failed, cancelled)
-//   - livenessMode: supervised or bounded
-//   - receivedAt: the received_at timestamp (server clock — the liveness clock)
-func seedEmitterSession(t *testing.T, harness, tenant, kind, status, livenessMode string, receivedAt time.Time) string {
-	t.Helper()
-	ctx := t.Context()
-	pool := getTestDB(t)
-
-	sessionID := uuid.NewString()
-	eventID := uuid.New()
-	host := "testhost-" + harness
-
-	pid := 0
-	if livenessMode == "supervised" {
-		pid = 12345
-	}
-
-	_, err := pool.Exec(ctx,
-		`INSERT INTO work_events (event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, tenant, ts, received_at)
-		 VALUES ($1, 'agentos.work_event/v1', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-		eventID, harness, sessionID, host, pid, kind, status, livenessMode, tenant, receivedAt.UTC(), receivedAt.UTC(),
-	)
-	if err != nil {
-		t.Fatalf("seedEmitterSession: %v", err)
-	}
-	return sessionID
-}
-
 // emitterTestTenant returns a unique tenant name for emitter health tests.
 func emitterTestTenant(t *testing.T, suffix string) string {
 	t.Helper()
@@ -253,8 +219,13 @@ func TestHTTPEmitterHealth_StaleToRunningTransition(t *testing.T) {
 	req2 := newTestGET("/?tenant=" + tenant + "&stale_window=5m")
 	rec2 := httptest.NewRecorder()
 	a.EmitterRoutes().ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("phase2: expected 200, got %d; body: %s", rec2.Code, rec2.Body.String())
+	}
 	var resp2 service.EmitterHealthResponse
-	json.Unmarshal(rec2.Body.Bytes(), &resp2)
+	if err := json.Unmarshal(rec2.Body.Bytes(), &resp2); err != nil {
+		t.Fatalf("phase2: failed to parse response: %v", err)
+	}
 
 	found := false
 	for _, e := range resp2.Emitters {
