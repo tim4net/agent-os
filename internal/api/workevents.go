@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -35,7 +36,11 @@ func (a *API) IngestWorkEvent(w http.ResponseWriter, r *http.Request) {
 	// The body tenant is NOT trusted — the server resolves it from the key.
 	resolvedTenant, err := service.ResolveTenantFromKeyDB(r.Context(), a.queries, ingestKey)
 	if err != nil {
-		writeError(w, http.StatusForbidden, "invalid ingest key")
+		if errors.Is(err, service.ErrInvalidIngestKey) {
+			writeError(w, http.StatusForbidden, "invalid ingest key")
+		} else {
+			writeError(w, http.StatusInternalServerError, "ingest key resolution failed")
+		}
 		return
 	}
 

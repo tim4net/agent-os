@@ -579,3 +579,42 @@ func TestIngestKey_Revocation_AC2(t *testing.T) {
 
 // Suppress unused import warnings
 var _ = slog.Default
+
+// ---------------------------------------------------------------------------
+// Handler regression: DB failure during key resolution → 500, not 403
+// ---------------------------------------------------------------------------
+
+func TestHTTPWorkEvent_DBFailure_Returns500(t *testing.T) {
+	// Use an invalid DSN to force a connection error during key resolution.
+	// The handler must return 500 for infra failures, not 403.
+	a := &API{
+		bus: service.NewEventBus(),
+	}
+	badDSN := "postgres://localhost:1/noexist?sslmode=disable"
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, badDSN)
+	if err != nil {
+		t.Fatalf("unexpected error creating bad pool: %v", err)
+	}
+	defer pool.Close()
+	a.queries = db.New(pool)
+
+	eventID := uuid.NewString()
+	body := validWorkEventJSON(eventID)
+	req := httptest.NewRequest("POST", "/work", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-AgentOS-Ingest-Key", "some-key")
+
+	rec := httptest.NewRecorder()
+	a.WorkEventRoutes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 for DB failure, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]string
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp["error"] != "ingest key resolution failed" {
+		t.Fatalf("expected 'ingest key resolution failed', got %q", resp["error"])
+	}
+}

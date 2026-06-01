@@ -3,7 +3,9 @@ package service
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -71,8 +73,8 @@ func TestResolveTenantFromKeyDB_EmptyKey(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for empty key")
 	}
-	if err.Error() != "missing ingest key" {
-		t.Fatalf("wrong error: %v", err)
+	if !errors.Is(err, ErrInvalidIngestKey) {
+		t.Fatalf("expected ErrInvalidIngestKey, got %v", err)
 	}
 }
 
@@ -86,8 +88,29 @@ func TestResolveTenantFromKeyDB_UnknownKey(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for unknown key")
 	}
-	if err.Error() != "invalid ingest key" {
-		t.Fatalf("wrong error: %v", err)
+	if !errors.Is(err, ErrInvalidIngestKey) {
+		t.Fatalf("expected ErrInvalidIngestKey, got %v", err)
+	}
+}
+
+func TestResolveTenantFromKeyDB_DBFailure(t *testing.T) {
+	dbErr := fmt.Errorf("connection refused")
+	q := &mockKeyQuerier{
+		getKeyFn: func(ctx context.Context, keyHash string) (db.IngestKey, error) {
+			return db.IngestKey{}, dbErr
+		},
+	}
+	_, err := ResolveTenantFromKeyDB(context.Background(), q, "some-key")
+	if err == nil {
+		t.Fatal("expected error for DB failure")
+	}
+	// DB failure should NOT be classified as ErrInvalidIngestKey.
+	if errors.Is(err, ErrInvalidIngestKey) {
+		t.Fatalf("DB failure should not be ErrInvalidIngestKey, got %v", err)
+	}
+	// Should be a wrapped infra error.
+	if !strings.Contains(err.Error(), "db lookup for ingest key") {
+		t.Fatalf("expected wrapped DB error, got %v", err)
 	}
 }
 

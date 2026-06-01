@@ -29,6 +29,11 @@ func HashIngestKey(rawKey string) string {
 	return fmt.Sprintf("%x", h)
 }
 
+// ErrInvalidIngestKey is a sentinel error returned by ResolveTenantFromKeyDB
+// when the ingest key is empty, unknown, or revoked. The handler uses this to
+// classify the response as 403 (auth rejection) vs 500 (infra failure).
+var ErrInvalidIngestKey = errors.New("invalid ingest key")
+
 // ResolveTenantFromKeyDB resolves a tenant from an ingest key using the
 // durable ingest_keys table. It hashes the raw key and looks up the
 // (non-revoked) key in the database. Returns an error if the key is empty,
@@ -37,14 +42,14 @@ func HashIngestKey(rawKey string) string {
 // This replaces the old env-backed ResolveTenantFromKey placeholder.
 func ResolveTenantFromKeyDB(ctx context.Context, querier IngestKeyQuerier, rawKey string) (string, error) {
 	if rawKey == "" {
-		return "", fmt.Errorf("missing ingest key")
+		return "", fmt.Errorf("%w: missing ingest key", ErrInvalidIngestKey)
 	}
 	keyHash := HashIngestKey(rawKey)
 	row, err := querier.GetIngestKeyByHash(ctx, keyHash)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			slog.Default().Warn("ingest key not found (unknown or revoked)", "key_hash_prefix", keyHash[:8])
-			return "", fmt.Errorf("invalid ingest key")
+			return "", ErrInvalidIngestKey
 		}
 		return "", fmt.Errorf("db lookup for ingest key: %w", err)
 	}
