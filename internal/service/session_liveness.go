@@ -264,16 +264,17 @@ func deriveSupervisedStatus(ctx context.Context, pool *pgxpool.Pool, harness, se
 }
 
 // deriveBoundedStatus computes status for bounded sessions.
-// WP-N (host reporter) not yet merged → degrade gracefully to bounded_max_age only.
-// No reporter coverage → stale (contract: "NEVER running without proof").
-// All bounded sessions without proof are stale; bounded_max_age is the absolute
-// backstop beyond which even a reporter-confirmed session would be suspect.
+// Consumes the host_liveness feed (WP-N) to derive bounded-session status.
+// A bounded session is "running" only when the host reporter confirms
+// alive=true with a recent seen_at (within BoundedMaxAge TTL).
+// Without positive proof or with an expired proof → stale.
 //
-// Returns "stale" for all bounded sessions (both young and old) when no reporter
-// coverage is available. Once WP-N merges, confirmed-alive sessions will return
-// "running" via the host reporter path.
+// Derivation rule (contract §4):
+//   alive=true, seen_at within TTL  → running (positive proof)
+//   alive=false                     → stale (process killed/crashed)
+//   no row / ErrNoRows              → stale (no proof, never running without proof)
 func deriveBoundedStatus(ctx context.Context, pool *pgxpool.Pool, harness, sessionID, tenant string, now time.Time) (string, error) {
-	// Query session.start to compute age (needed for logging and the backstop).
+	// Query session.start for age backstop.
 	var startReceivedAt time.Time
 	err := pool.QueryRow(ctx, `
 		SELECT received_at
@@ -289,11 +290,52 @@ func deriveBoundedStatus(ctx context.Context, pool *pgxpool.Pool, harness, sessi
 		return "", fmt.Errorf("query bounded start for session %s: %w", sessionID, err)
 	}
 
-	// No proof ⇒ stale. Contract §4: "NEVER running without proof."
-	age := now.Sub(startReceivedAt)
-	if age > BoundedMaxAge {
-		slog.Default().Debug("bounded session exceeded max age backstop",
-			"session_id", sessionID, "age", age)
+	// Consult host_liveness feed. Equivalent to GetBoundedSessionHostLiveness
+	// in host_liveness.sql, but via raw SQL to keep the (pool) signature.
+	var alive bool
+	var seenAt *time.Time
+	err = pool.QueryRow(ctx, `
+		SELECT COALESCE(hl.alive, false)::boolean,
+		       hl.seen_at
+		FROM (
+			SELECT we.host, we.pid
+			FROM work_events we
+			WHERE we.harness = $1 AND we.session_id = $2 AND we.tenant = $3
+			  AND we.kind = 'session.start'
+			ORDER BY we.received_at DESC LIMIT 1
+		) sess
+		LEFT JOIN host_liveness hl
+		    ON hl.host = sess.host AND hl.pid = sess.pid AND hl.tenant = $3
+	`, harness, sessionID, tenant).Scan(&alive, &seenAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "stale", nil
+		}
+		return "", fmt.Errorf("query host_liveness for bounded session %s: %w", sessionID, err)
 	}
-	return "stale", nil
+
+	// alive=false → stale (process killed/crashed).
+	if !alive {
+		return "stale", nil
+	}
+
+	// alive=true but seen_at expired → reporter may have died.
+	// BoundedMaxAge doubles as liveness-proof freshness TTL.
+	if seenAt != nil && now.Sub(*seenAt) > BoundedMaxAge {
+		slog.Default().Debug("bounded session host_liveness proof expired",
+			"session_id", sessionID, "seen_at", seenAt, "age", now.Sub(*seenAt))
+		return "stale", nil
+	}
+
+	// Absolute session-age backstop: even with a fresh alive=true proof, a
+	// bounded session older than BoundedMaxAge is suspect (contract: the 6h
+	// ceiling is absolute, not just a proof-freshness TTL).
+	if now.Sub(startReceivedAt) > BoundedMaxAge {
+		slog.Default().Debug("bounded session exceeded absolute max-age backstop",
+			"session_id", sessionID, "age", now.Sub(startReceivedAt))
+		return "stale", nil
+	}
+
+	// alive=true with recent proof, within absolute ceiling → running.
+	return "running", nil
 }

@@ -191,5 +191,12 @@ func (a *API) Router() http.Handler {
 	// Emitter/fleet liveness — per-session health from work_events (WP-M, #27)
 	r.Mount("/emitters", a.EmitterRoutes())
 
+	// Worktree listing + host-process liveness feed (WP-N, #28)
+	r.Mount("/worktrees", a.WorktreeRoutes())
+	// Integrator note: PR-body proposed r.Mount("/host", …) but the handler
+	// registers Post/Get at "/", and both the issue AC and the host-reporter's
+	// DEFAULT_ENDPOINT target /api/host/liveness — so mount at /host/liveness.
+	r.Mount("/host/liveness", a.HostLivenessRoutes())
+
 	return r
 }

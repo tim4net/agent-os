@@ -90,6 +90,18 @@ type Goal struct {
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
 
+type HostLiveness struct {
+	ID        int64              `json:"id"`
+	Host      string             `json:"host"`
+	Pid       int32              `json:"pid"`
+	SessionID string             `json:"session_id"`
+	Harness   string             `json:"harness"`
+	Cwd       string             `json:"cwd"`
+	Tenant    string             `json:"tenant"`
+	Alive     bool               `json:"alive"`
+	SeenAt    pgtype.Timestamptz `json:"seen_at"`
+}
+
 type IngestKey struct {
 	ID        int64              `json:"id"`
 	KeyHash   string             `json:"key_hash"`
