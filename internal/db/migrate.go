@@ -284,19 +284,42 @@ func MigrateUpWithLogger(ctx context.Context, pool *pgxpool.Pool, logger *slog.L
 	// non-dirty row), expand it to row-per-version entries for forward
 	// compatibility. This ensures subsequent runs in row-per-version mode
 	// (triggered by >1 rows) see all applied versions. This runs inside the
-	// advisory lock so it's serialized and atomic.
+	// advisory lock so it's serialized. The expansion is wrapped in a single
+	// transaction so it's atomic — a crash mid-expansion cannot leave partial
+	// state that would cause a subsequent boot to re-run already-applied
+	// migrations (which would choke on existing tables).
 	if appliedResult.IsWatermark {
+		// Log the exact assumed-applied version list so an operator can catch
+		// a bad assumption (e.g. if the watermark value is unexpectedly high).
+		assumedVersions := make([]int64, 0, len(appliedResult.Versions))
+		for v := range appliedResult.Versions {
+			assumedVersions = append(assumedVersions, v)
+		}
+		sort.Slice(assumedVersions, func(i, j int) bool { return assumedVersions[i] < assumedVersions[j] })
 		log.Info("detected golang-migrate watermark format — expanding to row-per-version",
-			"watermark", appliedResult.WatermarkVersion)
+			"watermark", appliedResult.WatermarkVersion,
+			"assumed_applied", assumedVersions)
+
+		// Wrap the entire expansion in a transaction for atomicity.
+		tx, err := conn.Begin(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("begin watermark expansion tx: %w", err)
+		}
 		for _, f := range allFiles {
 			if f.Version <= appliedResult.WatermarkVersion && strings.HasSuffix(f.Name, ".up.sql") {
-				if _, err := conn.Exec(ctx,
+				if _, err := tx.Exec(ctx,
 					`INSERT INTO schema_migrations(version, dirty) VALUES($1, false) ON CONFLICT (version) DO NOTHING`,
 					f.Version,
 				); err != nil {
+					if rbErr := tx.Rollback(ctx); rbErr != nil {
+						log.Error("failed to rollback watermark expansion tx", "error", rbErr)
+					}
 					return nil, fmt.Errorf("expand watermark version %d: %w", f.Version, err)
 				}
 			}
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, fmt.Errorf("commit watermark expansion: %w", err)
 		}
 		// The watermark row is now redundant but harmless — keeping it avoids
 		// a pointless DELETE that could fail if something goes wrong.
@@ -374,7 +397,53 @@ func MigrateUpWithLogger(ctx context.Context, pool *pgxpool.Pool, logger *slog.L
 // operator use — never called automatically. The caller must provide the
 // exact version to roll back (or empty string to auto-lookup the down SQL
 // from embedded files).
+//
+// Takes the same Postgres advisory lock as MigrateUp to prevent concurrent
+// down/up interleaving across API replicas.
 func MigrateDown(ctx context.Context, pool *pgxpool.Pool, version int64, downSQL string) error {
+	// Acquire a dedicated connection for the advisory lock (same pattern as
+	// MigrateUp — pg_advisory_lock is session-scoped).
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire connection for MigrateDown: %w", err)
+	}
+	defer conn.Release()
+
+	if err := ensureSchemaMigrationsTable(ctx, conn); err != nil {
+		return err
+	}
+
+	// Take the same advisory lock as MigrateUp.
+	const migrateLockID int64 = 3854494529
+	_, err = conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, migrateLockID)
+	if err != nil {
+		return fmt.Errorf("acquire migration advisory lock for down: %w", err)
+	}
+	defer func() {
+		var ok bool
+		if err := conn.QueryRow(ctx, `SELECT pg_advisory_unlock($1)`, migrateLockID).Scan(&ok); err != nil {
+			slog.Default().Error("failed to release migration advisory lock (down)", "error", err)
+		} else if !ok {
+			slog.Default().Error("advisory unlock returned false in MigrateDown — lock was not held by this session")
+		}
+	}()
+
+	// Check that the version is currently applied and not dirty FIRST.
+	// This must happen inside the lock (TOCTOU) and before the down-SQL
+	// lookup so the operator gets a consistent "not applied or is dirty"
+	// error for absent versions too.
+	var exists bool
+	err = conn.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = $1 AND dirty = false)`,
+		version,
+	).Scan(&exists)
+	if err != nil {
+		return fmt.Errorf("check version %d: %w", version, err)
+	}
+	if !exists {
+		return fmt.Errorf("version %d is not applied or is dirty", version)
+	}
+
 	// Read the down migration content if not provided.
 	if downSQL == "" {
 		allFiles, err := parseMigrations()
@@ -392,20 +461,8 @@ func MigrateDown(ctx context.Context, pool *pgxpool.Pool, version int64, downSQL
 		}
 	}
 
-	// Check that the version is currently applied and not dirty.
-	var exists bool
-	err := pool.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = $1 AND dirty = false)`,
-		version,
-	).Scan(&exists)
-	if err != nil {
-		return fmt.Errorf("check version %d: %w", version, err)
-	}
-	if !exists {
-		return fmt.Errorf("version %d is not applied or is dirty", version)
-	}
-
-	tx, err := pool.Begin(ctx)
+	// Begin the down migration transaction on the dedicated connection.
+	tx, err := conn.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin tx for down migration %d: %w", version, err)
 	}
