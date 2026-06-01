@@ -37,3 +37,7 @@ agent-os-server
 # local autonomy control state (never commit)
 .autonomy-mode
 .autonomy-halt
+
+# Python bytecode
+__pycache__/
+*.pyc
