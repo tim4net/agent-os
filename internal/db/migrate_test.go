@@ -278,7 +278,17 @@ func TestMigrateUpPartialDB(t *testing.T) {
 		}
 	}
 
-	// Now run MigrateUp — should only apply 13-16 (versions missing from the partial DB).
+	// Derive expected pending versions dynamically: all versions > 12 that exist
+	// in the migration set. This avoids hardcoding per-migration-WP updates.
+	var maxPreApplied int64 = 12
+	expectedVersions := map[int64]bool{}
+	for _, f := range allFiles {
+		if f.Version > maxPreApplied && strings.HasSuffix(f.Name, ".up.sql") {
+			expectedVersions[f.Version] = true
+		}
+	}
+
+	// Now run MigrateUp — should only apply versions missing from the partial DB.
 	result, err := MigrateUp(ctx, pool)
 	if err != nil {
 		t.Fatalf("MigrateUp on partial DB: %v", err)
@@ -286,8 +296,7 @@ func TestMigrateUpPartialDB(t *testing.T) {
 
 	t.Logf("partial DB: applied %d pending migrations: %v", result.Applied, result.Versions)
 
-	// Assert the exact applied set: only 13, 14, 15, 16, 19 should have been applied.
-	expectedVersions := map[int64]bool{13: true, 14: true, 15: true, 16: true, 19: true}
+	// Assert the exact applied set matches the derived expected set.
 	if len(result.Versions) != len(expectedVersions) {
 		t.Errorf("expected %d applied versions, got %d: %v", len(expectedVersions), len(result.Versions), result.Versions)
 	}
@@ -476,7 +485,26 @@ func TestMigrateUpWatermarkFormat(t *testing.T) {
 		t.Fatalf("expected 1 watermark row, got %d", count)
 	}
 
-	// Run MigrateUp — should detect watermark and apply only 13-16.
+	// Derive expected pending versions dynamically: all versions > watermark (12) that
+	// exist in the migration set. This avoids hardcoding per-migration-WP updates.
+	var watermarkVersion int64 = 12
+	expectedVersions := map[int64]bool{}
+	var expansionCount int
+	for _, f := range allFiles {
+		if strings.HasSuffix(f.Name, ".up.sql") {
+			if f.Version <= watermarkVersion {
+				// Versions <= watermark get expanded (except watermark itself
+				// which already exists as the watermark row — ON CONFLICT DO NOTHING).
+				if f.Version != watermarkVersion {
+					expansionCount++
+				}
+			} else {
+				expectedVersions[f.Version] = true
+			}
+		}
+	}
+
+	// Run MigrateUp — should detect watermark and apply only pending versions.
 	result, err := MigrateUp(ctx, pool)
 	if err != nil {
 		t.Fatalf("MigrateUp with watermark: %v", err)
@@ -484,8 +512,7 @@ func TestMigrateUpWatermarkFormat(t *testing.T) {
 
 	t.Logf("watermark test: applied %d pending migrations: %v", result.Applied, result.Versions)
 
-	// Should have applied exactly 5 versions: 13, 14, 15, 16, 19.
-	expectedVersions := map[int64]bool{13: true, 14: true, 15: true, 16: true, 19: true}
+	// Assert the exact applied set matches the derived expected set.
 	if len(result.Versions) != len(expectedVersions) {
 		t.Errorf("expected %d applied versions, got %d: %v", len(expectedVersions), len(result.Versions), result.Versions)
 	}
@@ -500,14 +527,13 @@ func TestMigrateUpWatermarkFormat(t *testing.T) {
 	}
 
 	// After watermark expansion, schema_migrations should have:
-	// - Expansion rows for embedded versions <= 12 that exist: 1, 8, 9, 10, 11
-	//   (version 12 conflicts with existing watermark row via ON CONFLICT DO NOTHING)
-	// - The original watermark row (12)
-	// - Newly applied rows: 13, 14, 15, 16, 19
-	// Total: 5 (expansion) + 1 (watermark) + 5 (new) = 11
+	// - Expansion rows for embedded versions <= watermark (excluding watermark itself)
+	// - The original watermark row (1)
+	// - Newly applied rows (one per pending migration)
+	expectedTotal := expansionCount + 1 /* watermark row */ + result.Applied
 	totalCount := countRows(t, pool, `SELECT COUNT(*) FROM schema_migrations`)
-	if totalCount != 11 {
-		t.Errorf("expected 11 rows in schema_migrations after watermark expansion + apply, got %d", totalCount)
+	if totalCount != expectedTotal {
+		t.Errorf("expected %d rows in schema_migrations after watermark expansion + apply, got %d", expectedTotal, totalCount)
 	}
 
 	// Verify second run is idempotent (now in row-per-version mode).
