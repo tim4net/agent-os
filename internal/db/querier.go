@@ -30,6 +30,8 @@ type Querier interface {
 	CountAppInstances(ctx context.Context, tenant string) (int64, error)
 	CountArtifacts(ctx context.Context, dollar_1 string) (int64, error)
 	CountDelegations(ctx context.Context, arg CountDelegationsParams) (int64, error)
+	// Returns total count of distinct (harness, session_id) matching the tenant filter.
+	CountEmitterHealthSessions(ctx context.Context, tenant string) (int64, error)
 	// Counts distinct (harness, session_id) pairs that have at least one
 	// session lifecycle event for a given tenant.
 	CountSessions(ctx context.Context, tenant string) (int64, error)
@@ -84,6 +86,17 @@ type Querier interface {
 	GetArtifactByPath(ctx context.Context, filePath pgtype.Text) (Artifact, error)
 	GetConversation(ctx context.Context, id pgtype.UUID) (Conversation, error)
 	GetDelegation(ctx context.Context, id pgtype.UUID) (Delegation, error)
+	// Returns per-session liveness state derived from work_events.
+	// Pure read — no migration needed (WP-M).
+	// Computes liveness as a PURE FUNCTION of (persisted events, server clock now).
+	// Contract §4: running requires positive proof (heartbeat within timeout);
+	// absence of proof ⇒ stale, never "running" (ADR-001 F10 / ADR-003 D3).
+	// Terminal (session.end) is absorbing: once seen, later non-terminal events are
+	// ignored for liveness purposes.
+	// @stale_window: supervised sessions with no heartbeat in this window are stale.
+	//   Default = 5 minutes (contract §4).
+	// @tenant: required — scopes to one tenant (handler rejects empty).
+	GetEmitterHealth(ctx context.Context, arg GetEmitterHealthParams) ([]GetEmitterHealthRow, error)
 	GetGoal(ctx context.Context, id pgtype.UUID) (Goal, error)
 	// Look up a (non-revoked) ingest key by its SHA-256 hash.
 	// Returns NULL (pgx.ErrNoRows) if not found or revoked.

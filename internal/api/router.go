@@ -185,5 +185,8 @@ func (a *API) Router() http.Handler {
 	// Fleet/session liveness monitor (WP-J, F10)
 	r.Mount("/fleet", a.FleetRoutes())
 
+	// Emitter/fleet liveness — per-session health from work_events (WP-M, #27)
+	r.Mount("/emitters", a.EmitterRoutes())
+
 	return r
 }
