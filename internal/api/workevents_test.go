@@ -466,6 +466,7 @@ func TestIngestKey_TenantBinding_AC1(t *testing.T) {
 		"ts": "%s",
 		"status": "running",
 		"liveness_mode": "supervised",
+		"pid": 12345,
 		"tenant": "other-tenant"
 	}`, eventID, uuid.NewString(), time.Now().UTC().Format(time.RFC3339))
 
@@ -523,7 +524,8 @@ func TestIngestKey_Revocation_AC2(t *testing.T) {
 		"session_id": "%s",
 		"ts": "%s",
 		"status": "running",
-		"liveness_mode": "supervised"
+		"liveness_mode": "supervised",
+		"pid": 12345
 	}`, eventID1, uuid.NewString(), time.Now().UTC().Format(time.RFC3339))
 
 	req1 := httptest.NewRequest("POST", "/work", strings.NewReader(body1))
