@@ -161,6 +161,7 @@ WITH failed_sessions AS (
             we.host,
             we.title,
             we.tenant,
+            we.project_id,
             we.external_ref,
             we.branch,
             we.received_at,
@@ -171,7 +172,7 @@ WITH failed_sessions AS (
           AND ($1::text = '' OR we.tenant = $1::text)
         ORDER BY we.harness, we.session_id, we.received_at DESC
     ) sub
-    LEFT JOIN projects p ON sub.tenant = p.tenant
+    LEFT JOIN projects p ON p.id = sub.project_id
     WHERE sub.status = 'failed'
 ),
 down_instances AS (
@@ -266,9 +267,8 @@ SELECT
     r.inc_type, r.harness, r.session_id, r.host, r.title,
     r.inc_status, r.tenant, r.project_slug, r.external_ref,
     r.branch, r.received_at, c.total
-FROM ranked r
-CROSS JOIN counted c
-WHERE r.rn > $3::int AND r.rn <= ($3::int + $4::int)
+FROM counted c
+LEFT JOIN ranked r ON r.rn > $3::int AND r.rn <= ($3::int + $4::int)
 ORDER BY r.rn`
 
 	rows, err := pool.Query(ctx, query, tenant, staleInterval, offset, limit)
@@ -292,6 +292,12 @@ ORDER BY r.rn`
 			&branch, &receivedAt, &total,
 		); err != nil {
 			return nil, 0, err
+		}
+
+		// When the offset is past the end of incidents, the LEFT JOIN produces
+		// one row with total but NULL ranked columns (incType = ""). Skip it.
+		if incType == "" {
+			continue
 		}
 
 		incidents = append(incidents, Incident{

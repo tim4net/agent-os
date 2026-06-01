@@ -83,13 +83,14 @@ func requireTestDB(t *testing.T) {
 
 // TestIncidents_NoFailedSessions_ReturnsEmptyGreen tests that when there are no
 // failed sessions, the endpoint returns an empty incidents list (honest "all green").
+// Uses a unique tenant to avoid cross-test pollution from sibling tests.
 func TestIncidents_NoFailedSessions_ReturnsEmptyGreen(t *testing.T) {
 	requireTestDB(t)
 	a, pool, _ := newTestAPIWithDB(t)
 	defer pool.Close()
 	seedTestIngestKey(t, pool)
 
-	req := httptest.NewRequest("GET", "/?tenant=personal", nil)
+	req := httptest.NewRequest("GET", "/?tenant=incidents-empty-green-test", nil)
 	rec := httptest.NewRecorder()
 	a.IncidentRoutes().ServeHTTP(rec, req)
 
@@ -527,6 +528,7 @@ func TestIncidents_FailedThenSucceededDoesNotSurface(t *testing.T) {
 	fr := map[string]interface{}{}
 	json.Unmarshal([]byte(failBody), &fr)
 	fr["session_id"] = sessionID
+	fr["harness"] = "hermes" // same harness as start/done so (harness, session_id) is the same session
 	fj, _ := json.Marshal(fr)
 	ingestWorkEvent(t, a, string(fj))
 
@@ -632,7 +634,7 @@ func TestIncidents_StaleSessionSurfaces(t *testing.T) {
 	startReq["kind"] = "session.start"
 	startReq["liveness_mode"] = "supervised"
 	startReq["pid"] = 12345
-	startReq["harness"] = "stale-test"
+	startReq["harness"] = "claude" // must be a valid harness (hermes|claude|antigravity|codex|generic)
 
 	// Use a ts far enough in the past (but within the 10-min server clock skew guard)
 	// so the received_at falls outside the stale window. Since received_at is server-set,
@@ -674,8 +676,8 @@ func TestIncidents_StaleSessionSurfaces(t *testing.T) {
 			if inc.Status != "stale" {
 				t.Errorf("expected status=stale, got %q", inc.Status)
 			}
-			if inc.Harness != "stale-test" {
-				t.Errorf("expected harness=stale-test, got %q", inc.Harness)
+			if inc.Harness != "claude" {
+				t.Errorf("expected harness=claude, got %q", inc.Harness)
 			}
 			break
 		}
@@ -748,6 +750,111 @@ func TestIncidents_UnifiedTotal(t *testing.T) {
 	}
 	if typeCounts["down_instance"] < 1 {
 		t.Errorf("expected at least 1 down_instance incident, got %d", typeCounts["down_instance"])
+	}
+}
+
+// TestIncidents_ProjectFanOutDoesNotDuplicate tests that a tenant with multiple
+// projects does NOT duplicate a failed session (one session per project).
+// Previously the LEFT JOIN was ON sub.tenant = p.tenant, causing N duplicates.
+// Now it's ON p.id = sub.project_id — exact match, no fan-out.
+func TestIncidents_ProjectFanOutDoesNotDuplicate(t *testing.T) {
+	requireTestDB(t)
+	a, pool, _ := newTestAPIWithDB(t)
+	defer pool.Close()
+	seedTestIngestKey(t, pool)
+
+	// Create 3 projects for tenant "personal"
+	ctx := t.Context()
+	for i := 0; i < 3; i++ {
+		slug := fmt.Sprintf("fanout-project-%d-%s", i, uuid.NewString()[:8])
+		_, err := pool.Exec(ctx,
+			`INSERT INTO projects (slug, name, tenant) VALUES ($1, $2, 'personal') ON CONFLICT (slug) DO NOTHING`,
+			slug, fmt.Sprintf("Fanout Project %d", i),
+		)
+		if err != nil {
+			t.Fatalf("seed project %d: %v", i, err)
+		}
+	}
+
+	// Ingest one failed session for tenant personal
+	sessionID := uuid.NewString()
+	startJSON := validWorkEventJSON(uuid.NewString())
+	sr := map[string]interface{}{}
+	json.Unmarshal([]byte(startJSON), &sr)
+	sr["session_id"] = sessionID
+
+	failBody := failedSessionWorkEvent(uuid.NewString(), sessionID)
+	fr := map[string]interface{}{}
+	json.Unmarshal([]byte(failBody), &fr)
+	fr["session_id"] = sessionID
+
+	ingestWorkEvent(t, a, string(startJSON))
+	ingestWorkEvent(t, a, string(failBody))
+
+	req := httptest.NewRequest("GET", "/?tenant=personal&limit=200", nil)
+	rec := httptest.NewRecorder()
+	a.IncidentRoutes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp IncidentsResponse
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+
+	// Count how many incidents have this session_id
+	count := 0
+	for _, inc := range resp.Incidents {
+		if inc.Type == "failed_session" && inc.SessionID == sessionID {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("expected exactly 1 incident for session %s with 3 projects in tenant, got %d (total=%d, incidents=%+v)",
+			sessionID, count, resp.Total, resp.Incidents)
+	}
+}
+
+// TestIncidents_TotalOnOutOfRangePage tests that Total is still reported
+// correctly even when the offset is past all incidents (empty page).
+func TestIncidents_TotalOnOutOfRangePage(t *testing.T) {
+	requireTestDB(t)
+	a, pool, _ := newTestAPIWithDB(t)
+	defer pool.Close()
+	seedTestIngestKey(t, pool)
+
+	// Ingest a failed session
+	sessionID := uuid.NewString()
+	startJSON := validWorkEventJSON(uuid.NewString())
+	sr := map[string]interface{}{}
+	json.Unmarshal([]byte(startJSON), &sr)
+	sr["session_id"] = sessionID
+
+	failBody := failedSessionWorkEvent(uuid.NewString(), sessionID)
+	fr := map[string]interface{}{}
+	json.Unmarshal([]byte(failBody), &fr)
+	fr["session_id"] = sessionID
+
+	ingestWorkEvent(t, a, string(startJSON))
+	ingestWorkEvent(t, a, string(failBody))
+
+	// Query with an offset past all incidents
+	req := httptest.NewRequest("GET", "/?tenant=personal&limit=10&offset=99999", nil)
+	rec := httptest.NewRecorder()
+	a.IncidentRoutes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp IncidentsResponse
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+
+	if len(resp.Incidents) != 0 {
+		t.Fatalf("expected 0 incidents on out-of-range page, got %d", len(resp.Incidents))
+	}
+	if resp.Total < 1 {
+		t.Fatalf("expected total >= 1 on out-of-range page (incidents exist but offset is past them), got %d", resp.Total)
 	}
 }
 
