@@ -289,6 +289,59 @@ func TestHTTPFleet_DerivationError_PropagatesTo500(t *testing.T) {
 	}
 }
 
+// TestHTTPFleet_NULLLivenessMode_Returns200 proves:
+// A session.end event with literal SQL NULL liveness_mode does NOT cause
+// the fleet endpoint to 500. Regression for finding #1.
+func TestHTTPFleet_NULLLivenessMode_Returns200(t *testing.T) {
+	a, pool, _ := newTestAPIWithDB(t)
+	defer pool.Close()
+	seedTestIngestKey(t, pool)
+
+	sessionID := "fleet-null-mode-ht-" + uuid.NewString()[:8]
+	seedSessionStart(t, pool, sessionID, "supervised", time.Now().UTC().Add(-2*time.Minute))
+
+	// Seed session.end with literal SQL NULL liveness_mode (real-world shape).
+	ctx := t.Context()
+	_, err := pool.Exec(ctx, `
+		INSERT INTO work_events (
+			event_id, schema_version, harness, session_id, host, pid,
+			kind, status, liveness_mode, tenant, received_at, ts, payload
+		) VALUES (
+			$1, 'agentos.work_event/v1', 'claude', $2, 'test-host', 99992,
+			'session.end', 'done', NULL, 'personal', $3, $3, '{}'
+		) ON CONFLICT (event_id) DO NOTHING
+	`, uuid.NewString(), sessionID, time.Now().UTC().Add(-30*time.Second))
+	if err != nil {
+		t.Fatalf("seed NULL liveness_mode session.end: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupSession(t, pool, sessionID)
+	})
+
+	req := httptest.NewRequest("GET", "/?tenant=personal", nil)
+	rec := httptest.NewRecorder()
+	a.FleetRoutes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s (NULL liveness_mode caused 500?)", rec.Code, rec.Body.String())
+	}
+
+	var fleet service.FleetResponse
+	json.Unmarshal(rec.Body.Bytes(), &fleet)
+
+	found := findSession(fleet, sessionID)
+	if found == nil {
+		t.Fatalf("session %s not found in fleet", sessionID)
+	}
+	if found.Status != "done" {
+		t.Fatalf("expected terminal 'done', got %q", found.Status)
+	}
+	// LivenessMode must be resolved from session.start, not NULL from session.end.
+	if found.LivenessMode != "supervised" {
+		t.Fatalf("expected liveness_mode 'supervised' (resolved from session.start), got %q", found.LivenessMode)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Helpers for fleet handler tests
 // ---------------------------------------------------------------------------

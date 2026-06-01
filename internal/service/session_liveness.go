@@ -18,12 +18,12 @@ type SessionStatus struct {
 	SessionID       string    `json:"session_id"`
 	Host            string    `json:"host"`
 	PID             *int32    `json:"pid,omitempty"`
-	LivenessMode    string    `json:"liveness_mode"`
+	LivenessMode    string    `json:"liveness_mode"` // resolved from session.start, never NULL
 	Tenant          string    `json:"tenant"`
-	Status          string    `json:"status"` // running|stale|pending|done|failed|cancelled
+	Status          string    `json:"status"` // running|stale|done|failed|cancelled|unknown
 	LastEventAt     time.Time `json:"last_event_at"`
 	LastEventKind   string    `json:"last_event_kind"`
-	LastEventStatus string    `json:"last_event_status,omitempty"`
+	LastEventStatus string    `json:"last_event_status,omitempty"` // empty string if NULL
 }
 
 // Liveness configuration constants (contract §4).
@@ -87,20 +87,26 @@ func (s *SessionLivenessService) GetFleet(ctx context.Context, tenant string) (*
 }
 
 // sessionRow is an internal representation of a session's latest event.
+// LivenessMode and LastEventStatus use *string because they can be SQL NULL:
+// liveness_mode is set on session.start only → NULL on session.end/heartbeat;
+// status is conditional → can be NULL on heartbeat or session.end.
 type sessionRow struct {
-	Harness        string
-	SessionID      string
-	Host           string
-	PID            *int32
-	LivenessMode   string
-	Tenant         string
-	LastEventKind  string
-	LastEventStatus string
-	ReceivedAt     time.Time
+	Harness         string
+	SessionID       string
+	Host            string
+	PID             *int32
+	LivenessMode    *string
+	Tenant          string
+	LastEventKind   string
+	LastEventStatus *string
+	ReceivedAt      time.Time
 }
 
 // querySessions fetches the latest event for each distinct (harness, session_id)
-// pair within a tenant.
+// pair within a tenant. Uses COALESCE on liveness_mode and status so SQL NULL
+// scans safely into *string — callers can distinguish NULL from empty string
+// if needed, but the derivation logic always resolves liveness_mode from the
+// session.start row (see deriveSessionStatus step 2).
 func (s *SessionLivenessService) querySessions(ctx context.Context, tenant string) ([]sessionRow, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT DISTINCT ON (harness, session_id)
@@ -144,25 +150,55 @@ func (s *SessionLivenessService) querySessions(ctx context.Context, tenant strin
 //	    state = running if (now - last_hb) < 5m else stale
 //	elif liveness_mode=bounded:
 //	    # degrade gracefully if WP-N (host reporter) not merged
-//	    else (no reporter coverage) -> pending if age <= 6h, stale if age > 6h
+//	    # no reporter coverage → stale (never running without proof)
 //	    backstop: bounded_max_age (6h) -> stale
+//
+// NOTE: liveness_mode is resolved from the session.start row (tenant-scoped),
+// NOT from the latest-event row. session.end/heartbeat events have NULL
+// liveness_mode in real data — using the latest-event row would misclassify.
 func deriveSessionStatus(ctx context.Context, pool *pgxpool.Pool, row sessionRow, now time.Time) (SessionStatus, error) {
+	// Resolve liveness_mode from the session.start row (authoritative).
+	// This avoids NULL liveness_mode from session.end/heartbeat events.
+	var resolvedMode *string
+	err := pool.QueryRow(ctx, `
+		SELECT liveness_mode
+		FROM work_events
+		WHERE harness = $1 AND session_id = $2 AND tenant = $3 AND kind = 'session.start'
+		ORDER BY received_at ASC
+		LIMIT 1
+	`, row.Harness, row.SessionID, row.Tenant).Scan(&resolvedMode)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return SessionStatus{}, fmt.Errorf("query session.start liveness_mode for session %s: %w", row.SessionID, err)
+	}
+
+	// Dereference *string to plain string; default to "" if truly NULL (no session.start at all).
+	var mode string
+	if resolvedMode != nil {
+		mode = *resolvedMode
+	}
+
+	// Resolve last_event_status from *string to plain string.
+	var lastStatus string
+	if row.LastEventStatus != nil {
+		lastStatus = *row.LastEventStatus
+	}
+
 	status := SessionStatus{
 		Harness:         row.Harness,
 		SessionID:       row.SessionID,
 		Host:            row.Host,
 		PID:             row.PID,
-		LivenessMode:    row.LivenessMode,
+		LivenessMode:    mode,
 		Tenant:          row.Tenant,
 		LastEventAt:     row.ReceivedAt,
 		LastEventKind:   row.LastEventKind,
-		LastEventStatus: row.LastEventStatus,
+		LastEventStatus: lastStatus,
 	}
 
 	// Step 1: Check for terminal event (session.end).
 	// If terminal_seen -> state = (that status); ABSORBING (later non-terminal events inert).
 	var terminalStatus string
-	err := pool.QueryRow(ctx, `
+	err = pool.QueryRow(ctx, `
 		SELECT status
 		FROM work_events
 		WHERE harness = $1 AND session_id = $2 AND tenant = $3 AND kind = 'session.end'
@@ -179,16 +215,18 @@ func deriveSessionStatus(ctx context.Context, pool *pgxpool.Pool, row sessionRow
 		return status, fmt.Errorf("query terminal event for session %s: %w", row.SessionID, err)
 	}
 
-	// Step 2: No terminal event. Derive from liveness_mode.
+	// Step 2: No terminal event. Derive from liveness_mode (resolved from session.start).
 	var derived string
 	var deriveErr error
-	switch row.LivenessMode {
+	switch mode {
 	case "supervised":
 		derived, deriveErr = deriveSupervisedStatus(ctx, pool, row.Harness, row.SessionID, row.Tenant, now)
 	case "bounded":
 		derived, deriveErr = deriveBoundedStatus(ctx, pool, row.Harness, row.SessionID, row.Tenant, now)
 	default:
-		// Unknown liveness_mode — assume bounded backstop.
+		// Unknown/NULL liveness_mode — log anomaly, treat as bounded backstop.
+		slog.Default().Warn("unknown liveness_mode, treating as bounded",
+			"session_id", row.SessionID, "mode", mode)
 		derived, deriveErr = deriveBoundedStatus(ctx, pool, row.Harness, row.SessionID, row.Tenant, now)
 	}
 	if deriveErr != nil {
@@ -227,13 +265,15 @@ func deriveSupervisedStatus(ctx context.Context, pool *pgxpool.Pool, harness, se
 
 // deriveBoundedStatus computes status for bounded sessions.
 // WP-N (host reporter) not yet merged → degrade gracefully to bounded_max_age only.
-// No reporter coverage → stale once age > 6h, NEVER running without proof.
+// No reporter coverage → stale (contract: "NEVER running without proof").
+// All bounded sessions without proof are stale; bounded_max_age is the absolute
+// backstop beyond which even a reporter-confirmed session would be suspect.
 //
-// Returns "pending" for sessions under BoundedMaxAge (awaiting host reporter proof),
-// and "stale" for sessions exceeding BoundedMaxAge (backstop triggered).
-// This makes the age threshold observable in tests — before the fix both branches
-// returned "stale" making the backstop check tautological.
+// Returns "stale" for all bounded sessions (both young and old) when no reporter
+// coverage is available. Once WP-N merges, confirmed-alive sessions will return
+// "running" via the host reporter path.
 func deriveBoundedStatus(ctx context.Context, pool *pgxpool.Pool, harness, sessionID, tenant string, now time.Time) (string, error) {
+	// Query session.start to compute age (needed for logging and the backstop).
 	var startReceivedAt time.Time
 	err := pool.QueryRow(ctx, `
 		SELECT received_at
@@ -249,16 +289,11 @@ func deriveBoundedStatus(ctx context.Context, pool *pgxpool.Pool, harness, sessi
 		return "", fmt.Errorf("query bounded start for session %s: %w", sessionID, err)
 	}
 
-	// Backstop: bounded_max_age (6h) -> stale.
-	if now.Sub(startReceivedAt) > BoundedMaxAge {
+	// No proof ⇒ stale. Contract §4: "NEVER running without proof."
+	age := now.Sub(startReceivedAt)
+	if age > BoundedMaxAge {
 		slog.Default().Debug("bounded session exceeded max age backstop",
-			"session_id", sessionID, "age", now.Sub(startReceivedAt))
-		return "stale", nil
+			"session_id", sessionID, "age", age)
 	}
-
-	// If no host reporter coverage (WP-N not merged), bounded sessions
-	// without proof are "pending" — they haven't expired yet but lack
-	// positive proof of liveness. They become "running" once WP-N confirms
-	// the process is alive.
-	return "pending", nil
+	return "stale", nil
 }

@@ -247,20 +247,19 @@ func TestSessionEnd_ReturnsTerminalStatus(t *testing.T) {
 	}
 }
 
-// TestBoundedSession_Young_ReturnsPending proves:
-// A bounded session younger than BoundedMaxAge returns "pending" (awaiting host
-// reporter proof). Once WP-N merges, "pending" sessions with confirmed alive
-// processes will become "running". Regression for finding #3 — makes the
-// bounded_max_age threshold observable (before: both branches returned "stale").
-func TestBoundedSession_Young_ReturnsPending(t *testing.T) {
+// TestBoundedSession_NoProof_ReturnsStale proves:
+// A bounded session with no host reporter proof returns "stale".
+// Contract §4: "NEVER running without proof." Young or old, no proof ⇒ stale.
+// Regression for finding #3 — reverts the unsanctioned "pending" status.
+func TestBoundedSession_NoProof_ReturnsStale(t *testing.T) {
 	pool := getSessionLivenessTestDB(t)
 	defer pool.Close()
 
 	svc := NewSessionLivenessService(pool)
-	sessionID := "fleet-bounded-Young-" + uuid.NewString()[:8]
+	sessionID := "fleet-bounded-noproof-" + uuid.NewString()[:8]
 
 	// Seed session.start for a bounded session 30 seconds ago.
-	// Under BoundedMaxAge → "pending", not "stale".
+	// No host reporter coverage → "stale" (never running without proof).
 	seedTestSession(t, pool, sessionSeedOpts{
 		SessionID:    sessionID,
 		Kind:         "session.start",
@@ -290,15 +289,15 @@ func TestBoundedSession_Young_ReturnsPending(t *testing.T) {
 	if found == nil {
 		t.Fatalf("session %s not found in fleet", sessionID)
 	}
-	if found.Status != "pending" {
-		t.Fatalf("expected young bounded session to be 'pending' (awaiting proof, under max age), got %q", found.Status)
+	if found.Status != "stale" {
+		t.Fatalf("expected young bounded session to be 'stale' (no proof, never running without proof), got %q", found.Status)
 	}
 }
 
 // TestBoundedMaxAgeBackstop proves:
 // A bounded session older than 6h is stale regardless of other factors.
-// This is now non-tautological: young bounded → "pending", old bounded → "stale".
-// Mutation: if we change the threshold to 0, this test should go RED (stale).
+// The bounded_max_age backstop ensures even old sessions with no terminal
+// event are classified as stale.
 func TestBoundedMaxAgeBackstop(t *testing.T) {
 	pool := getSessionLivenessTestDB(t)
 	defer pool.Close()
@@ -524,18 +523,19 @@ func TestCrossTenantAbsorptionRegression(t *testing.T) {
 }
 
 // TestDerivationErrorsPropagate proves:
-// If a derivation sub-query hits a DB error, GetFleet propagates it (finding #2).
-// This is verified via code inspection: deriveSessionStatus returns (SessionStatus, error)
-// and GetFleet checks err != nil → returns error. If we were to change the error
-// handling back to swallowing, the type system would catch the compile error.
+// If a derivation sub-query hits a DB error, GetFleet propagates it (never swallowed).
+// Uses a cancelled context to force a deterministic DB connection error during
+// the derivation phase (querySessions succeeds on the main context, but the
+// derivation sub-queries use the cancelled context → error → GetFleet returns error).
+// Regression for finding #2: the prior version was a happy-path test.
 func TestDerivationErrorsPropagate(t *testing.T) {
 	pool := getSessionLivenessTestDB(t)
 	defer pool.Close()
 
 	svc := NewSessionLivenessService(pool)
-	sessionID := "fleet-err-" + uuid.NewString()[:8]
+	sessionID := "fleet-err-prop-" + uuid.NewString()[:8]
 
-	// Seed a supervised session with recent heartbeat — should succeed without error.
+	// Seed a supervised session.
 	seedTestSession(t, pool, sessionSeedOpts{
 		SessionID:    sessionID,
 		Kind:         "session.start",
@@ -549,13 +549,147 @@ func TestDerivationErrorsPropagate(t *testing.T) {
 			"DELETE FROM work_events WHERE session_id LIKE $1", "%"+sessionID+"%")
 	})
 
-	// GetFleet should succeed — proves derivation errors don't fire false positives.
+	// Use a cancelled context to force derivation errors.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+
+	_, err := svc.GetFleet(ctx, "personal")
+	if err == nil {
+		t.Fatal("expected error from GetFleet with cancelled context (derivation error), got nil — errors are being swallowed!")
+	}
+}
+
+// TestNULLLivenessModeOnSessionEnd proves:
+// A session.end event with literal SQL NULL liveness_mode does NOT cause
+// the fleet endpoint to 500. Regression for finding #1: liveness_mode is
+// set on session.start only → NULL on session.end; the DISTINCT ON query
+// picks the latest row (session.end) which would have NULL liveness_mode.
+// The fix resolves liveness_mode from the session.start row, not the
+// latest-event row.
+func TestNULLLivenessModeOnSessionEnd(t *testing.T) {
+	pool := getSessionLivenessTestDB(t)
+	defer pool.Close()
+
+	svc := NewSessionLivenessService(pool)
+	sessionID := "fleet-null-mode-" + uuid.NewString()[:8]
+
+	// Seed session.start with liveness_mode = 'supervised'.
+	seedTestSession(t, pool, sessionSeedOpts{
+		SessionID:    sessionID,
+		Kind:         "session.start",
+		Host:         "test-host",
+		LivenessMode: "supervised",
+		Tenant:       "personal",
+		ReceivedAt:   time.Now().UTC().Add(-2 * time.Minute),
+	})
+
+	// Seed session.end with literal SQL NULL liveness_mode (the real-world shape).
+	// Use raw SQL to bypass the seedTestSession helper which defaults to empty string.
+	ctx := context.Background()
+	_, err := pool.Exec(ctx, `
+		INSERT INTO work_events (
+			event_id, schema_version, harness, session_id, host, pid,
+			kind, status, liveness_mode, tenant, received_at, ts, payload
+		) VALUES (
+			$1, 'agentos.work_event/v1', 'claude', $2, 'test-host', 99991,
+			'session.end', 'done', NULL, 'personal', $3, $3, '{}'
+		) ON CONFLICT (event_id) DO NOTHING
+	`, uuid.NewString(), sessionID, time.Now().UTC().Add(-10*time.Second))
+	if err != nil {
+		t.Fatalf("seed NULL liveness_mode session.end: %v", err)
+	}
+
+	t.Cleanup(func() {
+		pool.Exec(context.Background(),
+			"DELETE FROM work_events WHERE session_id LIKE $1", "%"+sessionID+"%")
+	})
+
+	// GetFleet must succeed — not 500 from NULL scan.
 	fleet, err := svc.GetFleet(context.Background(), "personal")
 	if err != nil {
-		t.Fatalf("GetFleet unexpected error: %v", err)
+		t.Fatalf("GetFleet failed (likely NULL scan error): %v", err)
 	}
-	if fleet.Total == 0 {
-		t.Fatal("expected at least 1 session")
+
+	var found *SessionStatus
+	for i := range fleet.Sessions {
+		if fleet.Sessions[i].SessionID == sessionID {
+			s := fleet.Sessions[i]
+			found = &s
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("session %s not found in fleet", sessionID)
+	}
+	// Terminal status must be "done" (from session.end), NOT misclassified.
+	if found.Status != "done" {
+		t.Fatalf("expected terminal 'done', got %q (NULL liveness_mode caused misclassification?)", found.Status)
+	}
+	// LivenessMode must be resolved from session.start, not NULL from session.end.
+	if found.LivenessMode != "supervised" {
+		t.Fatalf("expected liveness_mode 'supervised' (resolved from session.start), got %q (NULL from session.end?)", found.LivenessMode)
+	}
+}
+
+// TestNULLHeartbeatStatus proves:
+// A heartbeat with literal SQL NULL status does NOT cause the fleet endpoint
+// to 500. Regression for finding #1: status is conditional → can be NULL on
+// some event types.
+func TestNULLHeartbeatStatus(t *testing.T) {
+	pool := getSessionLivenessTestDB(t)
+	defer pool.Close()
+
+	svc := NewSessionLivenessService(pool)
+	sessionID := "fleet-null-status-" + uuid.NewString()[:8]
+
+	// Seed session.start.
+	seedTestSession(t, pool, sessionSeedOpts{
+		SessionID:    sessionID,
+		Kind:         "session.start",
+		Host:         "test-host",
+		LivenessMode: "supervised",
+		Tenant:       "personal",
+		ReceivedAt:   time.Now().UTC().Add(-2 * time.Minute),
+	})
+
+	// Seed heartbeat with literal SQL NULL status.
+	ctx := context.Background()
+	_, err := pool.Exec(ctx, `
+		INSERT INTO work_events (
+			event_id, schema_version, harness, session_id, host, pid,
+			kind, status, liveness_mode, tenant, received_at, ts, payload
+		) VALUES (
+			$1, 'agentos.work_event/v1', 'claude', $2, 'test-host', 99991,
+			'session.heartbeat', NULL, 'supervised', 'personal', $3, $3, '{}'
+		) ON CONFLICT (event_id) DO NOTHING
+	`, uuid.NewString(), sessionID, time.Now().UTC().Add(-15*time.Second))
+	if err != nil {
+		t.Fatalf("seed NULL status heartbeat: %v", err)
+	}
+
+	t.Cleanup(func() {
+		pool.Exec(context.Background(),
+			"DELETE FROM work_events WHERE session_id LIKE $1", "%"+sessionID+"%")
+	})
+
+	fleet, err := svc.GetFleet(context.Background(), "personal")
+	if err != nil {
+		t.Fatalf("GetFleet failed (likely NULL status scan error): %v", err)
+	}
+
+	var found *SessionStatus
+	for i := range fleet.Sessions {
+		if fleet.Sessions[i].SessionID == sessionID {
+			s := fleet.Sessions[i]
+			found = &s
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("session %s not found in fleet", sessionID)
+	}
+	if found.Status != "running" {
+		t.Fatalf("expected 'running' (recent heartbeat), got %q", found.Status)
 	}
 }
 
