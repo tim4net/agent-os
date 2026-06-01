@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -31,11 +32,15 @@ func (a *API) IngestWorkEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resolve tenant from ingest key (finding #3 fix).
+	// Resolve tenant from ingest key via durable key store (WP-A2).
 	// The body tenant is NOT trusted — the server resolves it from the key.
-	resolvedTenant, err := service.ResolveTenantFromKey(ingestKey)
+	resolvedTenant, err := service.ResolveTenantFromKeyDB(r.Context(), a.queries, ingestKey)
 	if err != nil {
-		writeError(w, http.StatusForbidden, "invalid ingest key")
+		if errors.Is(err, service.ErrInvalidIngestKey) {
+			writeError(w, http.StatusForbidden, "invalid ingest key")
+		} else {
+			writeError(w, http.StatusInternalServerError, "ingest key resolution failed")
+		}
 		return
 	}
 
@@ -73,10 +78,9 @@ func (a *API) IngestWorkEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Override body tenant with key-resolved tenant (finding #3 fix).
+	// Override body tenant with key-resolved tenant.
 	// The body tenant is NOT trusted — the server resolves it from the key.
-	// Full tenant-permission enforcement (key→allowed-tenant 403) is deferred to
-	// the config.go wiring follow-up; currently all non-empty keys resolve to "personal".
+	// Tenant-permission enforcement: key→allowed-tenant 403 (ADR-002 D6).
 	req.Tenant = resolvedTenant
 
 	// Idempotency-Key header check

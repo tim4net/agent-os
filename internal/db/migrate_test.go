@@ -286,8 +286,8 @@ func TestMigrateUpPartialDB(t *testing.T) {
 
 	t.Logf("partial DB: applied %d pending migrations: %v", result.Applied, result.Versions)
 
-	// Assert the exact applied set: only 13, 14, 15, 16 should have been applied.
-	expectedVersions := map[int64]bool{13: true, 14: true, 15: true, 16: true}
+	// Assert the exact applied set: only 13, 14, 15, 16, 19 should have been applied.
+	expectedVersions := map[int64]bool{13: true, 14: true, 15: true, 16: true, 19: true}
 	if len(result.Versions) != len(expectedVersions) {
 		t.Errorf("expected %d applied versions, got %d: %v", len(expectedVersions), len(result.Versions), result.Versions)
 	}
@@ -484,8 +484,8 @@ func TestMigrateUpWatermarkFormat(t *testing.T) {
 
 	t.Logf("watermark test: applied %d pending migrations: %v", result.Applied, result.Versions)
 
-	// Should have applied exactly 4 versions: 13, 14, 15, 16.
-	expectedVersions := map[int64]bool{13: true, 14: true, 15: true, 16: true}
+	// Should have applied exactly 5 versions: 13, 14, 15, 16, 19.
+	expectedVersions := map[int64]bool{13: true, 14: true, 15: true, 16: true, 19: true}
 	if len(result.Versions) != len(expectedVersions) {
 		t.Errorf("expected %d applied versions, got %d: %v", len(expectedVersions), len(result.Versions), result.Versions)
 	}
@@ -503,11 +503,11 @@ func TestMigrateUpWatermarkFormat(t *testing.T) {
 	// - Expansion rows for embedded versions <= 12 that exist: 1, 8, 9, 10, 11
 	//   (version 12 conflicts with existing watermark row via ON CONFLICT DO NOTHING)
 	// - The original watermark row (12)
-	// - Newly applied rows: 13, 14, 15, 16
-	// Total: 5 (expansion) + 1 (watermark) + 4 (new) = 10
+	// - Newly applied rows: 13, 14, 15, 16, 19
+	// Total: 5 (expansion) + 1 (watermark) + 5 (new) = 11
 	totalCount := countRows(t, pool, `SELECT COUNT(*) FROM schema_migrations`)
-	if totalCount != 10 {
-		t.Errorf("expected 10 rows in schema_migrations after watermark expansion + apply, got %d", totalCount)
+	if totalCount != 11 {
+		t.Errorf("expected 11 rows in schema_migrations after watermark expansion + apply, got %d", totalCount)
 	}
 
 	// Verify second run is idempotent (now in row-per-version mode).

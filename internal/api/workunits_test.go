@@ -59,6 +59,7 @@ func findByBranch(units []service.WorkUnit, branch string) *service.WorkUnit {
 // work-units response (not "running"), and a still-open session MUST surface "running".
 func TestHTTPWorkUnits_LivenessReachesBoundary(t *testing.T) {
 	a, pool, _ := newTestAPIWithDB(t)
+	seedTestIngestKey(t, pool)
 	host := "route-test-" + uuid.NewString()[:8]
 	t.Cleanup(func() { _, _ = pool.Exec(t.Context(), "DELETE FROM work_events WHERE host = $1", host) })
 
@@ -106,6 +107,7 @@ func TestHTTPWorkUnits_LivenessReachesBoundary(t *testing.T) {
 // NOT flip the unit back to running — only session lifecycle events drive liveness.
 func TestHTTPWorkUnits_UnknownEventDoesNotMaskTerminal(t *testing.T) {
 	a, pool, _ := newTestAPIWithDB(t)
+	seedTestIngestKey(t, pool)
 	host := "route-b1-" + uuid.NewString()[:8]
 	t.Cleanup(func() { _, _ = pool.Exec(t.Context(), "DELETE FROM work_events WHERE host = $1", host) })
 
@@ -134,6 +136,7 @@ func TestHTTPWorkUnits_UnknownEventDoesNotMaskTerminal(t *testing.T) {
 // session and one done session must report running (precedence), active_session_count=1.
 func TestHTTPWorkUnits_MultiSessionLiveness(t *testing.T) {
 	a, pool, _ := newTestAPIWithDB(t)
+	seedTestIngestKey(t, pool)
 	host := "route-b2-" + uuid.NewString()[:8]
 	t.Cleanup(func() { _, _ = pool.Exec(t.Context(), "DELETE FROM work_events WHERE host = $1", host) })
 
@@ -169,6 +172,7 @@ func TestHTTPWorkUnits_MultiSessionLiveness(t *testing.T) {
 // session back to running. Terminal is absorbing.
 func TestHTTPWorkUnits_TerminalIsAbsorbing(t *testing.T) {
 	a, pool, _ := newTestAPIWithDB(t)
+	seedTestIngestKey(t, pool)
 	host := "route-b5-" + uuid.NewString()[:8]
 	t.Cleanup(func() { _, _ = pool.Exec(t.Context(), "DELETE FROM work_events WHERE host = $1", host) })
 
@@ -199,6 +203,7 @@ func TestHTTPWorkUnits_TerminalIsAbsorbing(t *testing.T) {
 
 func TestHTTPWorkUnits_TenantScoping(t *testing.T) {
 	a, pool, _ := newTestAPIWithDB(t)
+	seedTestIngestKey(t, pool)
 	host := "route-b3-" + uuid.NewString()[:8]
 	t.Cleanup(func() { _, _ = pool.Exec(t.Context(), "DELETE FROM work_events WHERE host = $1", host) })
 
