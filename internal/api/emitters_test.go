@@ -606,7 +606,8 @@ func TestHTTPEmitterHealth_InvalidStaleWindow_Returns400(t *testing.T) {
 	a, pool, _ := newTestAPIWithDB(t)
 	defer pool.Close()
 
-	req := newTestGET("/?stale_window=not-a-duration")
+	tenant := emitterTestTenant(t, "invalidsw")
+	req := newTestGET("/?tenant=" + tenant + "&stale_window=not-a-duration")
 	rec := httptest.NewRecorder()
 	a.EmitterRoutes().ServeHTTP(rec, req)
 
@@ -614,7 +615,9 @@ func TestHTTPEmitterHealth_InvalidStaleWindow_Returns400(t *testing.T) {
 		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
 	}
 	var resp map[string]string
-	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse error response: %v", err)
+	}
 	if !strings.Contains(resp["error"], "invalid stale_window") {
 		t.Fatalf("expected 'invalid stale_window' error, got: %s", resp["error"])
 	}
