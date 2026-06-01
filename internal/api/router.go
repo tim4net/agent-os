@@ -176,5 +176,8 @@ func (a *API) Router() http.Handler {
 	// Events SSE endpoint
 	r.Get("/events", a.StreamEvents)
 
+	// Spend observability (WP-K)
+	r.Mount("/spend", a.SpendRoutes())
+
 	return r
 }

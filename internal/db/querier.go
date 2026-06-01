@@ -11,9 +11,25 @@ import (
 )
 
 type Querier interface {
+	// Aggregates cost_usd + num_turns (from telemetry) from work_events, grouped by the
+	// requested dimension (agent/harness, project, tenant, or day). Pure read over
+	// existing work_events — no migration needed (WP-K).
+	// Cost has ONE source of truth: top-level cost_usd (contract §5).
+	// Turns are counted from payload->telemetry->turns (non-null only).
+	// Tenant-scoped: @tenant = '' returns all tenants; otherwise scopes to one.
+	// external_ref filter: @external_ref = '' returns all; otherwise scopes to one.
+	// Per the work-event contract (§5, lines 213-215), cost_usd is "cumulative for the
+	// session; non-decreasing" and "latest received_at wins." We dedupe to the latest
+	// event per (harness, session_id) before rolling up, so a session that emits
+	// start=$0.05 then end=$0.07 contributes $0.07, not $0.12.
+	AggregateSpend(ctx context.Context, arg AggregateSpendParams) ([]AggregateSpendRow, error)
 	CleanStaleDelegations(ctx context.Context) error
 	CountArtifacts(ctx context.Context, dollar_1 string) (int64, error)
 	CountDelegations(ctx context.Context, arg CountDelegationsParams) (int64, error)
+	// Returns the total count of non-zero-cost groups matching the given filters,
+	// without applying LIMIT/OFFSET. Used when the main query returns zero rows
+	// (offset past end) so Total is still accurate.
+	CountSpendGroups(ctx context.Context, arg CountSpendGroupsParams) (int64, error)
 	CountSubtasks(ctx context.Context, parentTaskID pgtype.UUID) (int64, error)
 	CountTrackerItemsByProject(ctx context.Context, arg CountTrackerItemsByProjectParams) (int64, error)
 	CountTrackerItemsByTenant(ctx context.Context, tenant string) (int64, error)
