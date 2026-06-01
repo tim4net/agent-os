@@ -31,6 +31,17 @@ func main() {
 	}
 	defer pool.Close()
 
+	// Apply pending database migrations at boot (in-app migration runner,
+	// WP-MIG #11). Self-contained via go:embed; applies only pending
+	// up-migrations in transactions, records schema_migrations, takes a
+	// Postgres advisory lock so concurrent replicas don't race, and never
+	// auto-runs destructive down-migrations.
+	if _, err := db.MigrateUpWithLogger(ctx, pool, slog.Default()); err != nil {
+		slog.Error("failed to apply database migrations", "error", err)
+		os.Exit(1)
+	}
+	slog.Info("database migrations up to date")
+
 	queries := db.New(pool)
 
 	// Ensure known agents exist in the database (INSERT-only, never overwrite).
