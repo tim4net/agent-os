@@ -111,13 +111,18 @@ func (q *Queries) FailWorkUnit(ctx context.Context, arg FailWorkUnitParams) (Wor
 }
 
 const getControlState = `-- name: GetControlState :one
-SELECT mode, cadence_seconds, updated_at FROM control_state
+SELECT id, mode, cadence_seconds, updated_at FROM control_state
 `
 
 func (q *Queries) GetControlState(ctx context.Context) (ControlState, error) {
 	row := q.db.QueryRow(ctx, getControlState)
 	var i ControlState
-	err := row.Scan(&i.Mode, &i.CadenceSeconds, &i.UpdatedAt)
+	err := row.Scan(
+		&i.ID,
+		&i.Mode,
+		&i.CadenceSeconds,
+		&i.UpdatedAt,
+	)
 	return i, err
 }
 
@@ -155,12 +160,17 @@ func (q *Queries) ListOrchestratorWorkUnits(ctx context.Context) ([]WorkUnit, er
 }
 
 const setControlMode = `-- name: SetControlMode :one
-UPDATE control_state SET mode = $1, updated_at = NOW() RETURNING mode, cadence_seconds, updated_at
+UPDATE control_state SET mode = $1, updated_at = NOW() RETURNING id, mode, cadence_seconds, updated_at
 `
 
 func (q *Queries) SetControlMode(ctx context.Context, mode ControlMode) (ControlState, error) {
 	row := q.db.QueryRow(ctx, setControlMode, mode)
 	var i ControlState
-	err := row.Scan(&i.Mode, &i.CadenceSeconds, &i.UpdatedAt)
+	err := row.Scan(
+		&i.ID,
+		&i.Mode,
+		&i.CadenceSeconds,
+		&i.UpdatedAt,
+	)
 	return i, err
 }

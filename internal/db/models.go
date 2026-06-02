@@ -147,6 +147,7 @@ type Artifact struct {
 }
 
 type ControlState struct {
+	ID             bool               `json:"id"`
 	Mode           ControlMode        `json:"mode"`
 	CadenceSeconds int32              `json:"cadence_seconds"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
