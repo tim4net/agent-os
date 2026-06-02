@@ -19,7 +19,6 @@ import { Board } from './components/kanban/Board'
 import { GoalList } from './components/goals/GoalList'
 import { PipelineBoard } from './components/pipeline/PipelineBoard'
 import { WorkflowList } from './components/workflows/WorkflowList'
-import { TimelineView } from './components/timeline/TimelineView'
 import { SkillsList } from './components/skills/SkillsList'
 import { ObserveView } from './components/observe/ObserveView'
 
@@ -83,7 +82,6 @@ function App() {
   const [createSubView, setCreateSubView] = useState<'generate' | 'gallery'>('generate')
   const [buildSubView, setBuildSubView] = useState<'board' | 'goals' | 'pipeline'>('board')
   const [knowledgeSubView, setKnowledgeSubView] = useState<'files' | 'skills'>('files')
-  const [automateSubView, setAutomateSubView] = useState<'workflows' | 'timeline'>('workflows')
 
   const { agents, loading: _loading, refresh: refreshAgents } = useAgents()
   const { sseConnected } = useSSE()
@@ -323,38 +321,17 @@ function App() {
       }
 
       case 'Automate': {
-        const automateOptions = [
-          { key: 'workflows', label: 'Workflows' },
-          { key: 'timeline', label: 'Timeline' },
-        ]
+        // WP-H: the legacy Timeline sub-tab read the delegation proxy (getTimeline),
+        // not work_events. Agent activity over time now lives in Observe → Activity
+        // (the work-event observability plane). Automate is workflows only.
         return (
           <ErrorBoundary name="Automate">
             <div className="flex flex-col h-full">
               <div className="px-4 py-3 border-b border-[var(--border-subtle)] flex-shrink-0 flex items-center justify-between">
                 <h2 className="text-2xl font-bold text-[var(--text-primary)]">Automate</h2>
-                <SubViewToggle
-                  options={automateOptions}
-                  value={automateSubView}
-                  onChange={(v) => setAutomateSubView(v as 'workflows' | 'timeline')}
-                />
               </div>
               <div className="flex-1 min-h-0">
-                {automateSubView === 'workflows' && <WorkflowList />}
-                {automateSubView === 'timeline' && <TimelineView onNavigate={(tab, data) => {
-                  // Map old tab names to new grouped tabs
-                  const tabMap: Record<string, Tab> = {
-                    Chat: 'Chat',
-                    Workspace: 'Create',
-                    Kanban: 'Build',
-                    Workflows: 'Automate',
-                  }
-                  const mapped = tabMap[tab] || 'Chat'
-                  setActiveTab(mapped)
-                  if (data?.agentId) {
-                    const agent = agents.find(a => a.id === data.agentId)
-                    if (agent) setSelectedAgent(agent)
-                  }
-                }} />}
+                <WorkflowList />
               </div>
             </div>
           </ErrorBoundary>
