@@ -59,6 +59,35 @@ func (q *Queries) CompleteWorkUnit(ctx context.Context, id int64) (WorkUnit, err
 	return i, err
 }
 
+const countWorkUnitsByStatus = `-- name: CountWorkUnitsByStatus :many
+SELECT status, COUNT(*)::bigint AS count FROM work_units GROUP BY status
+`
+
+type CountWorkUnitsByStatusRow struct {
+	Status WorkUnitStatus `json:"status"`
+	Count  int64          `json:"count"`
+}
+
+func (q *Queries) CountWorkUnitsByStatus(ctx context.Context) ([]CountWorkUnitsByStatusRow, error) {
+	rows, err := q.db.Query(ctx, countWorkUnitsByStatus)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CountWorkUnitsByStatusRow
+	for rows.Next() {
+		var i CountWorkUnitsByStatusRow
+		if err := rows.Scan(&i.Status, &i.Count); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const enqueueWorkUnit = `-- name: EnqueueWorkUnit :one
 INSERT INTO work_units (wp_ref, payload) VALUES ($1, $2) RETURNING id, wp_ref, status, payload, claimed_at, completed_at, error, created_at
 `
@@ -157,6 +186,66 @@ func (q *Queries) ListOrchestratorWorkUnits(ctx context.Context) ([]WorkUnit, er
 		return nil, err
 	}
 	return items, nil
+}
+
+const listWorkUnitsByStatus = `-- name: ListWorkUnitsByStatus :many
+SELECT id, wp_ref, status, payload, claimed_at, completed_at, error, created_at FROM work_units WHERE status = $1::text ORDER BY created_at DESC LIMIT $2 OFFSET $3
+`
+
+type ListWorkUnitsByStatusParams struct {
+	Column1 string `json:"column_1"`
+	Limit   int32  `json:"limit"`
+	Offset  int32  `json:"offset"`
+}
+
+func (q *Queries) ListWorkUnitsByStatus(ctx context.Context, arg ListWorkUnitsByStatusParams) ([]WorkUnit, error) {
+	rows, err := q.db.Query(ctx, listWorkUnitsByStatus, arg.Column1, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []WorkUnit
+	for rows.Next() {
+		var i WorkUnit
+		if err := rows.Scan(
+			&i.ID,
+			&i.WpRef,
+			&i.Status,
+			&i.Payload,
+			&i.ClaimedAt,
+			&i.CompletedAt,
+			&i.Error,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const requeueWorkUnit = `-- name: RequeueWorkUnit :one
+UPDATE work_units SET status = 'queued', claimed_at = NULL, completed_at = NULL, error = NULL
+WHERE id = $1 AND status IN ('failed', 'done') RETURNING id, wp_ref, status, payload, claimed_at, completed_at, error, created_at
+`
+
+func (q *Queries) RequeueWorkUnit(ctx context.Context, id int64) (WorkUnit, error) {
+	row := q.db.QueryRow(ctx, requeueWorkUnit, id)
+	var i WorkUnit
+	err := row.Scan(
+		&i.ID,
+		&i.WpRef,
+		&i.Status,
+		&i.Payload,
+		&i.ClaimedAt,
+		&i.CompletedAt,
+		&i.Error,
+		&i.CreatedAt,
+	)
+	return i, err
 }
 
 const setControlMode = `-- name: SetControlMode :one
