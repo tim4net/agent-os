@@ -108,7 +108,7 @@ func (a *API) GetControlState(w http.ResponseWriter, r *http.Request) {
 }
 
 // SetControlMode handles POST /api/control/mode.
-// Sets the mode (continuous|tick|stopped). cadence_seconds is optional (defaults to 60).
+// Sets the mode (continuous|tick|stopped). cadence_seconds is optional.
 func (a *API) SetControlMode(w http.ResponseWriter, r *http.Request) {
 	var req SetModeRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -121,38 +121,45 @@ func (a *API) SetControlMode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Default cadence_seconds to 60 if not provided.
-	cadence := int32(60)
+	// Set mode atomically; if cadence is also provided, update both in one transaction.
+	var state db.ControlState
+	var err error
+
 	if req.CadenceSeconds != nil && *req.CadenceSeconds > 0 {
-		cadence = *req.CadenceSeconds
+		tx, txErr := a.pool.Begin(r.Context())
+		if txErr != nil {
+			slog.Default().Error("control: begin tx failed", "error", txErr)
+			writeError(w, http.StatusInternalServerError, "failed to set control mode")
+			return
+		}
+		defer tx.Rollback(r.Context())
+
+		_, err = tx.Exec(r.Context(), "UPDATE control_state SET mode = $1::control_mode, cadence_seconds = $2, updated_at = NOW()", req.Mode, *req.CadenceSeconds)
+		if err != nil {
+			slog.Default().Error("control: set mode+cadence failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to set control mode")
+			return
+		}
+		if err = tx.Commit(r.Context()); err != nil {
+			slog.Default().Error("control: commit failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to set control mode")
+			return
+		}
+	} else {
+		state, err = a.queries.SetControlMode(r.Context(), db.ControlMode(req.Mode))
+		if err != nil {
+			slog.Default().Error("control: set mode failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to set control mode")
+			return
+		}
 	}
 
-	// Update the mode. Note: SetControlMode currently only updates mode, not cadence.
-	// If cadence needs updating, we do a direct SQL update via pool.
-	state, err := a.queries.SetControlMode(r.Context(), db.ControlMode(req.Mode))
+	// Re-read state for response (covers both paths).
+	state, err = a.queries.GetControlState(r.Context())
 	if err != nil {
-		slog.Default().Error("control: set mode failed", "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to set control mode")
+		slog.Default().Error("control: re-read state failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to read updated state")
 		return
-	}
-
-	// Update cadence if different from default / requested.
-	// SetControlMode only updates mode, so we update cadence separately if needed.
-	if cadence != state.CadenceSeconds && a.pool != nil {
-		_, err := a.pool.Exec(r.Context(),
-			`UPDATE control_state SET cadence_seconds = $1, updated_at = NOW()`, cadence)
-		if err != nil {
-			slog.Default().Error("control: set cadence failed", "error", err)
-			writeError(w, http.StatusInternalServerError, "failed to set cadence")
-			return
-		}
-		// Re-read state to get updated values.
-		state, err = a.queries.GetControlState(r.Context())
-		if err != nil {
-			slog.Default().Error("control: re-read state failed", "error", err)
-			writeError(w, http.StatusInternalServerError, "failed to read updated state")
-			return
-		}
 	}
 
 	// Get queue counts for the response.
@@ -202,7 +209,7 @@ func (a *API) ListUnits(w http.ResponseWriter, r *http.Request) {
 
 	if statusFilter != "" {
 		units, err = a.queries.ListWorkUnitsByStatus(r.Context(), db.ListWorkUnitsByStatusParams{
-			Column1: statusFilter,
+			Column1: db.WorkUnitStatus(statusFilter),
 			Limit:   int32(limit),
 			Offset:  int32(offset),
 		})
@@ -286,7 +293,7 @@ func (a *API) EnqueueUnit(w http.ResponseWriter, r *http.Request) {
 }
 
 // RequeueUnit handles POST /api/control/units/{id}/requeue.
-// Resets a failed/done unit back to queued. 404 if unknown or not failed/done.
+// Resets a failed unit back to queued. 404 if unknown or not failed.
 func (a *API) RequeueUnit(w http.ResponseWriter, r *http.Request) {
 	idStr := chi.URLParam(r, "id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
@@ -298,7 +305,7 @@ func (a *API) RequeueUnit(w http.ResponseWriter, r *http.Request) {
 	unit, err := a.queries.RequeueWorkUnit(r.Context(), id)
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			writeError(w, http.StatusNotFound, "unit not found or not in a requeueable state (failed/done)")
+			writeError(w, http.StatusNotFound, "unit not found or not in a requeueable state (failed only)")
 			return
 		}
 		slog.Default().Error("control: requeue failed", "error", err)

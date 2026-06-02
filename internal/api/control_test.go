@@ -168,6 +168,83 @@ func TestControl_SetMode_InvalidEnum_Returns400(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d; body: %s", rec.Code, rec.Body.String())
 	}
+
+	// F4: verify DB state is unchanged after invalid enum attempt.
+	state, err := a.queries.GetControlState(context.Background())
+	if err != nil {
+		t.Fatalf("failed to read state from DB: %v", err)
+	}
+	if string(state.Mode) == "invalid_mode" {
+		t.Fatalf("DB mode should be unchanged after invalid enum, got %q", state.Mode)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// F2 regression: POST mode-only must NOT clobber existing cadence
+// ---------------------------------------------------------------------------
+
+func TestControl_SetMode_ModeOnly_DoesNotClobberCadence(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+
+	a, pool := newTestAPIForControl(t)
+	defer pool.Close()
+
+	// Set cadence to 30 first.
+	cadence30 := int32(30)
+	body := SetModeRequest{Mode: "tick", CadenceSeconds: &cadence30}
+	bodyBytes, _ := json.Marshal(body)
+	req := httptest.NewRequest("POST", "/mode", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	a.ControlRoutes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("setup: expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	// Now POST mode-only (no cadence) — must NOT reset cadence.
+	body2 := SetModeRequest{Mode: "continuous"}
+	bodyBytes2, _ := json.Marshal(body2)
+	req2 := httptest.NewRequest("POST", "/mode", bytes.NewReader(bodyBytes2))
+	req2.Header.Set("Content-Type", "application/json")
+	rec2 := httptest.NewRecorder()
+	a.ControlRoutes().ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec2.Code, rec2.Body.String())
+	}
+
+	var resp ControlStateResponse
+	json.Unmarshal(rec2.Body.Bytes(), &resp)
+	if resp.CadenceSeconds != 30 {
+		t.Fatalf("F2 regression: cadence should still be 30 after mode-only POST, got %d", resp.CadenceSeconds)
+	}
+
+	// Reset
+	a.queries.SetControlMode(context.Background(), db.ControlModeStopped)
+}
+
+// ---------------------------------------------------------------------------
+// F3: requeue a done unit must return 404 (not allowed)
+// ---------------------------------------------------------------------------
+
+func TestControl_Requeue_DoneUnit_Returns404(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+
+	a, pool := newTestAPIForControl(t)
+	defer pool.Close()
+
+	id := seedWorkUnit(t, pool, "WP-O2-requeue-done-test", "done")
+
+	req := httptest.NewRequest("POST", "/units/"+jsonNumber(id)+"/requeue", nil)
+	rec := httptest.NewRecorder()
+	a.ControlRoutes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for done unit requeue, got %d; body: %s", rec.Code, rec.Body.String())
+	}
 }
 
 // ---------------------------------------------------------------------------

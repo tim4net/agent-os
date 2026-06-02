@@ -30,10 +30,10 @@ SELECT * FROM work_units ORDER BY created_at;
 
 -- name: RequeueWorkUnit :one
 UPDATE work_units SET status = 'queued', claimed_at = NULL, completed_at = NULL, error = NULL
-WHERE id = $1 AND status IN ('failed', 'done') RETURNING *;
+WHERE id = $1 AND status = 'failed' RETURNING *;
 
 -- name: CountWorkUnitsByStatus :many
 SELECT status, COUNT(*)::bigint AS count FROM work_units GROUP BY status;
 
 -- name: ListWorkUnitsByStatus :many
-SELECT * FROM work_units WHERE status = $1::text ORDER BY created_at DESC LIMIT $2 OFFSET $3;
+SELECT * FROM work_units WHERE status = $1::work_unit_status ORDER BY created_at DESC LIMIT $2 OFFSET $3;

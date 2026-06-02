@@ -189,13 +189,13 @@ func (q *Queries) ListOrchestratorWorkUnits(ctx context.Context) ([]WorkUnit, er
 }
 
 const listWorkUnitsByStatus = `-- name: ListWorkUnitsByStatus :many
-SELECT id, wp_ref, status, payload, claimed_at, completed_at, error, created_at FROM work_units WHERE status = $1::text ORDER BY created_at DESC LIMIT $2 OFFSET $3
+SELECT id, wp_ref, status, payload, claimed_at, completed_at, error, created_at FROM work_units WHERE status = $1::work_unit_status ORDER BY created_at DESC LIMIT $2 OFFSET $3
 `
 
 type ListWorkUnitsByStatusParams struct {
-	Column1 string `json:"column_1"`
-	Limit   int32  `json:"limit"`
-	Offset  int32  `json:"offset"`
+	Column1 WorkUnitStatus `json:"column_1"`
+	Limit   int32          `json:"limit"`
+	Offset  int32          `json:"offset"`
 }
 
 func (q *Queries) ListWorkUnitsByStatus(ctx context.Context, arg ListWorkUnitsByStatusParams) ([]WorkUnit, error) {
@@ -229,7 +229,7 @@ func (q *Queries) ListWorkUnitsByStatus(ctx context.Context, arg ListWorkUnitsBy
 
 const requeueWorkUnit = `-- name: RequeueWorkUnit :one
 UPDATE work_units SET status = 'queued', claimed_at = NULL, completed_at = NULL, error = NULL
-WHERE id = $1 AND status IN ('failed', 'done') RETURNING id, wp_ref, status, payload, claimed_at, completed_at, error, created_at
+WHERE id = $1 AND status = 'failed' RETURNING id, wp_ref, status, payload, claimed_at, completed_at, error, created_at
 `
 
 func (q *Queries) RequeueWorkUnit(ctx context.Context, id int64) (WorkUnit, error) {
