@@ -164,7 +164,12 @@ func RunLoop(ctx context.Context, queries *db.Queries, dispatchFn func(ctx conte
 				if errors.Is(err, pgx.ErrNoRows) {
 					// Queue is empty — idle-wait and retry so newly-enqueued
 					// work is picked up without restarting the loop.
-					time.Sleep(time.Duration(state.CadenceSeconds) * time.Second)
+					// Use a ctx-aware wait so cancellation is prompt.
+					select {
+					case <-ctx.Done():
+						return ctx.Err()
+					case <-time.After(time.Duration(state.CadenceSeconds) * time.Second):
+					}
 					continue
 				}
 				return err

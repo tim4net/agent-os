@@ -3,12 +3,14 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -323,6 +325,88 @@ func TestOrchestratorContinuousStopsOnModeChange(t *testing.T) {
 	// then the loop re-reads mode and exits before claiming the 3rd).
 	if dispatchedCount != 2 {
 		t.Fatalf("continuous loop should stop after mode change at dispatch 2, got %d", dispatchedCount)
+	}
+}
+
+// TestOrchestratorContinuousSurvivesEmptyQueue proves that continuous mode does
+// NOT permanently exit when the queue drains — it idle-waits and picks up work
+// enqueued after the initial empty poll. This is the regression guard for the
+// bug where `return nil` on ErrNoRows caused permanent silent exit.
+func TestOrchestratorContinuousSurvivesEmptyQueue(t *testing.T) {
+	pool := getOrchestratorTestDB(t)
+	queries := db.New(pool)
+	orch := NewOrchestrator(queries)
+
+	// Set cadence to 0 so idle-wait is instant.
+	_, err := pool.Exec(context.Background(), "UPDATE control_state SET cadence_seconds = 0")
+	if err != nil {
+		t.Fatalf("set cadence: %v", err)
+	}
+
+	// Set continuous mode.
+	_, err = orch.SetMode(context.Background(), ModeContinuous)
+	if err != nil {
+		t.Fatalf("SetMode continuous: %v", err)
+	}
+
+	// We need a cancellable context to stop the goroutine when done.
+	ctx, cancel := context.WithCancel(context.Background())
+
+	var dispatchedCount int64
+	var dispatchedID int64
+
+	// Start RunLoop in a goroutine with an EMPTY queue.
+	done := make(chan error, 1)
+	go func() {
+		done <- RunLoop(ctx, queries, func(ctx context.Context, u *db.WorkUnit) error {
+			atomic.AddInt64(&dispatchedCount, 1)
+			atomic.StoreInt64(&dispatchedID, u.ID)
+			// Stop after first dispatch so we can assert.
+			orch.SetMode(ctx, ModeStopped)
+			return nil
+		}, slog.Default())
+	}()
+
+	// Give the loop time to poll the empty queue at least once.
+	// With cadence=0 the idle-wait is instant; sleep briefly to let
+	// one full iteration (empty poll + idle-wait) complete.
+	time.Sleep(200 * time.Millisecond)
+
+	// Now enqueue a unit — the loop must still be alive to pick it up.
+	unit, err := orch.Enqueue(context.Background(), "wp-empty-survival", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("Enqueue after idle: %v", err)
+	}
+
+	// Wait for RunLoop to finish (should dispatch the unit then stop).
+	cancel() // safety: ensure context is cancelled if loop hasn't stopped yet
+	select {
+	case err = <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("RunLoop did not exit within 5s after unit was enqueued")
+	}
+	// Ignore context cancellation errors — the loop may return ctx.Err() after
+	// we cancel, which is fine if it already dispatched.
+	if err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatalf("RunLoop: %v", err)
+	}
+
+	// Assert the unit was dispatched.
+	if atomic.LoadInt64(&dispatchedCount) != 1 {
+		t.Fatalf("expected 1 dispatch after enqueuing into empty queue, got %d", atomic.LoadInt64(&dispatchedCount))
+	}
+	if atomic.LoadInt64(&dispatchedID) != unit.ID {
+		t.Fatalf("dispatched unit ID mismatch: got %d, want %d", atomic.LoadInt64(&dispatchedID), unit.ID)
+	}
+
+	// Verify the unit is in_flight.
+	var status string
+	err = pool.QueryRow(context.Background(), "SELECT status FROM work_units WHERE id = $1", unit.ID).Scan(&status)
+	if err != nil {
+		t.Fatalf("read unit status: %v", err)
+	}
+	if status != "in_flight" {
+		t.Fatalf("expected status 'in_flight' for dispatched unit, got '%s'", status)
 	}
 }
 
