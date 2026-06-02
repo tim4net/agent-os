@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -328,11 +327,17 @@ func TestOrchestratorContinuousStopsOnModeChange(t *testing.T) {
 	}
 }
 
-// TestOrchestratorContinuousSurvivesEmptyQueue proves that continuous mode does
-// NOT permanently exit when the queue drains — it idle-waits and picks up work
-// enqueued after the initial empty poll. This is the regression guard for the
-// bug where `return nil` on ErrNoRows caused permanent silent exit.
-func TestOrchestratorContinuousSurvivesEmptyQueue(t *testing.T) {
+// TestOrchestratorContinuousResumesAfterEmptyQueue proves that continuous mode
+// does NOT permanently exit when the queue is empty — it idle-waits (ctx-aware)
+// and picks up work enqueued AFTER the initial empty poll. This is the
+// regression guard for the bug where `return nil` on pgx.ErrNoRows caused
+// permanent silent exit.
+//
+// Determinism: the test uses a non-blocking receive on the done channel to
+// PROVE the loop is still alive (hasn't exited) before enqueuing. On old
+// code (return nil on empty), the loop exits immediately and done receives,
+// making this test RED.
+func TestOrchestratorContinuousResumesAfterEmptyQueue(t *testing.T) {
 	pool := getOrchestratorTestDB(t)
 	queries := db.New(pool)
 	orch := NewOrchestrator(queries)
@@ -349,7 +354,6 @@ func TestOrchestratorContinuousSurvivesEmptyQueue(t *testing.T) {
 		t.Fatalf("SetMode continuous: %v", err)
 	}
 
-	// We need a cancellable context to stop the goroutine when done.
 	ctx, cancel := context.WithCancel(context.Background())
 
 	var dispatchedCount int64
@@ -367,27 +371,49 @@ func TestOrchestratorContinuousSurvivesEmptyQueue(t *testing.T) {
 		}, slog.Default())
 	}()
 
-	// Give the loop time to poll the empty queue at least once.
-	// With cadence=0 the idle-wait is instant; sleep briefly to let
-	// one full iteration (empty poll + idle-wait) complete.
-	time.Sleep(200 * time.Millisecond)
+	// Spin until the loop has entered its idle-wait (or the goroutine has
+	// exited, which would mean the old bug). We know the loop has cycled
+	// at least once when the done channel does NOT receive within a brief
+	// window — if it DOES receive, the loop exited prematurely.
+	//
+	// With cadence=0, each empty-poll iteration is near-instant, so we
+	// retry the non-blocking check a few times to handle scheduling lag.
+	alive := false
+	for i := 0; i < 50; i++ {
+		time.Sleep(10 * time.Millisecond)
+		select {
+		case <-done:
+			// Loop exited while queue was empty — this is the OLD bug.
+			// On old code (return nil on ErrNoRows) the loop exits
+			// immediately, so done receives right away.
+			t.Fatalf("RunLoop exited on empty queue after %d ms — " +
+				"regression: old code returns nil on ErrNoRows", (i+1)*10)
+		default:
+			alive = true
+			break
+		}
+	}
+	if !alive {
+		t.Fatal("RunLoop exited on empty queue — regression")
+	}
 
 	// Now enqueue a unit — the loop must still be alive to pick it up.
-	unit, err := orch.Enqueue(context.Background(), "wp-empty-survival", json.RawMessage(`{}`))
+	unit, err := orch.Enqueue(context.Background(), "wp-empty-resume", json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatalf("Enqueue after idle: %v", err)
 	}
 
-	// Wait for RunLoop to finish (should dispatch the unit then stop).
-	cancel() // safety: ensure context is cancelled if loop hasn't stopped yet
+	// Wait for RunLoop to finish. The dispatch callback calls
+	// orch.SetMode(ModeStopped), so the loop self-terminates cleanly
+	// on its next iteration after dispatching — no manual cancel needed.
+	// defer cancel() is for cleanup only (the timeout path).
+	defer cancel()
 	select {
 	case err = <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("RunLoop did not exit within 5s after unit was enqueued")
 	}
-	// Ignore context cancellation errors — the loop may return ctx.Err() after
-	// we cancel, which is fine if it already dispatched.
-	if err != nil && !errors.Is(err, context.Canceled) {
+	if err != nil {
 		t.Fatalf("RunLoop: %v", err)
 	}
 
