@@ -175,6 +175,20 @@ type Delegation struct {
 	Metadata       []byte             `json:"metadata"`
 }
 
+type Finding struct {
+	ID          int64              `json:"id"`
+	Ts          pgtype.Timestamptz `json:"ts"`
+	PrRef       string             `json:"pr_ref"`
+	WpRef       string             `json:"wp_ref"`
+	Gate        int32              `json:"gate"`
+	AuthorAgent string             `json:"author_agent"`
+	Model       string             `json:"model"`
+	Severity    string             `json:"severity"`
+	Class       string             `json:"class"`
+	RootCause   pgtype.Text        `json:"root_cause"`
+	Summary     pgtype.Text        `json:"summary"`
+}
+
 type Goal struct {
 	ID          pgtype.UUID        `json:"id"`
 	Title       string             `json:"title"`
@@ -248,6 +262,16 @@ type Project struct {
 	Tracker     string             `json:"tracker"`
 	ExternalRef pgtype.Text        `json:"external_ref"`
 	RepoUrl     pgtype.Text        `json:"repo_url"`
+}
+
+type RunLog struct {
+	ID        int64              `json:"id"`
+	Ts        pgtype.Timestamptz `json:"ts"`
+	EventType string             `json:"event_type"`
+	PrRef     string             `json:"pr_ref"`
+	WpRef     string             `json:"wp_ref"`
+	Summary   pgtype.Text        `json:"summary"`
+	Payload   []byte             `json:"payload"`
 }
 
 type Skill struct {

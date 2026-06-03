@@ -23,6 +23,8 @@ type Querier interface {
 	// event per (harness, session_id) before rolling up, so a session that emits
 	// start=$0.05 then end=$0.07 contributes $0.07, not $0.12.
 	AggregateSpend(ctx context.Context, arg AggregateSpendParams) ([]AggregateSpendRow, error)
+	AppendFinding(ctx context.Context, arg AppendFindingParams) (Finding, error)
+	AppendRunLog(ctx context.Context, arg AppendRunLogParams) (RunLog, error)
 	ClaimNextWorkUnit(ctx context.Context) (WorkUnit, error)
 	CleanStaleDelegations(ctx context.Context) error
 	CompleteWorkUnit(ctx context.Context, id int64) (WorkUnit, error)
@@ -34,8 +36,14 @@ type Querier interface {
 	CountDelegations(ctx context.Context, arg CountDelegationsParams) (int64, error)
 	// Returns total count of distinct (harness, session_id) matching the tenant filter.
 	CountEmitterHealthSessions(ctx context.Context, tenant string) (int64, error)
+	CountFindings(ctx context.Context) (int64, error)
+	CountFindingsByClass(ctx context.Context, class string) (int64, error)
+	CountFindingsBySeverity(ctx context.Context, severity string) (int64, error)
+	CountFindingsByWpRef(ctx context.Context, wpRef string) (int64, error)
 	// Counts liveness records matching the tenant filter.
 	CountHostLiveness(ctx context.Context, tenant string) (int64, error)
+	CountRunLog(ctx context.Context) (int64, error)
+	CountRunLogByWpRef(ctx context.Context, wpRef string) (int64, error)
 	// Counts distinct (harness, session_id) pairs that have at least one
 	// session lifecycle event for a given tenant.
 	CountSessions(ctx context.Context, tenant string) (int64, error)
@@ -181,6 +189,10 @@ type Querier interface {
 	ListArtifacts(ctx context.Context, arg ListArtifactsParams) ([]Artifact, error)
 	ListConversations(ctx context.Context, dollar_1 pgtype.UUID) ([]Conversation, error)
 	ListDelegations(ctx context.Context, arg ListDelegationsParams) ([]Delegation, error)
+	ListFindings(ctx context.Context, arg ListFindingsParams) ([]Finding, error)
+	ListFindingsByClass(ctx context.Context, arg ListFindingsByClassParams) ([]Finding, error)
+	ListFindingsBySeverity(ctx context.Context, arg ListFindingsBySeverityParams) ([]Finding, error)
+	ListFindingsByWpRef(ctx context.Context, arg ListFindingsByWpRefParams) ([]Finding, error)
 	ListGoals(ctx context.Context) ([]Goal, error)
 	// Lists all liveness records for a tenant, ordered by seen_at DESC.
 	// Returns all if tenant is empty.
@@ -192,6 +204,8 @@ type Querier interface {
 	ListOrchestratorWorkUnits(ctx context.Context) ([]WorkUnit, error)
 	ListPipelineItems(ctx context.Context, arg ListPipelineItemsParams) ([]PipelineItem, error)
 	ListProjects(ctx context.Context) ([]Project, error)
+	ListRunLog(ctx context.Context, arg ListRunLogParams) ([]RunLog, error)
+	ListRunLogByWpRef(ctx context.Context, arg ListRunLogByWpRefParams) ([]RunLog, error)
 	ListSkillSummaries(ctx context.Context) ([]ListSkillSummariesRow, error)
 	ListSkills(ctx context.Context) ([]Skill, error)
 	ListSkillsByAgent(ctx context.Context, agentID pgtype.UUID) ([]Skill, error)
@@ -223,6 +237,7 @@ type Querier interface {
 	// Called when a server.stopped work-event arrives (contract §4).
 	// Sets status to 'down' — this is a definitive signal, not a probe.
 	MarkInstanceDownByServerStopped(ctx context.Context, arg MarkInstanceDownByServerStoppedParams) error
+	RecurringFindings(ctx context.Context, dollar_1 interface{}) ([]RecurringFindingsRow, error)
 	RequeueWorkUnit(ctx context.Context, id int64) (WorkUnit, error)
 	// Revoke an ingest key by setting revoked_at to now.
 	RevokeIngestKey(ctx context.Context, id int64) error

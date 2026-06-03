@@ -163,6 +163,9 @@ func (a *API) Router() http.Handler {
 	// Control-plane routes (WP-O2, #39 — mode/cadence/queue over the orchestrator engine)
 	r.Mount("/control", a.ControlRoutes())
 
+	// Ledger routes (WP-O3, #40 — run-log + findings as DB records, read API)
+	r.Mount("/ledger", a.LedgerRoutes())
+
 	// Tracker routes (WP-E, read-only Shortcut reader, contract §8, ADR-001 D4/D5).
 	r.Mount("/trackers", a.TrackerRoutes())
 
