@@ -97,7 +97,7 @@ func TestLedger_PostRunLog_Returns200(t *testing.T) {
 		PrRef:     "#42",
 		WpRef:     wpRef,
 		Summary:   "test run",
-		Payload:   map[string]any{"key": "val"},
+		Payload:   json.RawMessage(`{"key":"val"}`),
 	}
 	bodyBytes, _ := json.Marshal(body)
 	req := httptest.NewRequest("POST", "/runs", bytes.NewReader(bodyBytes))
