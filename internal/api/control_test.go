@@ -471,3 +471,141 @@ func TestControl_EnqueueUnit_MissingWpRef_Returns400(t *testing.T) {
 func jsonNumber(n int64) string {
 	return strconv.FormatInt(n, 10)
 }
+
+// ---------------------------------------------------------------------------
+// F5 (latest review finding 1): invalid ?status= returns 400, not 500
+// ---------------------------------------------------------------------------
+
+func TestControl_ListUnits_InvalidStatus_Returns400(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+
+	a, _ := newTestAPIForControl(t)
+
+	req := httptest.NewRequest("GET", "/units?status=bogus", nil)
+	rec := httptest.NewRecorder()
+	a.ControlRoutes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid status, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// F6 (latest review finding 2): invalid cadence_seconds (0) returns 400
+// ---------------------------------------------------------------------------
+
+func TestControl_SetMode_InvalidCadenceZero_Returns400(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+
+	a, _ := newTestAPIForControl(t)
+
+	// First set cadence to 30 so we can verify it stays 30.
+	cadence30 := int32(30)
+	body := SetModeRequest{Mode: "tick", CadenceSeconds: &cadence30}
+	bodyBytes, _ := json.Marshal(body)
+	req := httptest.NewRequest("POST", "/mode", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	a.ControlRoutes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("setup: expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	// Now POST with cadence_seconds=0 → should return 400, cadence unchanged.
+	cadence0 := int32(0)
+	body2 := SetModeRequest{Mode: "continuous", CadenceSeconds: &cadence0}
+	bodyBytes2, _ := json.Marshal(body2)
+	req2 := httptest.NewRequest("POST", "/mode", bytes.NewReader(bodyBytes2))
+	req2.Header.Set("Content-Type", "application/json")
+	rec2 := httptest.NewRecorder()
+	a.ControlRoutes().ServeHTTP(rec2, req2)
+
+	if rec2.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for cadence_seconds=0, got %d; body: %s", rec2.Code, rec2.Body.String())
+	}
+
+	// Verify cadence is still 30.
+	state, err := a.queries.GetControlState(context.Background())
+	if err != nil {
+		t.Fatalf("failed to read state: %v", err)
+	}
+	if state.CadenceSeconds != 30 {
+		t.Fatalf("cadence should still be 30 after invalid cadence attempt, got %d", state.CadenceSeconds)
+	}
+
+	// Reset
+	a.queries.SetControlMode(context.Background(), db.ControlModeStopped)
+}
+
+// ---------------------------------------------------------------------------
+// F7 (latest review finding 3): newest-first ordering is asserted
+// ---------------------------------------------------------------------------
+
+func TestControl_ListUnits_Ordering_NewestFirst(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+
+	a, pool := newTestAPIForControl(t)
+
+	// Seed two units — second one is newer.
+	id1 := seedWorkUnit(t, pool, "WP-O2-order-older", "queued")
+	id2 := seedWorkUnit(t, pool, "WP-O2-order-newer", "queued")
+	if id2 <= id1 {
+		t.Fatalf("newer unit should have higher id, got id1=%d id2=%d", id1, id2)
+	}
+
+	req := httptest.NewRequest("GET", "/units", nil)
+	rec := httptest.NewRecorder()
+	a.ControlRoutes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp UnitListResponse
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if len(resp.Units) < 2 {
+		t.Fatalf("expected at least 2 units, got %d", len(resp.Units))
+	}
+	if resp.Units[0].ID < resp.Units[1].ID {
+		t.Fatalf("newest-first ordering violated: units[0].id=%d < units[1].id=%d", resp.Units[0].ID, resp.Units[1].ID)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// F8 (latest review finding 4): bounded limit is asserted
+// ---------------------------------------------------------------------------
+
+func TestControl_ListUnits_Limit_ReturnsExactlyOne(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+
+	a, pool := newTestAPIForControl(t)
+
+	// Seed two units.
+	seedWorkUnit(t, pool, "WP-O2-limit-1", "queued")
+	seedWorkUnit(t, pool, "WP-O2-limit-2", "queued")
+
+	req := httptest.NewRequest("GET", "/units?limit=1", nil)
+	rec := httptest.NewRecorder()
+	a.ControlRoutes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp UnitListResponse
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if len(resp.Units) != 1 {
+		t.Fatalf("expected exactly 1 unit with limit=1, got %d", len(resp.Units))
+	}
+	if resp.Limit != 1 {
+		t.Fatalf("expected response limit=1, got %d", resp.Limit)
+	}
+}

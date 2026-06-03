@@ -63,6 +63,14 @@ var validModes = map[string]bool{
 	"stopped":    true,
 }
 
+// validStatuses is the set of accepted work_unit_status values for the list filter.
+var validStatuses = map[string]bool{
+	"queued":    true,
+	"in_flight": true,
+	"done":      true,
+	"failed":    true,
+}
+
 // ControlRoutes returns a Chi router for the control-plane endpoints.
 // Integrator: add to Router() in router.go — r.Mount("/control", a.ControlRoutes())
 func (a *API) ControlRoutes() http.Handler {
@@ -118,6 +126,12 @@ func (a *API) SetControlMode(w http.ResponseWriter, r *http.Request) {
 
 	if !validModes[req.Mode] {
 		writeError(w, http.StatusBadRequest, "invalid mode: must be one of continuous, tick, stopped")
+		return
+	}
+
+	// Distinguish absent cadence (nil → keep existing) from present-but-invalid (≤ 0 → 400).
+	if req.CadenceSeconds != nil && *req.CadenceSeconds <= 0 {
+		writeError(w, http.StatusBadRequest, "cadence_seconds must be positive")
 		return
 	}
 
@@ -187,6 +201,12 @@ func (a *API) SetControlMode(w http.ResponseWriter, r *http.Request) {
 // Lists work units, filterable by status, newest first.
 func (a *API) ListUnits(w http.ResponseWriter, r *http.Request) {
 	statusFilter := r.URL.Query().Get("status")
+
+	// Validate status filter against known enum values (AC5: 400 on invalid input).
+	if statusFilter != "" && !validStatuses[statusFilter] {
+		writeError(w, http.StatusBadRequest, "invalid status: must be one of queued, in_flight, done, failed")
+		return
+	}
 
 	limit := 50
 	offset := 0
