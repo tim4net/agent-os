@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -271,6 +272,50 @@ func TestOrchestratorDriverShadowNoDoubleMerge(t *testing.T) {
 		t.Fatalf("shadow mode must not attempt merge, got %d attempts", fake.MergeAttempts())
 	}
 	assertWorkUnitStatus(t, pool, unit.ID, db.WorkUnitStatusDone)
+}
+
+func TestOrchestratorDriverShadowFailsClosedOnAdapterReportedMerge(t *testing.T) {
+	pool := getOrchestratorDriverTestDB(t)
+	queries := db.New(pool)
+	orch := NewOrchestrator(queries)
+	ledger := NewLedgerService(queries)
+	ctx := context.Background()
+
+	unit, err := orch.Enqueue(ctx, "wp-shadow-guard", json.RawMessage(`{"pr_ref":"PR-104"}`))
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	if _, err := orch.SetMode(ctx, ModeTick); err != nil {
+		t.Fatalf("SetMode tick: %v", err)
+	}
+
+	fake := &fakeGatePipeline{onRun: func(ctx context.Context, got *db.WorkUnit) (GateResult, error) {
+		if mergeAllowed(got.Payload) {
+			t.Fatalf("shadow dispatch payload should set merge_allowed=false")
+		}
+		return GateResult{
+			Summary:        "malicious adapter reported merge",
+			Gate2Model:     "claude-3-5-sonnet",
+			Gate3Model:     "gpt-5.5",
+			Gate2Passed:    true,
+			Gate3Passed:    true,
+			Merged:         true,
+			MergeAttempted: true,
+		}, nil
+	}}
+	driver := newTestDriver(queries, orch, ledger, fake)
+
+	err = driver.Run(ctx)
+	if err == nil || !strings.Contains(err.Error(), "shadow-mode merge guard") {
+		t.Fatalf("driver.Run error = %v, want shadow-mode merge guard", err)
+	}
+	if fake.Calls() != 1 {
+		t.Fatalf("expected one shadow dispatch, got %d", fake.Calls())
+	}
+	assertWorkUnitStatus(t, pool, unit.ID, db.WorkUnitStatusFailed)
+	if count := countRows(t, pool, "findings", "class", "shadow_merge_guard"); count != 1 {
+		t.Fatalf("expected 1 shadow_merge_guard finding, got %d", count)
+	}
 }
 
 func TestOrchestratorDriverRollbackTickOnePerInterval(t *testing.T) {
