@@ -5,8 +5,17 @@ import { Icon } from '../Icon'
 import { ModeControls } from './ModeControls'
 import { QueuePanel } from './QueuePanel'
 
-type StatusFilter = 'all' | 'queued' | 'running' | 'done' | 'failed'
-const STATUS_FILTERS: StatusFilter[] = ['all', 'queued', 'running', 'done', 'failed']
+type StatusFilter = 'all' | 'queued' | 'in_flight' | 'done' | 'failed'
+const STATUS_FILTERS: StatusFilter[] = ['all', 'queued', 'in_flight', 'done', 'failed']
+
+/** Display labels for filter buttons. */
+const STATUS_DISPLAY: Record<StatusFilter, string> = {
+  all: 'All',
+  queued: 'Queued',
+  in_flight: 'In flight',
+  done: 'Done',
+  failed: 'Failed',
+}
 
 export function ControlView() {
   const { state, loading: stateLoading, error: stateError, refetch: refetchState } = useControlState()
@@ -14,17 +23,23 @@ export function ControlView() {
   const { units, loading: unitsLoading, error: unitsError, refetch: refetchUnits } = useControlUnits(
     statusFilter === 'all' ? undefined : statusFilter,
   )
-  const [requeueLoading, setRequeueLoading] = useState<string | null>(null)
+  const [requeueLoading, setRequeueLoading] = useState<number | null>(null)
+  const [requeueError, setRequeueError] = useState<string | null>(null)
 
-  const handleRequeue = useCallback(async (id: string) => {
+  const handleRequeue = useCallback(async (id: number) => {
     setRequeueLoading(id)
+    setRequeueError(null)
     try {
       const res = await fetch(`/api/control/units/${id}/requeue`, { method: 'POST' })
-      if (!res.ok) throw new Error(`API error ${res.status}: ${res.statusText}`)
+      if (!res.ok) {
+        const body = await res.text().catch(() => res.statusText)
+        throw new Error(`Requeue failed (${res.status}): ${body}`)
+      }
       refetchUnits()
       refetchState()
     } catch (e: unknown) {
-      console.error('Requeue failed:', e)
+      const msg = e instanceof Error ? e.message : 'Requeue failed'
+      setRequeueError(msg)
     } finally {
       setRequeueLoading(null)
     }
@@ -56,7 +71,7 @@ export function ControlView() {
         {state && (
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             <CountCard label="Queued" value={state.queue_counts.queued ?? 0} icon="pending" accent="blue" />
-            <CountCard label="Running" value={state.queue_counts.running ?? 0} icon="play_arrow" accent="emerald" />
+            <CountCard label="In flight" value={state.queue_counts.in_flight ?? 0} icon="play_arrow" accent="emerald" />
             <CountCard label="Done" value={state.queue_counts.done ?? 0} icon="check_circle" accent="gray" />
             <CountCard label="Failed" value={state.queue_counts.failed ?? 0} icon="error" accent="red" />
           </div>
@@ -80,13 +95,13 @@ export function ControlView() {
                 <button
                   key={s}
                   onClick={() => setStatusFilter(s)}
-                  className={`px-3 py-1 rounded-full text-[11px] font-semibold capitalize transition-colors ${
+                  className={`px-3 py-1 rounded-full text-[11px] font-semibold transition-colors ${
                     statusFilter === s
                       ? 'bg-[var(--bg-elevated)] text-[var(--color-text-primary)] border border-[var(--glass-border)]'
                       : 'text-[var(--color-text-secondary)] hover:bg-[var(--bg-card)] border border-transparent'
                   }`}
                 >
-                  {s}
+                  {STATUS_DISPLAY[s]}
                 </button>
               ))}
             </div>
@@ -97,6 +112,7 @@ export function ControlView() {
             error={unitsError}
             onRequeue={handleRequeue}
             requeueLoading={requeueLoading}
+            requeueError={requeueError}
           />
         </div>
       </div>

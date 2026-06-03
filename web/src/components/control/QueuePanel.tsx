@@ -5,12 +5,21 @@ type UnitStatus = ControlUnit['status']
 
 const statusPillColor: Record<UnitStatus, string> = {
   queued: 'bg-[var(--accent-blue)]/15 text-[var(--accent-blue)]',
-  running: 'bg-emerald-500/15 text-emerald-400',
+  in_flight: 'bg-emerald-500/15 text-emerald-400',
   done: 'bg-[var(--color-text-muted)]/20 text-[var(--color-text-secondary)]',
   failed: 'bg-[#f87171]/15 text-[#f87171]',
 }
 
-function relTime(iso: string): string {
+/** Display labels for status values (wire value may differ from display). */
+const statusDisplayLabel: Record<UnitStatus, string> = {
+  queued: 'Queued',
+  in_flight: 'In flight',
+  done: 'Done',
+  failed: 'Failed',
+}
+
+function relTime(iso: string | undefined | null): string {
+  if (!iso) return '—'
   const t = Date.parse(iso)
   if (Number.isNaN(t)) return '—'
   const s = Math.max(0, Math.round((Date.now() - t) / 1000))
@@ -21,15 +30,21 @@ function relTime(iso: string): string {
   return `${h}h ${m % 60}m ago`
 }
 
+/** Pick the most relevant timestamp to show: completed > claimed > created. */
+function bestTimestamp(unit: ControlUnit): string | undefined {
+  return unit.completed_at ?? unit.claimed_at ?? unit.created_at
+}
+
 interface QueuePanelProps {
   units: ControlUnit[]
   loading: boolean
   error: string | null
-  onRequeue: (id: string) => void
-  requeueLoading: string | null
+  onRequeue: (id: number) => void
+  requeueLoading: number | null
+  requeueError: string | null
 }
 
-export function QueuePanel({ units, loading, error, onRequeue, requeueLoading }: QueuePanelProps) {
+export function QueuePanel({ units, loading, error, onRequeue, requeueLoading, requeueError }: QueuePanelProps) {
   if (loading && units.length === 0) {
     return (
       <div className="glass-card p-6 text-center text-[var(--color-text-muted)]">
@@ -55,6 +70,9 @@ export function QueuePanel({ units, loading, error, onRequeue, requeueLoading }:
 
   return (
     <div className="flex flex-col gap-2">
+      {requeueError && (
+        <div className="glass-card p-2 text-[#f87171] text-xs">{requeueError}</div>
+      )}
       {units.map((unit) => (
         <UnitRow
           key={unit.id}
@@ -69,16 +87,16 @@ export function QueuePanel({ units, loading, error, onRequeue, requeueLoading }:
 
 function UnitRow({ unit, onRequeue, requeueLoading }: {
   unit: ControlUnit
-  onRequeue: (id: string) => void
-  requeueLoading: string | null
+  onRequeue: (id: number) => void
+  requeueLoading: number | null
 }) {
-  const canRequeue = unit.status === 'failed' || unit.status === 'done'
+  const canRequeue = unit.status === 'failed'
 
   return (
     <div className="glass-card p-3 flex items-center gap-3 border border-[var(--border-subtle)] hover:border-[var(--glass-border)] transition-colors">
       {/* Status pill */}
       <span className={`text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full shrink-0 ${statusPillColor[unit.status]}`}>
-        {unit.status}
+        {statusDisplayLabel[unit.status]}
       </span>
 
       {/* wp_ref */}
@@ -89,7 +107,7 @@ function UnitRow({ unit, onRequeue, requeueLoading }: {
       {/* Timestamps */}
       <span className="text-[11px] text-[var(--color-text-muted)] shrink-0 flex items-center gap-1">
         <Icon name="schedule" size={12} />
-        {relTime(unit.updated_at)}
+        {relTime(bestTimestamp(unit))}
       </span>
 
       {/* Error text for failed units */}
@@ -99,7 +117,7 @@ function UnitRow({ unit, onRequeue, requeueLoading }: {
         </span>
       )}
 
-      {/* Requeue button */}
+      {/* Requeue button — failed units only */}
       {canRequeue && (
         <button
           onClick={() => onRequeue(unit.id)}

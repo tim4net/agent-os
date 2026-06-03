@@ -1,13 +1,21 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 
 export interface ControlUnit {
-  id: string
+  id: number
   wp_ref: string
-  status: 'queued' | 'running' | 'done' | 'failed'
+  status: 'queued' | 'in_flight' | 'done' | 'failed'
   created_at: string
-  updated_at: string
-  error: string | null
-  result: unknown
+  claimed_at?: string | null
+  completed_at?: string | null
+  error?: string | null
+}
+
+/** Matches the real WP-O2 UnitListResponse envelope. */
+interface UnitListResponse {
+  units: ControlUnit[]
+  count: number
+  limit: number
+  offset: number
 }
 
 interface UseControlUnits {
@@ -34,9 +42,9 @@ export function useControlUnits(status?: string): UseControlUnits {
         if (!res.ok) throw new Error(`API error ${res.status}: ${res.statusText}`)
         return res.json()
       })
-      .then((data: ControlUnit[]) => {
+      .then((data: UnitListResponse) => {
         if (mountedRef.current) {
-          setUnits(data)
+          setUnits(data.units ?? [])
           setError(null)
         }
       })

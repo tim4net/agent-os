@@ -19,13 +19,14 @@ const modeIcon: Record<Mode, string> = {
 }
 
 export function ModeControls({ state, onModeChanged }: ModeControlsProps) {
-  const { setMode, setCadence, loading, error } = useControlMode(onModeChanged)
+  const { setMode, loading, error } = useControlMode(onModeChanged)
   const [cadenceInput, setCadenceInput] = useState(String(state.cadence_seconds))
 
   const handleCadenceSubmit = () => {
     const val = Number(cadenceInput)
     if (!Number.isFinite(val) || val <= 0) return
-    setCadence(val)
+    // Cadence is set via POST /api/control/mode with mode+cadence_seconds
+    setMode(state.mode, val)
   }
 
   return (

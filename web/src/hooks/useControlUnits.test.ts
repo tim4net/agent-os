@@ -2,6 +2,26 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, waitFor } from '@testing-library/react'
 import { useControlUnits } from './useControlUnits'
 
+/**
+ * Hook tests that mock the REAL WP-O2 /api/control/units response envelope:
+ *   { units: [...], count, limit, offset }
+ * NOT a bare array — the wrong mock shape that previously masked F1.
+ */
+
+const BASE_UNIT = {
+  id: 42,
+  wp_ref: 'WP-A',
+  status: 'queued',
+  created_at: '2026-06-02T12:00:00Z',
+  claimed_at: null,
+  completed_at: null,
+  error: null,
+}
+
+function makeEnvelope(units: unknown[]) {
+  return { units, count: units.length, limit: 50, offset: 0 }
+}
+
 describe('useControlUnits', () => {
   beforeEach(() => {
     vi.spyOn(globalThis, 'fetch')
@@ -11,27 +31,27 @@ describe('useControlUnits', () => {
     vi.restoreAllMocks()
   })
 
-  it('fetches units without status filter', async () => {
-    const mockUnits = [
-      { id: 'u1', wp_ref: 'WP-1', status: 'queued', created_at: '2026-06-02T12:00:00Z', updated_at: '2026-06-02T12:00:00Z', error: null, result: null },
-    ]
+  it('parses the UnitListResponse envelope, not a bare array', async () => {
+    const mockUnits = [{ ...BASE_UNIT, id: 1, wp_ref: 'WP-1' }]
     vi.mocked(globalThis.fetch).mockResolvedValueOnce({
       ok: true, status: 200, statusText: 'OK',
-      json: () => Promise.resolve(mockUnits),
+      json: () => Promise.resolve(makeEnvelope(mockUnits)),
     } as Response)
 
     const { result } = renderHook(() => useControlUnits())
 
     await waitFor(() => expect(result.current.loading).toBe(false))
 
-    expect(result.current.units).toEqual(mockUnits)
+    expect(result.current.units).toHaveLength(1)
+    expect(result.current.units[0].id).toBe(1)
+    expect(result.current.units[0].wp_ref).toBe('WP-1')
     expect(globalThis.fetch).toHaveBeenCalledWith('/api/control/units')
   })
 
-  it('fetches units with status filter', async () => {
+  it('passes status filter as query param', async () => {
     vi.mocked(globalThis.fetch).mockResolvedValueOnce({
       ok: true, status: 200, statusText: 'OK',
-      json: () => Promise.resolve([]),
+      json: () => Promise.resolve(makeEnvelope([])),
     } as Response)
 
     const { result } = renderHook(() => useControlUnits('failed'))
@@ -53,22 +73,20 @@ describe('useControlUnits', () => {
   })
 
   it('refetch refreshes the data', async () => {
-    const units1 = [
-      { id: 'u1', wp_ref: 'WP-1', status: 'running', created_at: '2026-06-02T12:00:00Z', updated_at: '2026-06-02T12:00:00Z', error: null, result: null },
-    ]
+    const units1 = [{ ...BASE_UNIT, id: 1, status: 'in_flight', claimed_at: '2026-06-02T12:01:00Z' }]
     const units2 = [
-      { id: 'u1', wp_ref: 'WP-1', status: 'done', created_at: '2026-06-02T12:00:00Z', updated_at: '2026-06-02T12:01:00Z', error: null, result: null },
-      { id: 'u2', wp_ref: 'WP-2', status: 'queued', created_at: '2026-06-02T12:01:00Z', updated_at: '2026-06-02T12:01:00Z', error: null, result: null },
+      { ...BASE_UNIT, id: 1, status: 'done', completed_at: '2026-06-02T12:05:00Z' },
+      { ...BASE_UNIT, id: 2, wp_ref: 'WP-2', status: 'queued' },
     ]
 
     vi.mocked(globalThis.fetch)
       .mockResolvedValueOnce({
         ok: true, status: 200, statusText: 'OK',
-        json: () => Promise.resolve(units1),
+        json: () => Promise.resolve(makeEnvelope(units1)),
       } as Response)
       .mockResolvedValueOnce({
         ok: true, status: 200, statusText: 'OK',
-        json: () => Promise.resolve(units2),
+        json: () => Promise.resolve(makeEnvelope(units2)),
       } as Response)
 
     const { result } = renderHook(() => useControlUnits())

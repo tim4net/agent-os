@@ -2,6 +2,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { renderHook, waitFor } from '@testing-library/react'
 import { useControlState } from './useControlState'
 
+/**
+ * Hook tests using real WP-O2 queue_counts keys: queued, in_flight, done, failed.
+ * NOT the fabricated 'running' key (F2).
+ */
+
 describe('useControlState', () => {
   beforeEach(() => {
     vi.spyOn(globalThis, 'fetch')
@@ -15,7 +20,7 @@ describe('useControlState', () => {
     const mockState = {
       mode: 'continuous',
       cadence_seconds: 30,
-      queue_counts: { queued: 1, running: 2, done: 5, failed: 0 },
+      queue_counts: { queued: 1, in_flight: 2, done: 5, failed: 0 },
       updated_at: '2026-06-02T12:00:00Z',
     }
     vi.mocked(globalThis.fetch).mockResolvedValueOnce({
