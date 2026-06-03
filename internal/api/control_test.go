@@ -20,9 +20,11 @@ import (
 // ---------------------------------------------------------------------------
 
 // newTestAPIForControl creates a test API for control-plane tests.
+// The returned pool is closed automatically via t.Cleanup (after seed cleanups).
 func newTestAPIForControl(t *testing.T) (*API, *pgxpool.Pool) {
 	t.Helper()
 	pool := getTestDB(t)
+	t.Cleanup(func() { pool.Close() })
 	queries := db.New(pool)
 	a := &API{
 		queries: queries,
@@ -59,7 +61,6 @@ func TestControl_GetState_WithSeededUnits_Returns200(t *testing.T) {
 	}
 
 	a, pool := newTestAPIForControl(t)
-	defer pool.Close()
 
 	// Seed some work units in different states.
 	seedWorkUnit(t, pool, "WP-O2-test-queued", "queued")
@@ -112,7 +113,6 @@ func TestControl_SetMode_Valid_Returns200(t *testing.T) {
 	}
 
 	a, pool := newTestAPIForControl(t)
-	defer pool.Close()
 
 	body := SetModeRequest{Mode: "continuous"}
 	bodyBytes, _ := json.Marshal(body)
@@ -156,7 +156,6 @@ func TestControl_SetMode_InvalidEnum_Returns400(t *testing.T) {
 	}
 
 	a, pool := newTestAPIForControl(t)
-	defer pool.Close()
 
 	body := SetModeRequest{Mode: "invalid_mode"}
 	bodyBytes, _ := json.Marshal(body)
@@ -189,7 +188,6 @@ func TestControl_SetMode_ModeOnly_DoesNotClobberCadence(t *testing.T) {
 	}
 
 	a, pool := newTestAPIForControl(t)
-	defer pool.Close()
 
 	// Set cadence to 30 first.
 	cadence30 := int32(30)
@@ -234,7 +232,6 @@ func TestControl_Requeue_DoneUnit_Returns404(t *testing.T) {
 	}
 
 	a, pool := newTestAPIForControl(t)
-	defer pool.Close()
 
 	id := seedWorkUnit(t, pool, "WP-O2-requeue-done-test", "done")
 
@@ -257,7 +254,6 @@ func TestControl_SetMode_WithCadence_Returns200(t *testing.T) {
 	}
 
 	a, pool := newTestAPIForControl(t)
-	defer pool.Close()
 
 	cadence := int32(30)
 	body := SetModeRequest{Mode: "tick", CadenceSeconds: &cadence}
@@ -294,7 +290,6 @@ func TestControl_Requeue_UnknownID_Returns404(t *testing.T) {
 	}
 
 	a, pool := newTestAPIForControl(t)
-	defer pool.Close()
 
 	req := httptest.NewRequest("POST", "/units/99999999/requeue", nil)
 	rec := httptest.NewRecorder()
@@ -315,7 +310,6 @@ func TestControl_Requeue_FailedUnit_Returns200(t *testing.T) {
 	}
 
 	a, pool := newTestAPIForControl(t)
-	defer pool.Close()
 
 	id := seedWorkUnit(t, pool, "WP-O2-requeue-test", "failed")
 
@@ -347,7 +341,6 @@ func TestControl_ListUnits_FilterByStatus(t *testing.T) {
 	}
 
 	a, pool := newTestAPIForControl(t)
-	defer pool.Close()
 
 	seedWorkUnit(t, pool, "WP-O2-list-queued", "queued")
 	seedWorkUnit(t, pool, "WP-O2-list-done", "done")
@@ -383,7 +376,6 @@ func TestControl_ListUnits_NoFilter_ReturnsAll(t *testing.T) {
 	}
 
 	a, pool := newTestAPIForControl(t)
-	defer pool.Close()
 
 	seedWorkUnit(t, pool, "WP-O2-all-1", "queued")
 	seedWorkUnit(t, pool, "WP-O2-all-2", "done")
@@ -414,7 +406,6 @@ func TestControl_EnqueueUnit_Returns201(t *testing.T) {
 	}
 
 	a, pool := newTestAPIForControl(t)
-	defer pool.Close()
 
 	body := EnqueueUnitRequest{
 		WpRef:   "WP-O2",
@@ -458,7 +449,6 @@ func TestControl_EnqueueUnit_MissingWpRef_Returns400(t *testing.T) {
 	}
 
 	a, pool := newTestAPIForControl(t)
-	defer pool.Close()
 
 	body := EnqueueUnitRequest{
 		Payload: json.RawMessage(`{}`),
