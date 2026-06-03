@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -316,6 +317,63 @@ func TestOrchestratorDriverShadowFailsClosedOnAdapterReportedMerge(t *testing.T)
 	if count := countRows(t, pool, "findings", "class", "shadow_merge_guard"); count != 1 {
 		t.Fatalf("expected 1 shadow_merge_guard finding, got %d", count)
 	}
+}
+
+func TestOrchestratorDriverMidDispatchHaltDoesNotStrandUnit(t *testing.T) {
+	pool := getOrchestratorDriverTestDB(t)
+	queries := db.New(pool)
+	orch := NewOrchestrator(queries)
+	ledger := NewLedgerService(queries)
+	ctx := context.Background()
+
+	if _, err := pool.Exec(ctx, "UPDATE control_state SET cadence_seconds = 0"); err != nil {
+		t.Fatalf("set cadence: %v", err)
+	}
+	unit, err := orch.Enqueue(ctx, "wp-mid-dispatch-halt", json.RawMessage(`{"pr_ref":"PR-105"}`))
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	if _, err := orch.SetMode(ctx, ModeContinuous); err != nil {
+		t.Fatalf("SetMode continuous: %v", err)
+	}
+
+	var dispatchStarted atomic.Bool
+	fake := &fakeGatePipeline{onRun: func(ctx context.Context, got *db.WorkUnit) (GateResult, error) {
+		if got.ID != unit.ID {
+			t.Fatalf("pipeline received unit ID %d, want %d", got.ID, unit.ID)
+		}
+		dispatchStarted.Store(true)
+		select {
+		case <-ctx.Done():
+			return GateResult{
+				Summary:     "halt canceled dispatch",
+				Gate2Model:  "claude-3-5-sonnet",
+				Gate3Model:  "gpt-5.5",
+				Gate2Passed: false,
+				Gate3Passed: false,
+			}, ctx.Err()
+		case <-time.After(2 * time.Second):
+			return GateResult{
+				Summary:    "gate did not observe halt cancellation",
+				Gate2Model: "claude-3-5-sonnet",
+				Gate3Model: "gpt-5.5",
+			}, errors.New("gate did not observe halt cancellation")
+		}
+	}}
+	driver := newTestDriver(queries, orch, ledger, fake)
+	driver.Halt = func(ctx context.Context) (bool, error) {
+		return dispatchStarted.Load(), nil
+	}
+	driver.HaltCheckInterval = 5 * time.Millisecond
+
+	if err := driver.Run(ctx); err != nil {
+		t.Fatalf("driver.Run: %v", err)
+	}
+	if fake.Calls() != 1 {
+		t.Fatalf("expected one dispatch before halt, got %d", fake.Calls())
+	}
+	assertWorkUnitStatus(t, pool, unit.ID, db.WorkUnitStatusFailed)
+	assertStatusCount(t, pool, db.WorkUnitStatusInFlight, 0)
 }
 
 func TestOrchestratorDriverRollbackTickOnePerInterval(t *testing.T) {

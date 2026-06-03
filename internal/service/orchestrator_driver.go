@@ -373,15 +373,17 @@ func stringFromPayload(payload map[string]any, keys ...string) string {
 	return ""
 }
 
-func (d *OrchestratorDriver) failDispatch(ctx context.Context, unit *db.WorkUnit, dispatchErr error, result GateResult) error {
+func (d *OrchestratorDriver) failDispatch(_ context.Context, unit *db.WorkUnit, dispatchErr error, result GateResult) error {
 	if result.WpRef == "" {
 		result.WpRef = unit.WpRef
 	}
 	result.Shadow = d.Shadow
 
-	logErr := d.appendRunLog(ctx, "orchestrator.dispatch.failed", unit, result)
-	findingErr := d.appendDriverFinding(ctx, unit, result, dispatchErr)
-	_, failErr := d.orch.Fail(ctx, unit.ID, dispatchErr.Error())
+	bookkeepingCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	logErr := d.appendRunLog(bookkeepingCtx, "orchestrator.dispatch.failed", unit, result)
+	findingErr := d.appendDriverFinding(bookkeepingCtx, unit, result, dispatchErr)
+	_, failErr := d.orch.Fail(bookkeepingCtx, unit.ID, dispatchErr.Error())
 
 	return errors.Join(dispatchErr, logErr, findingErr, failErr)
 }
