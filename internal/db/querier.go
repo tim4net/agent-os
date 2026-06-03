@@ -48,7 +48,6 @@ type Querier interface {
 	CountTrackerItemsByTenant(ctx context.Context, tenant string) (int64, error)
 	// Consistent with ListWorkUnits grouping (same key + same tenant filter) so Total matches.
 	CountWorkUnits(ctx context.Context, tenant string) (int64, error)
-	CountWorkUnitsByStatus(ctx context.Context) ([]CountWorkUnitsByStatusRow, error)
 	CreateAgent(ctx context.Context, arg CreateAgentParams) (Agent, error)
 	// Inserts a new app instance. Returns the created row.
 	CreateAppInstance(ctx context.Context, arg CreateAppInstanceParams) (AppInstance, error)
@@ -217,13 +216,11 @@ type Querier interface {
 	//      and SUM per-session cost (cumulative per session) for a correct unit total (B5).
 	// Optional tenant filter (B3): @tenant = '' returns all tenants; otherwise scopes to one.
 	ListWorkUnits(ctx context.Context, arg ListWorkUnitsParams) ([]ListWorkUnitsRow, error)
-	ListWorkUnitsByStatus(ctx context.Context, arg ListWorkUnitsByStatusParams) ([]WorkUnit, error)
 	ListWorkflowRuns(ctx context.Context, workflowID pgtype.UUID) ([]WorkflowRun, error)
 	ListWorkflows(ctx context.Context) ([]Workflow, error)
 	// Called when a server.stopped work-event arrives (contract §4).
 	// Sets status to 'down' — this is a definitive signal, not a probe.
 	MarkInstanceDownByServerStopped(ctx context.Context, arg MarkInstanceDownByServerStoppedParams) error
-	RequeueWorkUnit(ctx context.Context, id int64) (WorkUnit, error)
 	// Revoke an ingest key by setting revoked_at to now.
 	RevokeIngestKey(ctx context.Context, id int64) error
 	SearchMemory(ctx context.Context, arg SearchMemoryParams) ([]MemoryIndex, error)
