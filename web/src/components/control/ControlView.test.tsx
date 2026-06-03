@@ -112,9 +112,11 @@ describe('ControlView', () => {
     render(<ControlView />)
 
     // The mode text appears in the "Current: continuous · cadence 30s" line
-    expect(screen.getByText('continuous')).toBeInTheDocument()
-    // "30" is part of "30s"
-    expect(screen.getByText(/30s/)).toBeInTheDocument()
+    expect(screen.getByText((_content, element) => (
+      element?.tagName.toLowerCase() === 'p'
+        && element.textContent?.includes('Current: continuous')
+        && element.textContent?.includes('cadence 30s')
+    ))).toBeInTheDocument()
   })
 
   it('renders work units with wp_ref text', () => {
@@ -155,7 +157,7 @@ describe('ControlView', () => {
 
   it('clicking tick mode button updates mode display', async () => {
     const user = userEvent.setup()
-    render(<ControlView />)
+    const { rerender } = render(<ControlView />)
 
     // The mode buttons are inside the ModeControls glass-card
     // "tick" appears as a mode button
@@ -167,6 +169,7 @@ describe('ControlView', () => {
     if (tickButton) {
       await user.click(tickButton)
     }
+    rerender(<ControlView />)
 
     await waitFor(() => {
       // After click, the mode display should show tick (but there will be multiple)
