@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import type { ControlState } from '../../hooks/useControlState'
 import { useControlMode } from '../../hooks/useControlMode'
 import { Icon } from '../Icon'
@@ -21,6 +21,12 @@ const modeIcon: Record<Mode, string> = {
 export function ModeControls({ state, onModeChanged }: ModeControlsProps) {
   const { setMode, loading, error } = useControlMode(onModeChanged)
   const [cadenceInput, setCadenceInput] = useState(String(state.cadence_seconds))
+
+  // F4: re-sync local input when the polled state cadence changes
+  // (e.g. another operator changed it, or a refetch returns the updated value).
+  useEffect(() => {
+    setCadenceInput(String(state.cadence_seconds))
+  }, [state.cadence_seconds])
 
   const handleCadenceSubmit = () => {
     const val = Number(cadenceInput)

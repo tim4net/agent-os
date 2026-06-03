@@ -32,12 +32,22 @@ export function useControlUnits(status?: string): UseControlUnits {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const mountedRef = useRef(true)
+  // AbortController ref — shared between refetch and the effect cleanup.
+  // Each fetch gets a fresh signal; the previous fetch is aborted so a stale
+  // filter response can never overwrite the current state.
+  const acRef = useRef<AbortController | null>(null)
 
   const refetch = useCallback(() => {
+    // Abort the previous in-flight request (if any).
+    acRef.current?.abort()
+    const ac = new AbortController()
+    acRef.current = ac
+    const signal = ac.signal
+
     const params = new URLSearchParams()
     if (status) params.set('status', status)
     const qs = params.toString()
-    fetch(`/api/control/units${qs ? `?${qs}` : ''}`)
+    fetch(`/api/control/units${qs ? `?${qs}` : ''}`, { signal })
       .then((res) => {
         if (!res.ok) throw new Error(`API error ${res.status}: ${res.statusText}`)
         return res.json()
@@ -49,6 +59,7 @@ export function useControlUnits(status?: string): UseControlUnits {
         }
       })
       .catch((e: unknown) => {
+        if (e instanceof DOMException && e.name === 'AbortError') return
         if (mountedRef.current) {
           setError(e instanceof Error ? e.message : 'Failed to fetch control units')
         }
@@ -65,6 +76,7 @@ export function useControlUnits(status?: string): UseControlUnits {
     return () => {
       mountedRef.current = false
       clearInterval(id)
+      acRef.current?.abort()
     }
   }, [refetch])
 

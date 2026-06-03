@@ -45,7 +45,10 @@ describe('useControlUnits', () => {
     expect(result.current.units).toHaveLength(1)
     expect(result.current.units[0].id).toBe(1)
     expect(result.current.units[0].wp_ref).toBe('WP-1')
-    expect(globalThis.fetch).toHaveBeenCalledWith('/api/control/units')
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      '/api/control/units',
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    )
   })
 
   it('passes status filter as query param', async () => {
@@ -58,7 +61,10 @@ describe('useControlUnits', () => {
 
     await waitFor(() => expect(result.current.loading).toBe(false))
 
-    expect(globalThis.fetch).toHaveBeenCalledWith('/api/control/units?status=failed')
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      '/api/control/units?status=failed',
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    )
   })
 
   it('handles fetch error', async () => {
@@ -79,6 +85,7 @@ describe('useControlUnits', () => {
       { ...BASE_UNIT, id: 2, wp_ref: 'WP-2', status: 'queued' },
     ]
 
+    // Mock #1: initial mount fetch. Mock #2: explicit refetch call.
     vi.mocked(globalThis.fetch)
       .mockResolvedValueOnce({
         ok: true, status: 200, statusText: 'OK',

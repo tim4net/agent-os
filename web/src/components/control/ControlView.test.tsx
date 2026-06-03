@@ -60,14 +60,11 @@ vi.mock('../../hooks/useControlUnits', () => ({
   }),
 }))
 
+const mockSetMode = vi.fn<(mode: string, cadence?: number) => Promise<void>>()
+
 vi.mock('../../hooks/useControlMode', () => ({
-  useControlMode: (onSuccess?: () => void) => ({
-    setMode: vi.fn(async (mode: string, _cadence?: number) => {
-      if (mockControlState) {
-        mockControlState = { ...mockControlState, mode: mode as 'continuous' | 'tick' | 'stopped' }
-      }
-      onSuccess?.()
-    }),
+  useControlMode: (_onSuccess?: () => void) => ({
+    setMode: mockSetMode,
     loading: false,
     error: null,
   }),
@@ -76,6 +73,7 @@ vi.mock('../../hooks/useControlMode', () => ({
 describe('ControlView', () => {
   beforeEach(() => {
     vi.spyOn(globalThis, 'fetch')
+    mockSetMode.mockClear()
     mockControlState = {
       mode: 'continuous',
       cadence_seconds: 30,
@@ -160,14 +158,14 @@ describe('ControlView', () => {
 
     await user.click(stopButton)
 
-    await waitFor(() => {
-      expect(screen.getByText('stopped')).toBeInTheDocument()
-    })
+    // F2 fix: assert the kill-switch POST was actually wired (not tautological).
+    // mockSetMode is the spy on useControlMode's setMode.
+    expect(mockSetMode).toHaveBeenCalledWith('stopped')
   })
 
-  it('clicking tick mode button updates mode display', async () => {
+  it('clicking tick mode button calls setMode with tick', async () => {
     const user = userEvent.setup()
-    const { rerender } = render(<ControlView />)
+    render(<ControlView />)
 
     const tickButtons = screen.getAllByText('tick')
     const tickButton = tickButtons.find((el) => el.closest('button') !== null)
@@ -176,12 +174,8 @@ describe('ControlView', () => {
     if (tickButton) {
       await user.click(tickButton)
     }
-    rerender(<ControlView />)
 
-    await waitFor(() => {
-      const allTick = screen.getAllByText('tick')
-      expect(allTick.length).toBeGreaterThanOrEqual(2)
-    })
+    expect(mockSetMode).toHaveBeenCalledWith('tick')
   })
 
   it('failed unit requeue calls the requeue endpoint with numeric id', async () => {
@@ -248,5 +242,21 @@ describe('ControlView', () => {
     await waitFor(() => {
       expect(screen.getByText(/Requeue failed/)).toBeInTheDocument()
     })
+  })
+
+  it('cadence Set button calls setMode with current mode and cadence_seconds', async () => {
+    const user = userEvent.setup()
+    render(<ControlView />)
+
+    const cadenceInput = screen.getByRole('spinbutton')
+    await user.clear(cadenceInput)
+    await user.type(cadenceInput, '60')
+
+    const setButton = screen.getByRole('button', { name: 'Set' })
+    await user.click(setButton)
+
+    // F3: prove the cadence input → handleCadenceSubmit → setMode wiring.
+    // Current mode is 'continuous' (mockControlState default), cadence 60.
+    expect(mockSetMode).toHaveBeenCalledWith('continuous', 60)
   })
 })
