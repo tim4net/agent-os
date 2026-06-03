@@ -19,6 +19,12 @@ SELECT * FROM findings WHERE severity = $1 ORDER BY ts DESC LIMIT $2 OFFSET $3;
 -- name: ListFindingsByWpRef :many
 SELECT * FROM findings WHERE wp_ref = $1 ORDER BY ts DESC LIMIT $2 OFFSET $3;
 
+-- name: ListRunLogByWpRef :many
+SELECT * FROM run_log WHERE wp_ref = $1 ORDER BY ts DESC LIMIT $2 OFFSET $3;
+
+-- name: CountRunLogByWpRef :one
+SELECT COUNT(*)::bigint FROM run_log WHERE wp_ref = $1;
+
 -- name: CountRunLog :one
 SELECT COUNT(*)::bigint FROM run_log;
 

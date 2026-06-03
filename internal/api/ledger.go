@@ -170,24 +170,45 @@ func (a *API) PostRunLog(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, runLogToResponse(record))
 }
 
-// ListRunLog handles GET /api/ledger/runs?limit=50&offset=0
+// ListRunLog handles GET /api/ledger/runs?limit=50&offset=0&wp_ref=
 func (a *API) ListRunLog(w http.ResponseWriter, r *http.Request) {
 	limit, offset, ok := parsePagination(w, r)
 	if !ok {
 		return
 	}
 
-	records, err := a.queries.ListRunLog(r.Context(), db.ListRunLogParams{
-		Limit:  int32(limit),
-		Offset: int32(offset),
-	})
-	if err != nil {
-		slog.Default().Error("ledger: list run_log failed", "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to list run_log")
-		return
+	wpRefFilter := r.URL.Query().Get("wp_ref")
+
+	var records []db.RunLog
+	var total int64
+	var err error
+
+	switch {
+	case wpRefFilter != "":
+		records, err = a.queries.ListRunLogByWpRef(r.Context(), db.ListRunLogByWpRefParams{
+			WpRef:  wpRefFilter,
+			Limit:  int32(limit),
+			Offset: int32(offset),
+		})
+		if err != nil {
+			slog.Default().Error("ledger: list run_log by wp_ref failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to list run_log")
+			return
+		}
+		total, err = a.queries.CountRunLogByWpRef(r.Context(), wpRefFilter)
+	default:
+		records, err = a.queries.ListRunLog(r.Context(), db.ListRunLogParams{
+			Limit:  int32(limit),
+			Offset: int32(offset),
+		})
+		if err != nil {
+			slog.Default().Error("ledger: list run_log failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to list run_log")
+			return
+		}
+		total, err = a.queries.CountRunLog(r.Context())
 	}
 
-	total, err := a.queries.CountRunLog(r.Context())
 	if err != nil {
 		slog.Default().Error("ledger: count run_log failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to count run_log")

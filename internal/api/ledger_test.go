@@ -221,6 +221,87 @@ func TestLedger_ListRunLog_NewestFirst(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// GET /api/ledger/runs — filter by wp_ref
+// ---------------------------------------------------------------------------
+
+// TestLedger_FilterRunLogByWpRef proves: ?wp_ref=X returns only matching runs
+// with correct filtered Total, and non-matching wp_ref returns empty set.
+func TestLedger_FilterRunLogByWpRef(t *testing.T) {
+	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+
+	a, pool := newTestAPIForLedger(t)
+	defer pool.Close()
+	ensureLedgerTables(t, pool)
+
+	wpA := "WP-O3-RFILT-" + fmt.Sprintf("%d", time.Now().UnixNano())
+	wpB := "WP-O4-RFILT-" + fmt.Sprintf("%d", time.Now().UnixNano()+1)
+	defer pool.Exec(context.Background(), "DELETE FROM run_log WHERE wp_ref IN ($1, $2)", wpA, wpB)
+
+	postRun := func(wp string) {
+		body := PostRunLogRequest{
+			EventType: "dispatch",
+			PrRef:     "#42",
+			WpRef:     wp,
+			Summary:   "filter test",
+		}
+		b, _ := json.Marshal(body)
+		req := httptest.NewRequest("POST", "/runs", bytes.NewReader(b))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		a.LedgerRoutes().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("POST run_log: expected 200, got %d", rec.Code)
+		}
+	}
+
+	// Insert 2 for wpA, 1 for wpB
+	postRun(wpA)
+	postRun(wpA)
+	postRun(wpB)
+
+	// Filter by wpA → should return exactly 2
+	req := httptest.NewRequest("GET", "/runs?wp_ref="+wpA, nil)
+	rec := httptest.NewRecorder()
+	a.LedgerRoutes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp RunLogListResponse
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if len(resp.Records) != 2 {
+		t.Fatalf("expected 2 records for wp_ref %s, got %d", wpA, len(resp.Records))
+	}
+	for _, r := range resp.Records {
+		if r.WpRef != wpA {
+			t.Fatalf("expected wp_ref %s, got %s", wpA, r.WpRef)
+		}
+	}
+	if resp.Total != 2 {
+		t.Fatalf("expected Total=2 for wp_ref=%s filter, got %d", wpA, resp.Total)
+	}
+
+	// Filter by non-matching wp_ref → should return 0
+	req2 := httptest.NewRequest("GET", "/runs?wp_ref=NONEXISTENT-WP", nil)
+	rec2 := httptest.NewRecorder()
+	a.LedgerRoutes().ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d; body: %s", rec2.Code, rec2.Body.String())
+	}
+
+	var resp2 RunLogListResponse
+	json.Unmarshal(rec2.Body.Bytes(), &resp2)
+	if len(resp2.Records) != 0 {
+		t.Fatalf("expected 0 records for non-matching wp_ref, got %d", len(resp2.Records))
+	}
+	if resp2.Total != 0 {
+		t.Fatalf("expected Total=0 for non-matching wp_ref, got %d", resp2.Total)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // POST /api/ledger/findings
 // ---------------------------------------------------------------------------
 
