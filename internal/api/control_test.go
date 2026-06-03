@@ -20,10 +20,13 @@ import (
 // ---------------------------------------------------------------------------
 
 // newTestAPIForControl creates a test API for control-plane tests.
-// The returned pool is closed automatically via t.Cleanup (after seed cleanups).
+// It TRUNCATEs work_units at setup so leaked rows from prior tests cannot
+// pollute later packages (e.g. internal/service orchestrator tests).
 func newTestAPIForControl(t *testing.T) (*API, *pgxpool.Pool) {
 	t.Helper()
 	pool := getTestDB(t)
+	// TRUNCATE at setup guarantees a clean slate regardless of cleanup ordering.
+	_, _ = pool.Exec(context.Background(), "TRUNCATE work_units CASCADE")
 	t.Cleanup(func() { pool.Close() })
 	queries := db.New(pool)
 	a := &API{
@@ -112,7 +115,7 @@ func TestControl_SetMode_Valid_Returns200(t *testing.T) {
 		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
 	}
 
-	a, pool := newTestAPIForControl(t)
+	a, _ := newTestAPIForControl(t)
 
 	body := SetModeRequest{Mode: "continuous"}
 	bodyBytes, _ := json.Marshal(body)
@@ -155,7 +158,7 @@ func TestControl_SetMode_InvalidEnum_Returns400(t *testing.T) {
 		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
 	}
 
-	a, pool := newTestAPIForControl(t)
+	a, _ := newTestAPIForControl(t)
 
 	body := SetModeRequest{Mode: "invalid_mode"}
 	bodyBytes, _ := json.Marshal(body)
@@ -187,7 +190,7 @@ func TestControl_SetMode_ModeOnly_DoesNotClobberCadence(t *testing.T) {
 		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
 	}
 
-	a, pool := newTestAPIForControl(t)
+	a, _ := newTestAPIForControl(t)
 
 	// Set cadence to 30 first.
 	cadence30 := int32(30)
@@ -253,7 +256,7 @@ func TestControl_SetMode_WithCadence_Returns200(t *testing.T) {
 		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
 	}
 
-	a, pool := newTestAPIForControl(t)
+	a, _ := newTestAPIForControl(t)
 
 	cadence := int32(30)
 	body := SetModeRequest{Mode: "tick", CadenceSeconds: &cadence}
@@ -289,7 +292,7 @@ func TestControl_Requeue_UnknownID_Returns404(t *testing.T) {
 		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
 	}
 
-	a, pool := newTestAPIForControl(t)
+	a, _ := newTestAPIForControl(t)
 
 	req := httptest.NewRequest("POST", "/units/99999999/requeue", nil)
 	rec := httptest.NewRecorder()
@@ -448,7 +451,7 @@ func TestControl_EnqueueUnit_MissingWpRef_Returns400(t *testing.T) {
 		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
 	}
 
-	a, pool := newTestAPIForControl(t)
+	a, _ := newTestAPIForControl(t)
 
 	body := EnqueueUnitRequest{
 		Payload: json.RawMessage(`{}`),
