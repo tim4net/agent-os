@@ -73,6 +73,9 @@ type GateFinding struct {
 // cron prompts; tests can provide a deterministic predicate.
 type HaltPredicate func(ctx context.Context) (bool, error)
 
+// completeFunc mirrors Orchestrator.Complete for test seam injection.
+type completeFunc func(ctx context.Context, id int64) (*db.WorkUnit, error)
+
 // OrchestratorDriver owns the dispatch bookkeeping around RunLoop: gate
 // invocation, ledger writes, and Complete/Fail transitions. It does not claim
 // work itself; RunLoop performs the claim and supplies in-flight units to the
@@ -91,6 +94,9 @@ type OrchestratorDriver struct {
 
 	Halt              HaltPredicate
 	HaltCheckInterval time.Duration
+
+	// testCompleteFunc overrides d.orch.Complete when set (test-only seam).
+	testCompleteFunc completeFunc
 }
 
 type OrchestratorDriverOption func(*OrchestratorDriver)
@@ -314,10 +320,24 @@ func (d *OrchestratorDriver) dispatch(ctx context.Context, unit *db.WorkUnit) er
 	if err := d.appendFindings(ctx, unit, result); err != nil {
 		return d.failDispatch(ctx, unit, err, result)
 	}
-	if _, err := d.orch.Complete(ctx, unit.ID); err != nil {
-		return fmt.Errorf("complete work unit %d: %w", unit.ID, err)
+	if _, err := d.completeUnit(ctx, unit.ID); err != nil {
+		// Complete failed after a successful gate run — the unit is in_flight
+		// and would be stranded if we returned a plain error. Route through
+		// failDispatch so the unit lands in a terminal, reclaimable state (failed)
+		// using a non-cancelled bounded context, consistent with the sibling
+		// appendRunLog/appendFindings error paths above.
+		completeErr := fmt.Errorf("complete work unit %d: %w", unit.ID, err)
+		return d.failDispatch(ctx, unit, completeErr, result)
 	}
 	return nil
+}
+
+// completeUnit calls either the test seam or the real Orchestrator.Complete.
+func (d *OrchestratorDriver) completeUnit(ctx context.Context, id int64) (*db.WorkUnit, error) {
+	if d.testCompleteFunc != nil {
+		return d.testCompleteFunc(ctx, id)
+	}
+	return d.orch.Complete(ctx, id)
 }
 
 type gatePlan struct {

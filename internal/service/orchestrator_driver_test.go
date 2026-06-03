@@ -516,3 +516,49 @@ func TestOrchestratorDriverExternalHaltPredicate(t *testing.T) {
 		t.Fatalf("halt predicate should force stopped mode, got %s", state.Mode)
 	}
 }
+
+func TestOrchestratorDriverCompleteErrorDoesNotStrandUnit(t *testing.T) {
+	// Regression: if orch.Complete() fails after a successful gate run, the unit
+	// must NOT remain in_flight. It must be routed through failDispatch so it
+	// lands in 'failed' (reclaimable) with a finding recorded.
+	pool := getOrchestratorDriverTestDB(t)
+	queries := db.New(pool)
+	orch := NewOrchestrator(queries)
+	ledger := NewLedgerService(queries)
+	ctx := context.Background()
+
+	unit, err := orch.Enqueue(ctx, "wp-complete-error-strand", json.RawMessage(`{"pr_ref":"PR-200"}`))
+	if err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	if _, err := orch.SetMode(ctx, ModeTick); err != nil {
+		t.Fatalf("SetMode tick: %v", err)
+	}
+
+	fake := &fakeGatePipeline{}
+	driver := newTestDriver(queries, orch, ledger, fake)
+	driver.testCompleteFunc = func(ctx context.Context, id int64) (*db.WorkUnit, error) {
+		return nil, fmt.Errorf("injected Complete failure for unit %d", id)
+	}
+
+	err = driver.Run(ctx)
+	if err == nil {
+		t.Fatalf("expected driver.Run to return error on Complete failure, got nil")
+	}
+	if !strings.Contains(err.Error(), "injected Complete failure") {
+		t.Fatalf("driver.Run error = %v, want injected Complete failure", err)
+	}
+	if fake.Calls() != 1 {
+		t.Fatalf("expected one gate dispatch before Complete failure, got %d", fake.Calls())
+	}
+
+	// AC1: unit must NOT be in_flight — it must be failed (reclaimable).
+	assertWorkUnitStatus(t, pool, unit.ID, db.WorkUnitStatusFailed)
+	assertStatusCount(t, pool, db.WorkUnitStatusInFlight, 0)
+
+	// AC3: a dispatch_error finding must exist.
+	if count := countRows(t, pool, "findings", "class", "dispatch_error"); count != 1 {
+		t.Fatalf("expected 1 dispatch_error finding, got %d", count)
+	}
+}
+
