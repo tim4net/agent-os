@@ -36,6 +36,10 @@ export function useControlUnits(status?: string): UseControlUnits {
   // Each fetch gets a fresh signal; the previous fetch is aborted so a stale
   // filter response can never overwrite the current state.
   const acRef = useRef<AbortController | null>(null)
+  // Monotonic request-id guard: only the response matching the latest status
+  // is allowed to update state. This prevents a race where an older filtered
+  // request resolves after a newer one (belt-and-suspenders with AbortController).
+  const requestIdRef = useRef(0)
 
   const refetch = useCallback(() => {
     // Abort the previous in-flight request (if any).
@@ -44,8 +48,13 @@ export function useControlUnits(status?: string): UseControlUnits {
     acRef.current = ac
     const signal = ac.signal
 
+    // Capture the current status in a closure-local snapshot so the .then
+    // can validate it matches what the caller expects.
+    const currentStatus = status
+    const requestId = ++requestIdRef.current
+
     const params = new URLSearchParams()
-    if (status) params.set('status', status)
+    if (currentStatus) params.set('status', currentStatus)
     const qs = params.toString()
     fetch(`/api/control/units${qs ? `?${qs}` : ''}`, { signal })
       .then((res) => {
@@ -53,14 +62,16 @@ export function useControlUnits(status?: string): UseControlUnits {
         return res.json()
       })
       .then((data: UnitListResponse) => {
-        if (mountedRef.current) {
+        // Staleness guard: only update if this is still the latest request
+        // and the component is still mounted.
+        if (mountedRef.current && requestIdRef.current === requestId) {
           setUnits(data.units ?? [])
           setError(null)
         }
       })
       .catch((e: unknown) => {
         if (e instanceof DOMException && e.name === 'AbortError') return
-        if (mountedRef.current) {
+        if (mountedRef.current && requestIdRef.current === requestId) {
           setError(e instanceof Error ? e.message : 'Failed to fetch control units')
         }
       })

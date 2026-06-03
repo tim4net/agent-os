@@ -5,7 +5,7 @@ type UnitStatus = ControlUnit['status']
 
 const statusPillColor: Record<UnitStatus, string> = {
   queued: 'bg-[var(--accent-blue)]/15 text-[var(--accent-blue)]',
-  in_flight: 'bg-emerald-500/15 text-emerald-400',
+  in_flight: 'bg-[var(--accent-purple)]/15 text-[var(--accent-purple)]',
   done: 'bg-[var(--color-text-muted)]/20 text-[var(--color-text-secondary)]',
   failed: 'bg-[#f87171]/15 text-[#f87171]',
 }

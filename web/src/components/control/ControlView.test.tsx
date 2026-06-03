@@ -89,6 +89,10 @@ describe('ControlView', () => {
 
   afterEach(() => {
     vi.restoreAllMocks()
+    vi.doUnmock('../../hooks/useControlState')
+    vi.doUnmock('../../hooks/useControlUnits')
+    vi.doUnmock('../../hooks/useControlMode')
+    vi.resetModules()
   })
 
   it('renders heading and queue count cards', () => {
@@ -149,23 +153,80 @@ describe('ControlView', () => {
     expect(screen.queryByText('Requeue')).not.toBeInTheDocument()
   })
 
-  it('click STOP calls setMode with stopped', async () => {
+  it('click STOP posts mode=stopped to /api/control/mode', async () => {
+    // Do NOT mock useControlMode — let the real hook fire fetch so we can
+    // assert the actual kill-switch POST (tautological-test guard).
+    vi.doMock('../../hooks/useControlState', () => ({
+      useControlState: () => ({
+        state: mockControlState,
+        loading: false,
+        error: null,
+        refetch: mockRefetchState,
+      }),
+    }))
+    vi.doMock('../../hooks/useControlUnits', () => ({
+      useControlUnits: (_status?: string) => ({
+        units: mockControlUnits,
+        loading: false,
+        error: null,
+        refetch: mockRefetchUnits,
+      }),
+    }))
+    vi.resetModules()
+    const { ControlView: FreshControlView } = await import('./ControlView')
+
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce({
+      ok: true, status: 200, statusText: 'OK',
+      json: () => Promise.resolve({}),
+    } as Response)
+
     const user = userEvent.setup()
-    render(<ControlView />)
+    render(<FreshControlView />)
 
     const stopButton = screen.getByText('STOP')
     expect(stopButton).toBeInTheDocument()
 
     await user.click(stopButton)
 
-    // F2 fix: assert the kill-switch POST was actually wired (not tautological).
-    // mockSetMode is the spy on useControlMode's setMode.
-    expect(mockSetMode).toHaveBeenCalledWith('stopped')
+    // Assert the actual kill-switch POST — not a tautological mock check.
+    await waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        '/api/control/mode',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ mode: 'stopped' }),
+        }),
+      )
+    })
   })
 
-  it('clicking tick mode button calls setMode with tick', async () => {
+  it('clicking tick mode button posts mode=tick to /api/control/mode', async () => {
+    vi.doMock('../../hooks/useControlState', () => ({
+      useControlState: () => ({
+        state: mockControlState,
+        loading: false,
+        error: null,
+        refetch: mockRefetchState,
+      }),
+    }))
+    vi.doMock('../../hooks/useControlUnits', () => ({
+      useControlUnits: (_status?: string) => ({
+        units: mockControlUnits,
+        loading: false,
+        error: null,
+        refetch: mockRefetchUnits,
+      }),
+    }))
+    vi.resetModules()
+    const { ControlView: FreshControlView } = await import('./ControlView')
+
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce({
+      ok: true, status: 200, statusText: 'OK',
+      json: () => Promise.resolve({}),
+    } as Response)
+
     const user = userEvent.setup()
-    render(<ControlView />)
+    render(<FreshControlView />)
 
     const tickButtons = screen.getAllByText('tick')
     const tickButton = tickButtons.find((el) => el.closest('button') !== null)
@@ -175,7 +236,62 @@ describe('ControlView', () => {
       await user.click(tickButton)
     }
 
-    expect(mockSetMode).toHaveBeenCalledWith('tick')
+    await waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        '/api/control/mode',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ mode: 'tick' }),
+        }),
+      )
+    })
+  })
+
+  it('cadence Set button posts mode + cadence_seconds to /api/control/mode', async () => {
+    vi.doMock('../../hooks/useControlState', () => ({
+      useControlState: () => ({
+        state: mockControlState,
+        loading: false,
+        error: null,
+        refetch: mockRefetchState,
+      }),
+    }))
+    vi.doMock('../../hooks/useControlUnits', () => ({
+      useControlUnits: (_status?: string) => ({
+        units: mockControlUnits,
+        loading: false,
+        error: null,
+        refetch: mockRefetchUnits,
+      }),
+    }))
+    vi.resetModules()
+    const { ControlView: FreshControlView } = await import('./ControlView')
+
+    vi.mocked(globalThis.fetch).mockResolvedValueOnce({
+      ok: true, status: 200, statusText: 'OK',
+      json: () => Promise.resolve({}),
+    } as Response)
+
+    const user = userEvent.setup()
+    render(<FreshControlView />)
+
+    const cadenceInput = screen.getByRole('spinbutton')
+    await user.clear(cadenceInput)
+    await user.type(cadenceInput, '60')
+
+    const setButton = screen.getByRole('button', { name: 'Set' })
+    await user.click(setButton)
+
+    // Assert the actual cadence wiring → POST with mode + cadence_seconds.
+    await waitFor(() => {
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        '/api/control/mode',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ mode: 'continuous', cadence_seconds: 60 }),
+        }),
+      )
+    })
   })
 
   it('failed unit requeue calls the requeue endpoint with numeric id', async () => {
@@ -242,21 +358,5 @@ describe('ControlView', () => {
     await waitFor(() => {
       expect(screen.getByText(/Requeue failed/)).toBeInTheDocument()
     })
-  })
-
-  it('cadence Set button calls setMode with current mode and cadence_seconds', async () => {
-    const user = userEvent.setup()
-    render(<ControlView />)
-
-    const cadenceInput = screen.getByRole('spinbutton')
-    await user.clear(cadenceInput)
-    await user.type(cadenceInput, '60')
-
-    const setButton = screen.getByRole('button', { name: 'Set' })
-    await user.click(setButton)
-
-    // F3: prove the cadence input → handleCadenceSubmit → setMode wiring.
-    // Current mode is 'continuous' (mockControlState default), cadence 60.
-    expect(mockSetMode).toHaveBeenCalledWith('continuous', 60)
   })
 })

@@ -71,7 +71,7 @@ export function ControlView() {
         {state && (
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             <CountCard label="Queued" value={state.queue_counts.queued ?? 0} icon="pending" accent="blue" />
-            <CountCard label="In flight" value={state.queue_counts.in_flight ?? 0} icon="play_arrow" accent="emerald" />
+            <CountCard label="In flight" value={state.queue_counts.in_flight ?? 0} icon="play_arrow" accent="purple" />
             <CountCard label="Done" value={state.queue_counts.done ?? 0} icon="check_circle" accent="gray" />
             <CountCard label="Failed" value={state.queue_counts.failed ?? 0} icon="error" accent="red" />
           </div>
@@ -122,10 +122,10 @@ export function ControlView() {
 
 function CountCard({ label, value, icon, accent }: { label: string; value: number; icon: string; accent: string }) {
   const colorMap: Record<string, string> = {
-    emerald: 'from-emerald-500/10 to-transparent border-emerald-500/20',
-    blue: 'from-blue-500/10 to-transparent border-blue-500/20',
-    red: 'from-red-500/10 to-transparent border-red-500/20',
-    gray: 'from-gray-500/10 to-transparent border-gray-500/20',
+    purple: 'from-[var(--accent-purple)]/10 to-transparent border-[var(--accent-purple)]/20',
+    blue: 'from-[var(--accent-blue)]/10 to-transparent border-[var(--accent-blue)]/20',
+    red: 'from-[#f87171]/10 to-transparent border-[#f87171]/20',
+    gray: 'from-[var(--color-text-muted)]/10 to-transparent border-[var(--color-text-muted)]/20',
   }
   return (
     <div className={`glass-card p-4 bg-gradient-to-br ${colorMap[accent] || colorMap.gray}`}>
