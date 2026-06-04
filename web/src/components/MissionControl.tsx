@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
+import type { ReactNode } from 'react'
 import { Icon } from './Icon'
 import { 
   listIncidents, 
@@ -852,7 +853,7 @@ function SpendPanel({
             const tenantStyles = getTenantStyles(derivedTenant || '');
             const pct = (row.total_tokens / maxTokens) * 100;
 
-            let billingChip = null;
+            let billingChip: ReactNode;
             if (row.billing_mode === 'metered' && row.total_cost_usd !== null) {
               billingChip = (
                 <span className={`px-1.5 py-0.5 rounded text-[9px] font-semibold font-mono uppercase tracking-wider shrink-0 ${tenantStyles.chip}`}>
@@ -1022,7 +1023,7 @@ export default function MissionControl({ agents }: { agents: Agent[] }) {
         <div className="flex bg-white/5 border border-[var(--border-subtle)] rounded-lg p-0.5 self-start md:self-center">
           {(['all', 'personal', 'dayjob'] as const).map((t) => {
             const isActive = tenantFilter === t;
-            let activeClass = '';
+            let activeClass: string;
             if (isActive) {
               if (t === 'personal') {
                 activeClass = 'bg-[var(--tenant-personal)]/15 text-[var(--tenant-personal)] border border-[var(--tenant-personal)]/30 shadow-[0_0_12px_rgba(34,211,238,0.2)] font-bold';
