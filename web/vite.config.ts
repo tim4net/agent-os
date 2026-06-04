@@ -9,7 +9,9 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'http://localhost:8420',
+        // Override with VITE_API_TARGET to point the dev server at an alternate
+        // backend port (e.g. a locally-built server on another port).
+        target: process.env.VITE_API_TARGET || 'http://localhost:8420',
         changeOrigin: true,
       },
     },

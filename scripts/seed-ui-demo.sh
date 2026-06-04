@@ -452,6 +452,75 @@ reseed("pipeline", "/api/pipeline", "title", [
 print("[seed-ui-demo]   productivity planes seeded", flush=True)
 PY
 
+log "seeding Knowledge vault notes through /api/memory/file"
+# Notes are written via the same POST endpoint the UI uses. WriteFile overwrites
+# by path and MkdirAll's parent dirs, so this is naturally idempotent — no delete
+# pass needed. This also auto-creates the vault directory on a fresh deploy.
+API_URL="$API_URL" python3 - <<'PY'
+import json
+import os
+import urllib.request
+import urllib.error
+
+API = os.environ["API_URL"].rstrip("/")
+
+NOTES = {
+    "Welcome.md": (
+        "# Welcome to Agent OS Knowledge\n\n"
+        "This is your vault — every note, doc, and reference across all your "
+        "projects in one place. Files here are full-text indexed and searchable "
+        "from the Knowledge tab.\n\n"
+        "- **Files** — browse and read your Markdown vault\n"
+        "- **Skills** — procedural know-how your agents can load\n"
+    ),
+    "Projects/Agent-OS.md": (
+        "# Agent OS\n\n"
+        "An operating system for all your projects, personal and professional. "
+        "A single pane of glass over every agent, work package, and tenant.\n\n"
+        "## Planes\n"
+        "- Fleet — live agent sessions\n"
+        "- Spend — token usage and metered cost\n"
+        "- Control — orchestrator mode and queue\n"
+        "- Observe — the work-event stream\n"
+    ),
+    "Projects/Three-Gate-Review.md": (
+        "# The Three-Gate Review Loop\n\n"
+        "1. Build plus the full test suite on a fresh database\n"
+        "2. Independent model spec-compliance review — re-verify every PASS\n"
+        "3. Live render in the browser with zero new console errors\n\n"
+        "When CI runners are inert, this local loop is authoritative.\n"
+    ),
+    "Notes/Daily-Standup.md": (
+        "# Daily Standup\n\n"
+        "- Wired the productivity tabs (Build, Knowledge, Automate) to live data\n"
+        "- Fixed the Knowledge > Files 500 on a missing vault (graceful empty)\n"
+        "- Next: navigation polish\n"
+    ),
+}
+
+
+def write_note(path, content):
+    body = json.dumps({"path": path, "content": content}).encode()
+    r = urllib.request.Request(
+        API + "/api/memory/file", data=body, method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(r) as resp:
+            return resp.status
+    except urllib.error.HTTPError as e:
+        raise SystemExit(f"FAIL seeding note {path}: {e.code} {e.read().decode()}")
+
+
+written = 0
+for path, content in NOTES.items():
+    if write_note(path, content) in (200, 201):
+        written += 1
+if written != len(NOTES):
+    raise SystemExit(f"FAIL seeding notes: wrote {written} of {len(NOTES)}")
+print(f"[seed-ui-demo]   memory notes: wrote {written}", flush=True)
+PY
+
 log "verification JSON follows; each listed endpoint must have a non-empty array"
 verify_endpoint "spend_personal" "$API_URL/api/spend?group_by=agent&tenant=personal" "rows"
 verify_endpoint "spend_dayjob" "$API_URL/api/spend?group_by=agent&tenant=dayjob" "rows"
@@ -467,5 +536,6 @@ verify_endpoint "tasks" "$API_URL/api/tasks" "__array__"
 verify_endpoint "workflows" "$API_URL/api/workflows" "__array__"
 verify_endpoint "skills" "$API_URL/api/skills" "__array__"
 verify_endpoint "pipeline" "$API_URL/api/pipeline" "__array__"
+verify_endpoint "memory_tree" "$API_URL/api/memory/tree?depth=2" "__array__"
 
 log "done"
