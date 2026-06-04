@@ -75,6 +75,13 @@ func main() {
 	scanner.Start(ctx)
 	defer scanner.Stop()
 
+	// Ensure the memory vault directory exists. A missing OBSIDIAN_PATH is a
+	// normal first-run / fresh-deploy state; creating it here keeps the memory
+	// indexer and the Knowledge > Files tree endpoint from erroring on absence.
+	if err := os.MkdirAll(cfg.ObsidianPath, 0o755); err != nil {
+		slog.Warn("failed to ensure obsidian vault directory", "path", cfg.ObsidianPath, "error", err)
+	}
+
 	// Start memory indexer
 	indexer := service.NewMemoryIndexer(queries, bus, cfg.ObsidianPath)
 	indexer.Start(ctx)

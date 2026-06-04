@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -95,6 +96,22 @@ func (m *MemoryAPI) MemoryRoutes() http.Handler {
 	return r
 }
 
+// isWithinBase reports whether absPath is the base directory itself or a
+// descendant of it. It is a containment check that is robust to the
+// sibling-prefix pitfall of a naive strings.HasPrefix (e.g. base "/data/vault"
+// must NOT match "/data/vault-evil"). Both arguments must already be absolute.
+func isWithinBase(absPath, absBase string) bool {
+	if absPath == absBase {
+		return true
+	}
+	rel, err := filepath.Rel(absBase, absPath)
+	if err != nil {
+		return false
+	}
+	// Any path that needs to climb out of base (".." or "../...") is outside.
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
+}
+
 // Tree handles GET /api/memory/tree?path=&depth=
 func (m *MemoryAPI) Tree(w http.ResponseWriter, r *http.Request) {
 	subPath := r.URL.Query().Get("path")
@@ -107,7 +124,7 @@ func (m *MemoryAPI) Tree(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	absBase, _ := filepath.Abs(m.obsidianPath)
-	if !strings.HasPrefix(absRoot, absBase) {
+	if !isWithinBase(absRoot, absBase) {
 		http.Error(w, "path access denied", http.StatusForbidden)
 		return
 	}
@@ -122,8 +139,21 @@ func (m *MemoryAPI) Tree(w http.ResponseWriter, r *http.Request) {
 
 	tree, err := m.buildTree(absRoot, absBase, depth)
 	if err != nil {
+		// A missing vault directory is a legitimate empty/first-run state, not a
+		// server error. The Knowledge > Files tab should render an empty tree
+		// rather than a scary 500 when no notes exist yet.
+		if errors.Is(err, fs.ErrNotExist) {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode([]TreeNode{})
+			return
+		}
 		http.Error(w, "failed to read tree: "+err.Error(), http.StatusInternalServerError)
 		return
+	}
+
+	// Encode a non-nil slice so an empty (but present) vault returns [] not null.
+	if tree == nil {
+		tree = []TreeNode{}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -198,7 +228,7 @@ func (m *MemoryAPI) GetFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	absBase, _ := filepath.Abs(m.obsidianPath)
-	if !strings.HasPrefix(absPath, absBase) {
+	if !isWithinBase(absPath, absBase) {
 		http.Error(w, "path access denied", http.StatusForbidden)
 		return
 	}
@@ -249,7 +279,7 @@ func (m *MemoryAPI) WriteFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	absBase, _ := filepath.Abs(m.obsidianPath)
-	if !strings.HasPrefix(absPath, absBase) {
+	if !isWithinBase(absPath, absBase) {
 		http.Error(w, "path access denied", http.StatusForbidden)
 		return
 	}
@@ -361,7 +391,7 @@ func (m *MemoryAPI) Synthesize(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			continue
 		}
-		if !strings.HasPrefix(absPath, absBase) {
+		if !isWithinBase(absPath, absBase) {
 			continue
 		}
 
