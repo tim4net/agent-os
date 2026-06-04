@@ -16,7 +16,7 @@ function uuid(): string {
 import { getAgentModels, getAgentCommands, getMessages, sendChat, exportConversation, executeSlashCommand } from '../../api/client'
 import { MessageBubble } from './MessageBubble'
 import { VoiceButton } from './VoiceButton'
-import { showToast } from '../Toast'
+import { showToast } from '../toast-bus'
 
 interface ChatPanelProps {
   agent: Agent

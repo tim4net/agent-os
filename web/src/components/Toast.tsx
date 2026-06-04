@@ -1,31 +1,29 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Icon } from './Icon'
-
-interface Toast {
-  id: string
-  message: string
-  type: 'success' | 'error' | 'info'
-}
-
-let addToastFn: ((toast: Omit<Toast, 'id'>) => void) | null = null
-
-export function showToast(message: string, type: Toast['type'] = 'info') {
-  addToastFn?.({ message, type })
-}
+import { registerToastHandler, nextToastId, type Toast } from './toast-bus'
 
 export function ToastContainer() {
   const [toasts, setToasts] = useState<Toast[]>([])
+  // Track pending dismissal timers so we can clear them on unmount.
+  const timers = useRef<Set<ReturnType<typeof setTimeout>>>(new Set())
 
-  // Register global toast function
-  addToastFn = (toast) => {
-    const id = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
-      ? crypto.randomUUID()
-      : Math.random().toString(36).slice(2) + Date.now().toString(36)
-    setToasts((prev) => [...prev, { ...toast, id }])
-    setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id))
-    }, 4000)
-  }
+  useEffect(() => {
+    const unsubscribe = registerToastHandler((toast) => {
+      const id = nextToastId()
+      setToasts((prev) => [...prev, { ...toast, id }])
+      const timer = setTimeout(() => {
+        setToasts((prev) => prev.filter((t) => t.id !== id))
+        timers.current.delete(timer)
+      }, 4000)
+      timers.current.add(timer)
+    })
+    const pending = timers.current
+    return () => {
+      unsubscribe()
+      pending.forEach(clearTimeout)
+      pending.clear()
+    }
+  }, [])
 
   function dismiss(id: string) {
     setToasts((prev) => prev.filter((t) => t.id !== id))

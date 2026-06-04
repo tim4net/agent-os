@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor, act } from '@testing-library/react'
 import { FleetRadar, getAngleFromSessionId } from './FleetRadar'
 import { getFleet } from '../../api/client'
+import type { FleetResponse } from '../../api/client'
 
 // Mock the client functions
 vi.mock('../../api/client', () => ({
@@ -29,11 +30,11 @@ describe('FleetRadar Component', () => {
   })
 
   it('renders acquiring signal loading state initially', async () => {
-    let resolvePromise: (value: any) => void = () => {}
-    const promise = new Promise((resolve) => {
+    let resolvePromise: (value: FleetResponse) => void = () => {}
+    const promise = new Promise<FleetResponse>((resolve) => {
       resolvePromise = resolve
     })
-    vi.mocked(getFleet).mockReturnValue(promise as any)
+    vi.mocked(getFleet).mockReturnValue(promise)
 
     render(<FleetRadar tenant="personal" />)
 

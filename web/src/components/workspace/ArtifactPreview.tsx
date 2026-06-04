@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import type { Artifact, LinkedNote } from '../../api/client'
 import { deleteArtifact, getArtifactNotes, exportArtifact } from '../../api/client'
-import { showToast } from '../Toast'
+import { showToast } from '../toast-bus'
 import { Icon } from '../Icon'
 
 interface ArtifactPreviewProps {

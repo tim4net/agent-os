@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { Agent } from '../../api/client'
 import { getAgentConfig, updateAgentConfig } from '../../api/client'
-import { showToast } from '../Toast'
+import { showToast } from '../toast-bus'
 
 interface AgentConfigProps {
   agent: Agent
