@@ -1,0 +1,1303 @@
+# GENERATED FILE — do not edit by hand.
+# Regenerate: go run ./cmd/gen-openapi > docs/openapi.yaml
+# Source of truth: internal/api.(*API).Router() walked via chi.Walk.
+openapi: 3.1.0
+info:
+  title: Agent OS API
+  version: 0.6.0
+  description: >-
+    Control plane and observability API for the Agent OS SPOG. Route
+    surface is generated authoritatively from the chi router; payload
+    shapes are defined by the SQL migrations (internal/db/migrations)
+    and the sqlc query layer (internal/db/queries).
+servers:
+  - url: http://localhost:8080
+    description: Local / hpms1 deployment
+tags:
+  - name: activity
+  - name: agents
+  - name: artifacts
+  - name: control
+  - name: conversations
+  - name: delegations
+  - name: emitters
+  - name: events
+  - name: fleet
+  - name: goals
+  - name: health
+  - name: host
+  - name: incidents
+  - name: instances
+  - name: ledger
+  - name: memory
+  - name: pipeline
+  - name: skills
+  - name: slash-command
+  - name: spend
+  - name: studio
+  - name: tasks
+  - name: timeline
+  - name: trackers
+  - name: vision
+  - name: voice
+  - name: work-units
+  - name: workflows
+  - name: worktrees
+paths:
+  /api/activity:
+    get:
+      tags: [activity]
+      operationId: get_GetActivity
+      summary: Get Activity
+      description: Handler GetActivity in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/agents:
+    get:
+      tags: [agents]
+      operationId: get_ListAgents
+      summary: List Agents
+      description: Handler ListAgents in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+    post:
+      tags: [agents]
+      operationId: post_CreateAgent
+      summary: Create Agent
+      description: Handler CreateAgent in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/agents/auto-register:
+    post:
+      tags: [agents]
+      operationId: post_AutoRegisterAgents
+      summary: Auto Register Agents
+      description: Handler AutoRegisterAgents in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/agents/discover:
+    get:
+      tags: [agents]
+      operationId: get_DiscoverAgents
+      summary: Discover Agents
+      description: Handler DiscoverAgents in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/agents/{id}:
+    get:
+      tags: [agents]
+      operationId: get_GetAgent
+      summary: Get Agent
+      description: Handler GetAgent in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+    patch:
+      tags: [agents]
+      operationId: patch_UpdateAgentConfig
+      summary: Update Agent Config
+      description: Handler UpdateAgentConfig in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/agents/{id}/chat:
+    post:
+      tags: [agents]
+      operationId: post_ChatWithAgent
+      summary: Chat With Agent
+      description: Handler ChatWithAgent in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/agents/{id}/commands:
+    get:
+      tags: [agents]
+      operationId: get_GetAgentCommands
+      summary: Get Agent Commands
+      description: Handler GetAgentCommands in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/agents/{id}/config:
+    get:
+      tags: [agents]
+      operationId: get_GetAgentConfig
+      summary: Get Agent Config
+      description: Handler GetAgentConfig in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/agents/{id}/models:
+    get:
+      tags: [agents]
+      operationId: get_GetAgentModels
+      summary: Get Agent Models
+      description: Handler GetAgentModels in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/artifacts:
+    get:
+      tags: [artifacts]
+      operationId: get_ListArtifacts
+      summary: List Artifacts
+      description: Handler ListArtifacts in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+    post:
+      tags: [artifacts]
+      operationId: post_UploadArtifact
+      summary: Upload Artifact
+      description: Handler UploadArtifact in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/artifacts/{id}:
+    delete:
+      tags: [artifacts]
+      operationId: delete_DeleteArtifact
+      summary: Delete Artifact
+      description: Handler DeleteArtifact in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+    get:
+      tags: [artifacts]
+      operationId: get_GetArtifact
+      summary: Get Artifact
+      description: Handler GetArtifact in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/artifacts/{id}/export:
+    post:
+      tags: [artifacts]
+      operationId: post_ExportArtifact
+      summary: Export Artifact
+      description: Handler ExportArtifact in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/artifacts/{id}/file:
+    get:
+      tags: [artifacts]
+      operationId: get_GetArtifactFile
+      summary: Get Artifact File
+      description: Handler GetArtifactFile in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/artifacts/{id}/notes:
+    get:
+      tags: [artifacts]
+      operationId: get_GetArtifactNotes
+      summary: Get Artifact Notes
+      description: Handler GetArtifactNotes in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/control/mode:
+    post:
+      tags: [control]
+      operationId: post_SetControlMode
+      summary: Set Control Mode
+      description: Handler SetControlMode in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/control/state:
+    get:
+      tags: [control]
+      operationId: get_GetControlState
+      summary: Get Control State
+      description: Handler GetControlState in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/control/units:
+    get:
+      tags: [control]
+      operationId: get_ListUnits
+      summary: List Units
+      description: Handler ListUnits in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+    post:
+      tags: [control]
+      operationId: post_EnqueueUnit
+      summary: Enqueue Unit
+      description: Handler EnqueueUnit in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/control/units/{id}/requeue:
+    post:
+      tags: [control]
+      operationId: post_RequeueUnit
+      summary: Requeue Unit
+      description: Handler RequeueUnit in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/conversations:
+    get:
+      tags: [conversations]
+      operationId: get_ListConversations
+      summary: List Conversations
+      description: Handler ListConversations in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+    post:
+      tags: [conversations]
+      operationId: post_CreateConversation
+      summary: Create Conversation
+      description: Handler CreateConversation in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/conversations/summarize:
+    post:
+      tags: [conversations]
+      operationId: post_ConversationSummary
+      summary: Conversation Summary
+      description: Handler ConversationSummary in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/conversations/{id}/export:
+    post:
+      tags: [conversations]
+      operationId: post_ExportConversation
+      summary: Export Conversation
+      description: Handler ExportConversation in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/conversations/{id}/messages:
+    get:
+      tags: [conversations]
+      operationId: get_GetConversationMessages
+      summary: Get Conversation Messages
+      description: Handler GetConversationMessages in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/delegations:
+    get:
+      tags: [delegations]
+      operationId: get_ListDelegationsHandler
+      summary: List Delegations Handler
+      description: Handler ListDelegationsHandler in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+    post:
+      tags: [delegations]
+      operationId: post_CreateDelegation
+      summary: Create Delegation
+      description: Handler CreateDelegation in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/delegations/{id}:
+    patch:
+      tags: [delegations]
+      operationId: patch_UpdateDelegationStatus
+      summary: Update Delegation Status
+      description: Handler UpdateDelegationStatus in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/emitters:
+    get:
+      tags: [emitters]
+      operationId: get_ListEmitterHealth
+      summary: List Emitter Health
+      description: Handler ListEmitterHealth in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/events:
+    get:
+      tags: [events]
+      operationId: get_StreamEvents
+      summary: Stream Events
+      description: Handler StreamEvents in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/events/work:
+    post:
+      tags: [events]
+      operationId: post_IngestWorkEvent
+      summary: Ingest Work Event
+      description: Handler IngestWorkEvent in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/fleet:
+    get:
+      tags: [fleet]
+      operationId: get_GetFleet
+      summary: Get Fleet
+      description: Handler GetFleet in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/goals:
+    get:
+      tags: [goals]
+      operationId: get_ListGoals
+      summary: List Goals
+      description: Handler ListGoals in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+    post:
+      tags: [goals]
+      operationId: post_CreateGoal
+      summary: Create Goal
+      description: Handler CreateGoal in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/goals/{id}:
+    delete:
+      tags: [goals]
+      operationId: delete_DeleteGoal
+      summary: Delete Goal
+      description: Handler DeleteGoal in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+    get:
+      tags: [goals]
+      operationId: get_GetGoal
+      summary: Get Goal
+      description: Handler GetGoal in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+    put:
+      tags: [goals]
+      operationId: put_UpdateGoal
+      summary: Update Goal
+      description: Handler UpdateGoal in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/goals/{id}/breakdown:
+    post:
+      tags: [goals]
+      operationId: post_BreakdownGoal
+      summary: Breakdown Goal
+      description: Handler BreakdownGoal in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/health:
+    get:
+      tags: [health]
+      operationId: get_DetailedHealth
+      summary: Detailed Health
+      description: Handler DetailedHealth in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/host/liveness:
+    get:
+      tags: [host]
+      operationId: get_ListHostLiveness
+      summary: List Host Liveness
+      description: Handler ListHostLiveness in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+    post:
+      tags: [host]
+      operationId: post_PostHostLiveness
+      summary: Post Host Liveness
+      description: Handler PostHostLiveness in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/incidents:
+    get:
+      tags: [incidents]
+      operationId: get_ListIncidents
+      summary: List Incidents
+      description: Handler ListIncidents in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/instances:
+    get:
+      tags: [instances]
+      operationId: get_ListInstances
+      summary: List Instances
+      description: Handler ListInstances in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+    post:
+      tags: [instances]
+      operationId: post_CreateInstance
+      summary: Create Instance
+      description: Handler CreateInstance in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/instances/{id}:
+    get:
+      tags: [instances]
+      operationId: get_GetInstance
+      summary: Get Instance
+      description: Handler GetInstance in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/instances/{id}/probe:
+    post:
+      tags: [instances]
+      operationId: post_ProbeInstance
+      summary: Probe Instance
+      description: Handler ProbeInstance in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/ledger/findings:
+    get:
+      tags: [ledger]
+      operationId: get_ListFindings
+      summary: List Findings
+      description: Handler ListFindings in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+    post:
+      tags: [ledger]
+      operationId: post_PostFinding
+      summary: Post Finding
+      description: Handler PostFinding in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/ledger/recurrence:
+    get:
+      tags: [ledger]
+      operationId: get_GetRecurringFindings
+      summary: Get Recurring Findings
+      description: Handler GetRecurringFindings in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/ledger/runs:
+    get:
+      tags: [ledger]
+      operationId: get_ListRunLog
+      summary: List Run Log
+      description: Handler ListRunLog in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+    post:
+      tags: [ledger]
+      operationId: post_PostRunLog
+      summary: Post Run Log
+      description: Handler PostRunLog in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/memory/file:
+    get:
+      tags: [memory]
+      operationId: get_GetFile
+      summary: Get File
+      description: Handler GetFile in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+    post:
+      tags: [memory]
+      operationId: post_WriteFile
+      summary: Write File
+      description: Handler WriteFile in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/memory/search:
+    get:
+      tags: [memory]
+      operationId: get_Search
+      summary: Search
+      description: Handler Search in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/memory/synthesize:
+    post:
+      tags: [memory]
+      operationId: post_Synthesize
+      summary: Synthesize
+      description: Handler Synthesize in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/memory/tree:
+    get:
+      tags: [memory]
+      operationId: get_Tree
+      summary: Tree
+      description: Handler Tree in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/pipeline:
+    get:
+      tags: [pipeline]
+      operationId: get_ListPipelineItems
+      summary: List Pipeline Items
+      description: Handler ListPipelineItems in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+    post:
+      tags: [pipeline]
+      operationId: post_CreatePipelineItem
+      summary: Create Pipeline Item
+      description: Handler CreatePipelineItem in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/pipeline/{id}:
+    delete:
+      tags: [pipeline]
+      operationId: delete_DeletePipelineItem
+      summary: Delete Pipeline Item
+      description: Handler DeletePipelineItem in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+    get:
+      tags: [pipeline]
+      operationId: get_GetPipelineItem
+      summary: Get Pipeline Item
+      description: Handler GetPipelineItem in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+    put:
+      tags: [pipeline]
+      operationId: put_UpdatePipelineItem
+      summary: Update Pipeline Item
+      description: Handler UpdatePipelineItem in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/pipeline/{id}/advance:
+    post:
+      tags: [pipeline]
+      operationId: post_AdvancePipelineItem
+      summary: Advance Pipeline Item
+      description: Handler AdvancePipelineItem in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/pipeline/{id}/generate:
+    post:
+      tags: [pipeline]
+      operationId: post_GeneratePipelineContent
+      summary: Generate Pipeline Content
+      description: Handler GeneratePipelineContent in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/skills:
+    get:
+      tags: [skills]
+      operationId: get_ListSkills
+      summary: List Skills
+      description: Handler ListSkills in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+    post:
+      tags: [skills]
+      operationId: post_CreateSkill
+      summary: Create Skill
+      description: Handler CreateSkill in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/skills/sync:
+    post:
+      tags: [skills]
+      operationId: post_SyncSkillsFromHermes
+      summary: Sync Skills From Hermes
+      description: Handler SyncSkillsFromHermes in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/skills/{id}:
+    delete:
+      tags: [skills]
+      operationId: delete_DeleteSkill
+      summary: Delete Skill
+      description: Handler DeleteSkill in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+    get:
+      tags: [skills]
+      operationId: get_GetSkill
+      summary: Get Skill
+      description: Handler GetSkill in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+    patch:
+      tags: [skills]
+      operationId: patch_UpdateSkill
+      summary: Update Skill
+      description: Handler UpdateSkill in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/slash-command:
+    post:
+      tags: [slash-command]
+      operationId: post_HandleSlashCommand
+      summary: Handle Slash Command
+      description: Handler HandleSlashCommand in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/spend:
+    get:
+      tags: [spend]
+      operationId: get_GetSpend
+      summary: Get Spend
+      description: Handler GetSpend in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/studio/generate:
+    post:
+      tags: [studio]
+      operationId: post_Generate
+      summary: Generate
+      description: Handler Generate in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/studio/generations:
+    get:
+      tags: [studio]
+      operationId: get_ListGenerations
+      summary: List Generations
+      description: Handler ListGenerations in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/studio/providers:
+    get:
+      tags: [studio]
+      operationId: get_ListProviders
+      summary: List Providers
+      description: Handler ListProviders in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/tasks:
+    get:
+      tags: [tasks]
+      operationId: get_ListTasks
+      summary: List Tasks
+      description: Handler ListTasks in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+    post:
+      tags: [tasks]
+      operationId: post_CreateTask
+      summary: Create Task
+      description: Handler CreateTask in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/tasks/reorder:
+    post:
+      tags: [tasks]
+      operationId: post_ReorderTasks
+      summary: Reorder Tasks
+      description: Handler ReorderTasks in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/tasks/{id}:
+    delete:
+      tags: [tasks]
+      operationId: delete_DeleteTask
+      summary: Delete Task
+      description: Handler DeleteTask in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+    get:
+      tags: [tasks]
+      operationId: get_GetTask
+      summary: Get Task
+      description: Handler GetTask in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+    put:
+      tags: [tasks]
+      operationId: put_UpdateTask
+      summary: Update Task
+      description: Handler UpdateTask in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/tasks/{id}/breakdown:
+    post:
+      tags: [tasks]
+      operationId: post_BreakdownTask
+      summary: Breakdown Task
+      description: Handler BreakdownTask in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/tasks/{id}/notes:
+    get:
+      tags: [tasks]
+      operationId: get_GetTaskNotes
+      summary: Get Task Notes
+      description: Handler GetTaskNotes in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/timeline:
+    get:
+      tags: [timeline]
+      operationId: get_GetTimeline
+      summary: Get Timeline
+      description: Handler GetTimeline in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/trackers:
+    get:
+      tags: [trackers]
+      operationId: get_ListTrackerItems
+      summary: List Tracker Items
+      description: Handler ListTrackerItems in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/trackers/sync/{projectID}:
+    get:
+      tags: [trackers]
+      operationId: get_SyncTrackerItems
+      summary: Sync Tracker Items
+      description: Handler SyncTrackerItems in internal/api.
+      parameters:
+        - name: projectID
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/vision/analyze:
+    post:
+      tags: [vision]
+      operationId: post_AnalyzeVision
+      summary: Analyze Vision
+      description: Handler AnalyzeVision in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/voice/synthesize:
+    post:
+      tags: [voice]
+      operationId: post_Synthesize
+      summary: Synthesize
+      description: Handler Synthesize in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/voice/transcribe:
+    post:
+      tags: [voice]
+      operationId: post_Transcribe
+      summary: Transcribe
+      description: Handler Transcribe in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/work-units:
+    get:
+      tags: [work-units]
+      operationId: get_ListWorkUnits
+      summary: List Work Units
+      description: Handler ListWorkUnits in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/workflows:
+    get:
+      tags: [workflows]
+      operationId: get_ListWorkflows
+      summary: List Workflows
+      description: Handler ListWorkflows in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+    post:
+      tags: [workflows]
+      operationId: post_CreateWorkflow
+      summary: Create Workflow
+      description: Handler CreateWorkflow in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/workflows/{id}:
+    delete:
+      tags: [workflows]
+      operationId: delete_DeleteWorkflow
+      summary: Delete Workflow
+      description: Handler DeleteWorkflow in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+    get:
+      tags: [workflows]
+      operationId: get_GetWorkflow
+      summary: Get Workflow
+      description: Handler GetWorkflow in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+    patch:
+      tags: [workflows]
+      operationId: patch_UpdateWorkflow
+      summary: Update Workflow
+      description: Handler UpdateWorkflow in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/workflows/{id}/run:
+    post:
+      tags: [workflows]
+      operationId: post_RunWorkflow
+      summary: Run Workflow
+      description: Handler RunWorkflow in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/worktrees:
+    get:
+      tags: [worktrees]
+      operationId: get_ListWorktrees
+      summary: List Worktrees
+      description: Handler ListWorktrees in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }

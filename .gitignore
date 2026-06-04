@@ -33,6 +33,8 @@ agent-os-web.tar.gz
 # Built binaries
 agent-os
 agent-os-server
+gen-openapi
+orchestrator
 
 # local autonomy control state (never commit)
 .autonomy-mode
