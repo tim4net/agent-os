@@ -8,17 +8,20 @@ interface StatusFooterProps {
 
 export function StatusFooter({ sseConnected, agents = [] }: StatusFooterProps) {
   const [backendStatus, setBackendStatus] = useState<'ok' | 'error' | 'checking'>('checking')
-  const [lastCheckAgo, setLastCheckAgo] = useState('')
+  const [lastCheck, setLastCheck] = useState<number>(0)
+  // A 1s clock so the "Xs ago" label updates live without reading Date.now()
+  // in the render body (which the react-hooks/purity rule forbids).
+  const [now, setNow] = useState<number>(() => Date.now())
 
   useEffect(() => {
     async function check() {
       try {
         const ok = await checkHealth()
         setBackendStatus(ok ? 'ok' : 'error')
-        setLastCheckAgo('0s ago')
+        setLastCheck(Date.now())
       } catch {
         setBackendStatus('error')
-        setLastCheckAgo('0s ago')
+        setLastCheck(Date.now())
       }
     }
 
@@ -28,8 +31,17 @@ export function StatusFooter({ sseConnected, agents = [] }: StatusFooterProps) {
     return () => clearInterval(interval)
   }, [])
 
+  useEffect(() => {
+    const tick = setInterval(() => setNow(Date.now()), 1_000)
+    return () => clearInterval(tick)
+  }, [])
+
   const backendOk = backendStatus === 'ok'
   const backendChecking = backendStatus === 'checking'
+
+  // Elapsed since the last health check, derived from the ticking clock (no
+  // Date.now() in render — `now` is the impure read, captured in state).
+  const ago = lastCheck > 0 ? `${Math.max(0, Math.round((now - lastCheck) / 1000))}s ago` : ''
 
   // Backend now handles visibility filtering (agents.visible column)
   const { onlineAgents, totalAgents } = useMemo(() => {
@@ -54,7 +66,7 @@ export function StatusFooter({ sseConnected, agents = [] }: StatusFooterProps) {
           }`}
         />
         <span className="text-[10px] text-[var(--color-text-muted)]/60 leading-none">
-          API{lastCheckAgo && <span className="ml-0.5 opacity-50"> {lastCheckAgo}</span>}
+          API{ago && <span className="ml-0.5 opacity-50"> {ago}</span>}
         </span>
       </div>
 

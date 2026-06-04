@@ -535,7 +535,12 @@ export function ChatPanel({ agent, activeConversationId, onConversationLoaded, o
         )}
 
         <div className="floating-input flex items-end gap-2 p-2 max-w-3xl mx-auto">
-          <VoiceButton onTranscribed={(text) => setInput((prev) => prev ? prev + ' ' + text : text)} />
+          <VoiceButton onTranscribed={(text) => {
+            setInput((prev) => prev ? prev + ' ' + text : text)
+            // Allow the slash menu to re-evaluate for programmatic (voice) input,
+            // matching the textarea onChange and the old input-derived behavior.
+            setSlashMenuDismissed(false)
+          }} />
           <textarea
             ref={inputRef}
             value={input}
