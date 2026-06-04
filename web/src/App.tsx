@@ -130,11 +130,9 @@ function App() {
       }
     }
 
-    const onlineAgent = agents.find((a) => a.status === 'online')
-    if (onlineAgent) {
-      setSelectedAgent(onlineAgent)
-      setActiveTab('Chat')
-    }
+    // Fresh load (no active conversation to restore) lands on Mission Control —
+    // the SPOG home. We intentionally do NOT auto-select an online agent here,
+    // which would bury the dashboard behind a chat view on every page load.
   }, [agents])
 
   // Persist active conversation to sessionStorage on change
