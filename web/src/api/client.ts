@@ -993,3 +993,262 @@ export function executeSlashCommand(
     body: JSON.stringify({ command, agent_id: agentId, conversation_id: conversationId ?? '' }),
   })
 }
+
+// --- SPOG Ledger ---
+
+export interface RunLogResponse {
+  id: number
+  ts: string
+  event_type: string
+  pr_ref: string
+  wp_ref: string
+  summary?: string
+  payload?: unknown
+}
+
+export interface RunLogListResponse {
+  records: RunLogResponse[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export interface FindingResponse {
+  id: number
+  ts: string
+  pr_ref: string
+  wp_ref: string
+  gate: number
+  author_agent: string
+  model: string
+  severity: string
+  class: string
+  root_cause?: string
+  summary?: string
+}
+
+export interface FindingsListResponse {
+  records: FindingResponse[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export interface RecurringFindingsRow {
+  class: string
+  author_agent: string
+  wp_ref: string
+  count: number
+}
+
+export interface RecurringFindingsResponse {
+  records: RecurringFindingsRow[]
+}
+
+export interface PostRunLogRequest {
+  event_type: string
+  pr_ref: string
+  wp_ref: string
+  summary: string
+  payload: unknown
+}
+
+export interface PostFindingRequest {
+  pr_ref: string
+  wp_ref: string
+  gate: number
+  author_agent: string
+  model: string
+  severity: string
+  class: string
+  root_cause: string
+  summary: string
+}
+
+export function listLedgerRuns(opts: { limit?: number; offset?: number; wp_ref?: string } = {}): Promise<RunLogListResponse> {
+  const params = new URLSearchParams()
+  if (opts.limit !== undefined) params.set('limit', String(opts.limit))
+  if (opts.offset !== undefined) params.set('offset', String(opts.offset))
+  if (opts.wp_ref !== undefined) params.set('wp_ref', opts.wp_ref)
+  const qs = params.toString()
+  return request<RunLogListResponse>(`/api/ledger/runs${qs ? `?${qs}` : ''}`)
+}
+
+export function listFindings(opts: {
+  limit?: number
+  offset?: number
+  class?: string
+  severity?: string
+  wp_ref?: string
+} = {}): Promise<FindingsListResponse> {
+  const params = new URLSearchParams()
+  if (opts.limit !== undefined) params.set('limit', String(opts.limit))
+  if (opts.offset !== undefined) params.set('offset', String(opts.offset))
+  if (opts.class !== undefined) params.set('class', opts.class)
+  if (opts.severity !== undefined) params.set('severity', opts.severity)
+  if (opts.wp_ref !== undefined) params.set('wp_ref', opts.wp_ref)
+  const qs = params.toString()
+  return request<FindingsListResponse>(`/api/ledger/findings${qs ? `?${qs}` : ''}`)
+}
+
+export function getRecurringFindings(min_count?: number): Promise<RecurringFindingsResponse> {
+  const params = new URLSearchParams()
+  if (min_count !== undefined) params.set('min_count', String(min_count))
+  const qs = params.toString()
+  return request<RecurringFindingsResponse>(`/api/ledger/recurrence${qs ? `?${qs}` : ''}`)
+}
+
+export function postRunLog(payload: PostRunLogRequest): Promise<RunLogResponse> {
+  return request<RunLogResponse>('/api/ledger/runs', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function postFinding(payload: PostFindingRequest): Promise<FindingResponse> {
+  return request<FindingResponse>('/api/ledger/findings', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+// --- SPOG Fleet ---
+
+export interface SessionStatus {
+  harness: string
+  session_id: string
+  host: string
+  pid?: number
+  liveness_mode: string
+  tenant: string
+  status: string
+  last_event_at: string
+  last_event_kind: string
+  last_event_status?: string
+}
+
+export interface FleetResponse {
+  sessions: SessionStatus[]
+  total: number
+}
+
+export function getFleet(tenant: string): Promise<FleetResponse> {
+  const params = new URLSearchParams()
+  params.set('tenant', tenant)
+  return request<FleetResponse>(`/api/fleet?${params.toString()}`)
+}
+
+// --- SPOG Incidents ---
+
+export interface Incident {
+  type: string
+  harness: string
+  session_id: string
+  host: string
+  title: string
+  status: string
+  tenant: string
+  project_slug: string
+  external_ref: string
+  branch: string
+  received_at: string
+}
+
+export interface IncidentsResponse {
+  incidents: Incident[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export function listIncidents(tenant: string, opts: {
+  limit?: number
+  offset?: number
+  stale_window?: string
+} = {}): Promise<IncidentsResponse> {
+  const params = new URLSearchParams()
+  params.set('tenant', tenant)
+  if (opts.limit !== undefined) params.set('limit', String(opts.limit))
+  if (opts.offset !== undefined) params.set('offset', String(opts.offset))
+  if (opts.stale_window !== undefined) params.set('stale_window', opts.stale_window)
+  return request<IncidentsResponse>(`/api/incidents?${params.toString()}`)
+}
+
+// --- SPOG Spend ---
+
+export interface SpendRow {
+  dimension_key: string
+  total_cost_usd: number
+  event_count: number
+  total_turns: number
+}
+
+export interface SpendResponse {
+  rows: SpendRow[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export function getSpend(opts: {
+  group_by?: string
+  tenant?: string
+  external_ref?: string
+  limit?: number
+  offset?: number
+} = {}): Promise<SpendResponse> {
+  const params = new URLSearchParams()
+  if (opts.group_by !== undefined) params.set('group_by', opts.group_by)
+  if (opts.tenant !== undefined) params.set('tenant', opts.tenant)
+  if (opts.external_ref !== undefined) params.set('external_ref', opts.external_ref)
+  if (opts.limit !== undefined) params.set('limit', String(opts.limit))
+  if (opts.offset !== undefined) params.set('offset', String(opts.offset))
+  const qs = params.toString()
+  return request<SpendResponse>(`/api/spend${qs ? `?${qs}` : ''}`)
+}
+
+// --- SPOG Control ---
+
+export interface ControlState {
+  mode: 'continuous' | 'tick' | 'stopped'
+  cadence_seconds: number
+  queue_counts: Record<string, number>
+  updated_at: string
+}
+
+export interface WorkUnitResponse {
+  id: number
+  wp_ref: string
+  status: string
+  payload: unknown
+  claimed_at?: string
+  completed_at?: string
+  error?: string
+  created_at: string
+}
+export interface UnitListResponse {
+  units: WorkUnitResponse[]
+  count: number
+  limit: number
+  offset: number
+}
+
+export function getControlState(): Promise<ControlState> {
+  return request<ControlState>('/api/control/state')
+}
+
+export function setControlMode(mode: ControlState['mode'], cadenceSeconds?: number): Promise<ControlState> {
+  return request<ControlState>('/api/control/mode', {
+    method: 'POST',
+    body: JSON.stringify({ mode, cadence_seconds: cadenceSeconds }),
+  })
+}
+
+export function listControlUnits(status?: string, limit?: number, offset?: number): Promise<UnitListResponse> {
+  const params = new URLSearchParams()
+  if (status !== undefined) params.set('status', status)
+  if (limit !== undefined) params.set('limit', String(limit))
+  if (offset !== undefined) params.set('offset', String(offset))
+  const qs = params.toString()
+  return request<UnitListResponse>(`/api/control/units${qs ? `?${qs}` : ''}`)
+}
