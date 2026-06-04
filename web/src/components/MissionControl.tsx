@@ -16,6 +16,7 @@ import type {
   ControlState
 } from '../api/client'
 import AgentDetailDrawer from './AgentDetailDrawer'
+import PulseTicker from './PulseTicker'
 
 /* ─── Helpers ─── */
 export function timeAgo(iso: string): string {
@@ -1046,6 +1047,8 @@ export default function MissionControl({ agents }: { agents: Agent[] }) {
           })}
         </div>
       </div>
+
+      <PulseTicker sessions={sessions} incidents={incidents} loading={fleetLoading || incidentsLoading} />
 
       {/* STAT CARDS ROW */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
