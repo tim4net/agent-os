@@ -1,0 +1,6 @@
+# Local dev virtualenv for running emitter tests (httpx, pytest, pytest-asyncio).
+# Not part of the shipped package — recreate with: python -m venv .venv
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/

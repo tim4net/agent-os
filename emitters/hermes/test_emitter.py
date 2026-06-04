@@ -342,6 +342,62 @@ class TestHermesEmitter:
         await em.close()
 
     @pytest.mark.asyncio
+    async def test_end_with_telemetry_writes_payload_telemetry(self) -> None:
+        """Path B: emitter self-reports token usage at payload.telemetry (contract §5)."""
+        em = self._make_emitter()
+        await em.end(
+            "done",
+            telemetry={
+                "model": "claude-opus-4-8",
+                "context_window": 200000,
+                "tokens_used": 142378,
+                "turns": 7,
+            },
+        )
+
+        posted = em._test_posted[0]  # type: ignore[attr-defined]
+        tele = posted["payload"]["telemetry"]
+        assert tele["model"] == "claude-opus-4-8"
+        assert tele["context_window"] == 200000
+        assert tele["tokens_used"] == 142378
+        assert tele["turns"] == 7
+        await em.close()
+
+    @pytest.mark.asyncio
+    async def test_end_without_telemetry_omits_it(self) -> None:
+        """No telemetry arg -> no telemetry sub-block (never fabricate — contract §5/F10)."""
+        em = self._make_emitter()
+        await em.end("done")
+
+        posted = em._test_posted[0]  # type: ignore[attr-defined]
+        # payload may be absent entirely, or present without a telemetry key
+        assert "telemetry" not in posted.get("payload", {})
+        await em.close()
+
+    @pytest.mark.asyncio
+    async def test_end_telemetry_drops_none_fields(self) -> None:
+        """Only provided fields are sent; None values are stripped (never fabricated)."""
+        em = self._make_emitter()
+        await em.end(
+            "done",
+            telemetry={"tokens_used": 5000, "model": None, "turns": None},
+        )
+
+        tele = em._test_posted[0]["payload"]["telemetry"]  # type: ignore[attr-defined]
+        assert tele == {"tokens_used": 5000}
+        await em.close()
+
+    @pytest.mark.asyncio
+    async def test_end_empty_telemetry_omits_block(self) -> None:
+        """An all-None / empty telemetry dict produces no telemetry sub-block."""
+        em = self._make_emitter()
+        await em.end("done", telemetry={"model": None, "tokens_used": None})
+
+        posted = em._test_posted[0]  # type: ignore[attr-defined]
+        assert "telemetry" not in posted.get("payload", {})
+        await em.close()
+
+    @pytest.mark.asyncio
     async def test_end_with_cancelled(self) -> None:
         em = self._make_emitter()
         await em.end("cancelled")
@@ -398,6 +454,46 @@ class TestHermesEmitter:
         assert "session.end" in kinds
         end_event = [p for p in em._test_posted if p["kind"] == "session.end"][0]  # type: ignore[attr-defined]
         assert end_event["status"] == "done"
+        await em.close()
+
+    @pytest.mark.asyncio
+    async def test_supervised_record_reports_telemetry_on_end(self) -> None:
+        """Path B: s.record(...) during the block self-reports usage on session.end."""
+        em = self._make_emitter()
+
+        async with em.supervised(title="telemetry test") as s:
+            s.record(tokens_used=88000, model="claude-opus-4-8")
+            s.record(turns=12)  # later call merges, latest-wins per key
+
+        end_event = [p for p in em._test_posted if p["kind"] == "session.end"][0]  # type: ignore[attr-defined]
+        tele = end_event["payload"]["telemetry"]
+        assert tele["tokens_used"] == 88000
+        assert tele["model"] == "claude-opus-4-8"
+        assert tele["turns"] == 12
+        await em.close()
+
+    @pytest.mark.asyncio
+    async def test_supervised_record_ignores_none(self) -> None:
+        """record() ignores None values so a metric is never fabricated."""
+        em = self._make_emitter()
+
+        async with em.supervised(title="none test") as s:
+            s.record(tokens_used=4242, model=None)
+
+        end_event = [p for p in em._test_posted if p["kind"] == "session.end"][0]  # type: ignore[attr-defined]
+        assert end_event["payload"]["telemetry"] == {"tokens_used": 4242}
+        await em.close()
+
+    @pytest.mark.asyncio
+    async def test_supervised_no_record_omits_telemetry(self) -> None:
+        """No record() call -> no telemetry sub-block on end."""
+        em = self._make_emitter()
+
+        async with em.supervised(title="bare test"):
+            pass
+
+        end_event = [p for p in em._test_posted if p["kind"] == "session.end"][0]  # type: ignore[attr-defined]
+        assert "telemetry" not in end_event.get("payload", {})
         await em.close()
 
     @pytest.mark.asyncio
