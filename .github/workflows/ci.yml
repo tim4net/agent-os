@@ -67,6 +67,20 @@ jobs:
       - name: go vet ./...
         run: go vet ./...
 
+      # ── OpenAPI spec freshness ───────────────────────────────────────
+      # docs/openapi.yaml is generated from the live chi router by
+      # cmd/gen-openapi. Regenerate and diff against the committed file so the
+      # spec can never silently drift from the code. No DB needed — the
+      # generator builds the router with nil deps and only walks it.
+      - name: OpenAPI spec is up to date
+        run: |
+          go run ./cmd/gen-openapi > /tmp/openapi.generated.yaml
+          if ! diff -u docs/openapi.yaml /tmp/openapi.generated.yaml; then
+            echo "::error::docs/openapi.yaml is stale. Regenerate with: go run ./cmd/gen-openapi > docs/openapi.yaml"
+            exit 1
+          fi
+          echo "docs/openapi.yaml is in sync with the router."
+
       # ── Postgres 17 via podman ───────────────────────────────────────
       - name: Start Postgres 17 (podman)
         run: |
