@@ -15,9 +15,10 @@ import type {
   Agent,
   ControlState
 } from '../api/client'
+import AgentDetailDrawer from './AgentDetailDrawer'
 
 /* ─── Helpers ─── */
-function timeAgo(iso: string): string {
+export function timeAgo(iso: string): string {
   if (!iso) return 'never'
   const diff = Date.now() - new Date(iso).getTime()
   const mins = Math.floor(diff / 60000)
@@ -28,14 +29,14 @@ function timeAgo(iso: string): string {
   return `${Math.floor(hrs / 24)}d ago`
 }
 
-function formatCurrency(val: number) {
+export function formatCurrency(val: number) {
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
     currency: 'USD',
   }).format(val);
 }
 
-function formatTokens(tokens: number): string {
+export function formatTokens(tokens: number): string {
   if (tokens >= 1_000_000) {
     return `${(tokens / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
   }
@@ -45,7 +46,7 @@ function formatTokens(tokens: number): string {
   return tokens.toString();
 }
 
-function getIncidentStatusColor(status: string) {
+export function getIncidentStatusColor(status: string) {
   switch (status.toLowerCase()) {
     case 'failed':
     case 'down':
@@ -73,7 +74,7 @@ function getIncidentSideBarColor(status: string) {
   }
 }
 
-function getSessionStatusStyles(status: string) {
+export function getSessionStatusStyles(status: string) {
   switch (status.toLowerCase()) {
     case 'running':
       return {
@@ -102,7 +103,7 @@ function getSessionStatusStyles(status: string) {
   }
 }
 
-function getTenantStyles(tenant: string) {
+export function getTenantStyles(tenant: string) {
   const isPersonal = tenant === 'personal';
   const isDayjob = tenant === 'dayjob';
 
@@ -141,7 +142,7 @@ function getTenantStyles(tenant: string) {
   };
 }
 
-function deriveTenant(key: string, agents: Agent[], sessions: SessionStatus[], incidents: Incident[]): string | undefined {
+export function deriveTenant(key: string, agents: Agent[], sessions: SessionStatus[], incidents: Incident[]): string | undefined {
   const lowerKey = key.toLowerCase();
   
   // Search sessions
@@ -804,7 +805,8 @@ function SpendPanel({
   onRetry,
   agents,
   sessions,
-  incidents
+  incidents,
+  onSelectAgentDetail
 }: {
   rows: SpendRow[]
   loading: boolean
@@ -813,6 +815,7 @@ function SpendPanel({
   agents: Agent[]
   sessions: SessionStatus[]
   incidents: Incident[]
+  onSelectAgentDetail?: (row: SpendRow) => void
 }) {
   const maxTokens = Math.max(...rows.map(r => r.total_tokens), 1);
 
@@ -870,7 +873,12 @@ function SpendPanel({
             }
 
             return (
-              <div key={`${row.dimension_key}-${idx}`} className="space-y-1.5">
+              <button
+                key={`${row.dimension_key}-${idx}`}
+                type="button"
+                onClick={() => onSelectAgentDetail?.(row)}
+                className="w-full text-left space-y-1.5 p-2 -mx-2 rounded-lg hover:bg-white/5 transition-colors focus:outline-none focus:ring-1 focus:ring-[var(--accent-blue)]/50 cursor-pointer block"
+              >
                 <div className="flex justify-between items-center text-xs">
                   <div className="flex items-center gap-2 min-w-0">
                     <span className="font-semibold text-[var(--text-primary)] truncate">
@@ -899,7 +907,7 @@ function SpendPanel({
                   <span>Tenant: <span className={derivedTenant ? tenantStyles.text : 'text-[var(--text-muted)]'}>{derivedTenant ? tenantStyles.label : 'unclassified'}</span></span>
                   <span>{pct.toFixed(0)}% of max</span>
                 </div>
-              </div>
+              </button>
             )
           })}
         </div>
@@ -972,6 +980,7 @@ function RecurringFindingsPanel({
 /* ─── Main Component ─── */
 export default function MissionControl({ agents }: { agents: Agent[] }) {
   const [tenantFilter, setTenantFilter] = useState<'all' | 'personal' | 'dayjob'>('all')
+  const [detailRow, setDetailRow] = useState<SpendRow | null>(null)
 
   const { incidents, total: incidentsCount, loading: incidentsLoading, error: incidentsError, refresh: refreshIncidents } = useIncidents(tenantFilter)
   const { sessions, loading: fleetLoading, error: fleetError, refresh: refreshFleet } = useFleet(tenantFilter)
@@ -1110,6 +1119,7 @@ export default function MissionControl({ agents }: { agents: Agent[] }) {
             agents={agents}
             sessions={sessions}
             incidents={incidents}
+            onSelectAgentDetail={setDetailRow}
           />
 
           <RecurringFindingsPanel 
@@ -1120,6 +1130,14 @@ export default function MissionControl({ agents }: { agents: Agent[] }) {
           />
         </div>
       </div>
+
+      <AgentDetailDrawer
+        row={detailRow}
+        onClose={() => setDetailRow(null)}
+        agents={agents}
+        sessions={sessions}
+        incidents={incidents}
+      />
     </div>
   )
 }
