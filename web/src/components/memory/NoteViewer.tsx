@@ -19,6 +19,7 @@ export function NoteViewer({ filePath }: NoteViewerProps) {
 
   useEffect(() => {
     if (!filePath) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing viewer state to external file selection; not render-derived content
       setContent(null)
       setEditing(false)
       return

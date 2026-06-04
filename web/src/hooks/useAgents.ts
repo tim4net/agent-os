@@ -21,6 +21,7 @@ export function useAgents() {
   }, [])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- async data fetch; setState lands after await
     refresh()
   }, [refresh])
 
@@ -28,6 +29,7 @@ export function useAgents() {
     if (!lastEvent) return
     if (lastEvent.type === 'agent_status_changed') {
       const data = lastEvent.data as { agent_id: string; status: string; last_seen?: string }
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing state from external SSE event, not a render-derived value
       setAgents((prev) =>
         prev.map((a) =>
           a.id === data.agent_id

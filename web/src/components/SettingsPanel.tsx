@@ -1,4 +1,4 @@
-import { useTheme, THEME_META, type ThemeName } from '../ThemeProvider'
+import { useTheme, THEME_META, type ThemeName } from '../theme-context'
 
 export default function SettingsPanel() {
   const { theme, setTheme } = useTheme()

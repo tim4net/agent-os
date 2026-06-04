@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, waitFor, act } from '@testing-library/react'
-import { FleetRadar, getAngleFromSessionId } from './FleetRadar'
+import { FleetRadar } from './FleetRadar'
+import { getAngleFromSessionId } from './fleet-radar-helpers'
 import { getFleet } from '../../api/client'
 import type { FleetResponse } from '../../api/client'
 

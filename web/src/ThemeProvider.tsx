@@ -1,20 +1,5 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
-
-export type ThemeName = 'default' | 'noir' | 'aurora' | 'daylight'
-
-interface ThemeContextValue {
-  theme: ThemeName
-  setTheme: (t: ThemeName) => void
-}
-
-const ThemeContext = createContext<ThemeContextValue>({
-  theme: 'default',
-  setTheme: () => {},
-})
-
-export function useTheme() {
-  return useContext(ThemeContext)
-}
+import { useEffect, useState, type ReactNode } from 'react'
+import { ThemeContext, type ThemeName } from './theme-context'
 
 const STORAGE_KEY = 'agent-os-theme'
 
@@ -68,26 +53,3 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     </ThemeContext.Provider>
   )
 }
-
-export const THEME_META: { name: ThemeName; label: string; description: string }[] = [
-  {
-    name: 'default',
-    label: 'Gemini Dark',
-    description: 'Blue/purple glass morphism — the default Agent OS look',
-  },
-  {
-    name: 'noir',
-    label: 'Noir',
-    description: 'Ultra-minimal black & green — inspired by Linear and Raycast',
-  },
-  {
-    name: 'aurora',
-    label: 'Aurora',
-    description: 'Deep purple gradients with sunset accents — luxury AI aesthetic',
-  },
-  {
-    name: 'daylight',
-    label: 'Daylight',
-    description: 'Warm light theme with amber accents — paper and ink feel',
-  },
-]

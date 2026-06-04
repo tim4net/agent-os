@@ -246,6 +246,7 @@ export function TimelineView({ onNavigate }: { onNavigate?: (tab: string, data?:
   }, [])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- async data fetch; setState lands after await
     loadEvents(0)
   }, [loadEvents])
 

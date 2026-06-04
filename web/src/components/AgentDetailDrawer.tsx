@@ -9,7 +9,7 @@ import {
   getSessionStatusStyles,
   getTenantStyles,
   deriveTenant,
-} from './MissionControl'
+} from './mission-control-helpers'
 
 interface AgentDetailDrawerProps {
   row: SpendRow | null

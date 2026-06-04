@@ -25,6 +25,7 @@ export function ModeControls({ state, onModeChanged }: ModeControlsProps) {
   // F4: re-sync local input when the polled state cadence changes
   // (e.g. another operator changed it, or a refetch returns the updated value).
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing editable cadence input from external polled control state, not a render-derived value
     setCadenceInput(String(state.cadence_seconds))
   }, [state.cadence_seconds])
 

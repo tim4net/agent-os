@@ -62,8 +62,7 @@ export function ChatPanel({ agent, activeConversationId, onConversationLoaded, o
   const [conversationId, setConversationId] = useState<string | null>(activeConversationId)
   const [exporting, setExporting] = useState(false)
   const [loadingHistory, setLoadingHistory] = useState(false)
-  const [showSlashMenu, setShowSlashMenu] = useState(false)
-  const [slashFilter, setSlashFilter] = useState('')
+  const [slashMenuDismissed, setSlashMenuDismissed] = useState(false)
   const [slashCommands, setSlashCommands] = useState<AgentCommand[]>([])
   const [contextSources, setContextSources] = useState<string[]>([])
   const [activeTools, setActiveTools] = useState<string[]>([])
@@ -72,6 +71,10 @@ export function ChatPanel({ agent, activeConversationId, onConversationLoaded, o
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const slashMenuRef = useRef<HTMLDivElement>(null)
   const abortRef = useRef<AbortController | null>(null)
+
+  const trimmedInput = input.trimStart()
+  const slashFilter = trimmedInput.startsWith('/') ? trimmedInput.split(' ')[0].toLowerCase() : ''
+  const showSlashMenu = slashFilter !== '' && !slashMenuDismissed
 
   // Load models and slash commands for the agent
   useEffect(() => {
@@ -90,6 +93,7 @@ export function ChatPanel({ agent, activeConversationId, onConversationLoaded, o
   // Load conversation when activeConversationId changes
   useEffect(() => {
     if (activeConversationId && activeConversationId !== conversationId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing local conversation id from external activeConversationId prop before async history load
       setConversationId(activeConversationId)
       setLoadingHistory(true)
       getMessages(activeConversationId)
@@ -121,7 +125,7 @@ export function ChatPanel({ agent, activeConversationId, onConversationLoaded, o
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
       if (slashMenuRef.current && !slashMenuRef.current.contains(e.target as Node)) {
-        setShowSlashMenu(false)
+        setSlashMenuDismissed(true)
       }
     }
     if (showSlashMenu) {
@@ -130,18 +134,6 @@ export function ChatPanel({ agent, activeConversationId, onConversationLoaded, o
     }
   }, [showSlashMenu])
 
-  // Detect slash commands in input
-  useEffect(() => {
-    const trimmed = input.trimStart()
-    if (trimmed.startsWith('/')) {
-      const parts = trimmed.split(' ')
-      setSlashFilter(parts[0].toLowerCase())
-      setShowSlashMenu(true)
-    } else {
-      setShowSlashMenu(false)
-    }
-  }, [input])
-
   const filteredCommands = slashCommands.filter((c) =>
     c.command.startsWith(slashFilter)
   )
@@ -149,7 +141,7 @@ export function ChatPanel({ agent, activeConversationId, onConversationLoaded, o
   async function handleSlashCommand(command: string) {
     setStreaming(true)
     setInput('')
-    setShowSlashMenu(false)
+    setSlashMenuDismissed(true)
     try {
       const result = await executeSlashCommand(command, agent.id, conversationId ?? undefined)
       showToast(result.message, 'success')
@@ -232,7 +224,7 @@ export function ChatPanel({ agent, activeConversationId, onConversationLoaded, o
       // Queue the message for after current stream ends
       setQueuedMessage(text)
       setInput('')
-      setShowSlashMenu(false)
+      setSlashMenuDismissed(true)
       showToast('Message queued', 'info')
       return
     }
@@ -378,7 +370,7 @@ export function ChatPanel({ agent, activeConversationId, onConversationLoaded, o
         // Queue the message
         setQueuedMessage(input.trim())
         setInput('')
-        setShowSlashMenu(false)
+        setSlashMenuDismissed(true)
         showToast('Message queued', 'info')
         return
       }
@@ -547,7 +539,10 @@ export function ChatPanel({ agent, activeConversationId, onConversationLoaded, o
           <textarea
             ref={inputRef}
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e) => {
+              setInput(e.target.value)
+              setSlashMenuDismissed(false)
+            }}
             onKeyDown={handleKeyDown}
             placeholder={streaming ? 'Type to queue…' : 'Message...'}
             aria-label="Chat message"

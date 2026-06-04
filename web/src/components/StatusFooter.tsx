@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { checkHealth } from '../api/client'
 
 interface StatusFooterProps {
@@ -8,17 +8,17 @@ interface StatusFooterProps {
 
 export function StatusFooter({ sseConnected, agents = [] }: StatusFooterProps) {
   const [backendStatus, setBackendStatus] = useState<'ok' | 'error' | 'checking'>('checking')
-  const [lastCheck, setLastCheck] = useState<number>(0)
+  const [lastCheckAgo, setLastCheckAgo] = useState('')
 
   useEffect(() => {
     async function check() {
       try {
         const ok = await checkHealth()
         setBackendStatus(ok ? 'ok' : 'error')
-        setLastCheck(Date.now())
+        setLastCheckAgo('0s ago')
       } catch {
         setBackendStatus('error')
-        setLastCheck(Date.now())
+        setLastCheckAgo('0s ago')
       }
     }
 
@@ -31,11 +31,14 @@ export function StatusFooter({ sseConnected, agents = [] }: StatusFooterProps) {
   const backendOk = backendStatus === 'ok'
   const backendChecking = backendStatus === 'checking'
 
-  const ago = lastCheck > 0 ? `${Math.round((Date.now() - lastCheck) / 1000)}s ago` : ''
   // Backend now handles visibility filtering (agents.visible column)
-  const userAgents = agents.filter(a => a.status)
-  const onlineAgents = userAgents.filter(a => a.status === 'online').length
-  const totalAgents = userAgents.length
+  const { onlineAgents, totalAgents } = useMemo(() => {
+    const userAgents = agents.filter(a => a.status)
+    return {
+      onlineAgents: userAgents.filter(a => a.status === 'online').length,
+      totalAgents: userAgents.length,
+    }
+  }, [agents])
 
   return (
     <footer className="flex items-center gap-4 px-5 py-1 flex-shrink-0 bg-[var(--bg-base)]">
@@ -51,7 +54,7 @@ export function StatusFooter({ sseConnected, agents = [] }: StatusFooterProps) {
           }`}
         />
         <span className="text-[10px] text-[var(--color-text-muted)]/60 leading-none">
-          API{ago && <span className="ml-0.5 opacity-50"> {ago}</span>}
+          API{lastCheckAgo && <span className="ml-0.5 opacity-50"> {lastCheckAgo}</span>}
         </span>
       </div>
 

@@ -43,6 +43,7 @@ export function Card({ task, agents, subtaskCount = 0, onDelete, onUpdate, onBre
 
   useEffect(() => {
     if (expanded) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- async data fetch; loading state starts the task notes request and result state lands after the promise settles
       setLoadingNotes(true)
       getTaskNotes(task.id)
         .then(setNotes)

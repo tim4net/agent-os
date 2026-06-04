@@ -71,18 +71,20 @@ export function Sidebar({
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
 
   const onlineCount = agents.filter((a) => a.status === 'online').length
+  const selectedAgentId = selectedAgent?.id
 
   // Auto-expand selected agent's tree
   useEffect(() => {
-    if (selectedAgent) {
+    if (selectedAgentId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing expanded UI state to selected agent id while preserving user-expanded state
       setExpandedAgents((prev) => {
-        if (prev.has(selectedAgent.id)) return prev
+        if (prev.has(selectedAgentId)) return prev
         const next = new Set(prev)
-        next.add(selectedAgent.id)
+        next.add(selectedAgentId)
         return next
       })
     }
-  }, [selectedAgent?.id])
+  }, [selectedAgentId])
 
   // Fetch conversations
   const loadConversations = useCallback(() => {

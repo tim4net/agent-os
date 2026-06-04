@@ -137,6 +137,7 @@ function App() {
     if (savedConvId && savedAgentId) {
       const agent = agents.find((a) => a.id === savedAgentId)
       if (agent) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing restored chat selection from external sessionStorage after agents load
         setSelectedAgent(agent)
         setActiveConversationId(savedConvId)
         setActiveTab('Chat')
