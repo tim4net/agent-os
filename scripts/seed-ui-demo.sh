@@ -12,7 +12,7 @@ PG_DB="${PG_DB:-agentos}"
 PSQL=(podman exec -i "$PG_CONTAINER" psql -U "$PG_USER" -d "$PG_DB" -v ON_ERROR_STOP=1 -q)
 
 PERSONAL_KEY="${PERSONAL_KEY:-seed-personal-key}"
-DAYJOB_KEY="${DAYJOB_KEY:-seed-dayjob-key}"
+DAYJOB_KEY="${DAYJOB_KEY:-seed-work-key}"
 
 log() {
   printf '[seed-ui-demo] %s\n' "$*" >&2
@@ -56,6 +56,30 @@ post_work_event() {
 import json
 import os
 
+_turns = int(os.environ["TURNS_VALUE"] or "0")
+_harness = os.environ["HARNESS"]
+# Per-harness model + context window (Option A: provider is inferred from these by
+# the server's provider map). Realistic token density derived from turns so the
+# usage panel has meaningful, non-fabricated-looking numbers.
+_model_map = {
+    "claude":      ("claude-opus-4-8", 200000, 5200),
+    "hermes":      ("claude-sonnet-4-6", 200000, 4300),
+    "antigravity": ("gemini-3.5-flash", 1000000, 3100),
+    "codex":       ("gpt-5.5", 256000, 4800),
+    "generic":     ("gpt-5.5", 256000, 4800),
+}
+_model, _ctx, _per_turn = _model_map.get(_harness, ("unknown", 128000, 3500))
+_tokens_used = _turns * _per_turn if _turns > 0 else 0
+
+_telemetry = {
+    "model": _model,
+    "context_window": _ctx,
+    "turns": _turns,
+    "model_calls": max(1, _turns // 3),
+}
+if _tokens_used > 0:
+    _telemetry["tokens_used"] = _tokens_used
+
 body = {
     "schema": "agentos.work_event/v1",
     "event_id": os.environ["EVENT_ID"],
@@ -76,16 +100,17 @@ body = {
         "seed": "ui-demo",
         "agent": os.environ["AGENT_NAME"],
         "phase": os.environ["PHASE_VALUE"],
-        "telemetry": {
-            "turns": int(os.environ["TURNS_VALUE"] or "0"),
-            "model_calls": max(1, int(os.environ["TURNS_VALUE"] or "0") // 3),
-        },
+        "telemetry": _telemetry,
         "tags": ["demo", "spog", os.environ["PROJECT_HINT"]],
     },
 }
+# cost_usd is ONLY meaningful for metered providers. claude/hermes (anthropic) and
+# antigravity (google) are subscription here, so we deliberately omit cost_usd for
+# them — the server suppresses it anyway, and omitting keeps the seed honest.
+_subscription_harnesses = {"claude", "hermes", "antigravity"}
 if os.environ["PID_VALUE"]:
     body["pid"] = int(os.environ["PID_VALUE"])
-if os.environ["COST_USD"]:
+if os.environ["COST_USD"] and _harness not in _subscription_harnesses:
     body["cost_usd"] = float(os.environ["COST_USD"])
 # Remove empty optional string fields, but keep required status/liveness fields.
 for key in ["project_hint", "external_ref", "branch", "sha", "cwd", "title"]:
@@ -160,15 +185,19 @@ post_work_event "$PERSONAL_KEY" "11111111-1111-4111-8111-000000000107" "zbook" "
 post_work_event "$PERSONAL_KEY" "11111111-1111-4111-8111-000000000108" "zbook" "hermes" "session.end" "personal-hermes-migration-flake" "failed" "bounded" "" "agent-os" "#59" "bugfix/migration-seed" "0f1ce9d4" "/home/tim/work/agent-os/ui-spog" "Hermes migration seed flaked on CI" "1.25" "9" "Hermes" "terminal"
 post_work_event "$PERSONAL_KEY" "11111111-1111-4111-8111-000000000109" "zbook" "antigravity" "session.start" "personal-agy-stale-refactor" "running" "supervised" "42420" "agent-os" "#62" "refactor/session-liveness" "0f1ce005" "/home/tim/work/agent-os/ui-spog" "agy long-running refactor with missing heartbeat" "0.75" "5" "agy" "start"
 
-# dayjob / riftwing: Lead and Roux work-packages, plus Roux Gate-1 build failure on wp-o5.
-post_work_event "$DAYJOB_KEY" "22222222-2222-4222-8222-000000000201" "rift-ci-01" "generic" "session.start" "dayjob-lead-wp-o1-plan" "running" "bounded" "" "riftwing" "#44" "wp-o1" "d1a90001" "/srv/riftwing" "Lead decomposing wp-o1 orchestration plan" "" "9" "Lead" "start"
-post_work_event "$DAYJOB_KEY" "22222222-2222-4222-8222-000000000202" "rift-ci-01" "generic" "session.end" "dayjob-lead-wp-o1-plan" "done" "bounded" "" "riftwing" "#44" "wp-o1" "d1a9c0de" "/srv/riftwing" "Lead merged wp-o1 orchestration plan" "14.10" "41" "Lead" "terminal"
-post_work_event "$DAYJOB_KEY" "22222222-2222-4222-8222-000000000203" "rift-ci-02" "hermes" "session.start" "dayjob-roux-wp-o5-build" "running" "bounded" "" "riftwing" "#57" "wp-o5" "d1a90002" "/srv/riftwing" "Roux hardening wp-o5 build gate" "" "11" "Roux" "start"
-post_work_event "$DAYJOB_KEY" "22222222-2222-4222-8222-000000000204" "rift-ci-02" "hermes" "session.end" "dayjob-roux-wp-o5-build" "done" "bounded" "" "riftwing" "#57" "wp-o5" "d1a9beef" "/srv/riftwing" "Roux passed wp-o5 build gate" "21.40" "63" "Roux" "terminal"
-post_work_event "$DAYJOB_KEY" "22222222-2222-4222-8222-000000000205" "rift-ci-03" "hermes" "session.start" "dayjob-roux-gate1-error" "running" "bounded" "" "riftwing" "#60" "wp-o5" "d1a90003" "/srv/riftwing" "Roux Gate-1 build on branch wp-o5" "" "7" "Roux" "start"
-post_work_event "$DAYJOB_KEY" "22222222-2222-4222-8222-000000000206" "rift-ci-03" "hermes" "session.end" "dayjob-roux-gate1-error" "failed" "bounded" "" "riftwing" "#60" "wp-o5" "d1a9f00d" "/srv/riftwing" "Roux Gate-1 build error on wp-o5" "6.70" "24" "Roux" "terminal"
-post_work_event "$DAYJOB_KEY" "22222222-2222-4222-8222-000000000207" "rift-dev-01" "generic" "session.start" "dayjob-lead-live-review" "running" "supervised" "52525" "riftwing" "#63" "wp-o6" "d1a90004" "/srv/riftwing" "Lead live review of wp-o6 recurrence query" "2.40" "12" "Lead" "start"
-post_work_event "$DAYJOB_KEY" "22222222-2222-4222-8222-000000000208" "rift-dev-01" "generic" "session.heartbeat" "dayjob-lead-live-review" "running" "supervised" "52525" "riftwing" "#63" "wp-o6" "d1a90005" "/srv/riftwing" "Lead heartbeat while reviewing wp-o6" "" "13" "Lead" "heartbeat"
+# dayjob / atlas: Lead and Roux work-packages, plus Roux Gate-1 build failure on wp-o5.
+post_work_event "$DAYJOB_KEY" "22222222-2222-4222-8222-000000000201" "build-ci-01" "generic" "session.start" "work-lead-wp-o1-plan" "running" "bounded" "" "atlas" "#44" "wp-o1" "d1a90001" "/srv/atlas" "Lead decomposing wp-o1 orchestration plan" "" "9" "Lead" "start"
+post_work_event "$DAYJOB_KEY" "22222222-2222-4222-8222-000000000202" "build-ci-01" "generic" "session.end" "work-lead-wp-o1-plan" "done" "bounded" "" "atlas" "#44" "wp-o1" "d1a9c0de" "/srv/atlas" "Lead merged wp-o1 orchestration plan" "14.10" "41" "Lead" "terminal"
+post_work_event "$DAYJOB_KEY" "22222222-2222-4222-8222-000000000203" "build-ci-02" "hermes" "session.start" "work-roux-wp-o5-build" "running" "bounded" "" "atlas" "#57" "wp-o5" "d1a90002" "/srv/atlas" "Roux hardening wp-o5 build gate" "" "11" "Roux" "start"
+post_work_event "$DAYJOB_KEY" "22222222-2222-4222-8222-000000000204" "build-ci-02" "hermes" "session.end" "work-roux-wp-o5-build" "done" "bounded" "" "atlas" "#57" "wp-o5" "d1a9beef" "/srv/atlas" "Roux passed wp-o5 build gate" "21.40" "63" "Roux" "terminal"
+post_work_event "$DAYJOB_KEY" "22222222-2222-4222-8222-000000000205" "build-ci-03" "hermes" "session.start" "work-roux-gate1-error" "running" "bounded" "" "atlas" "#60" "wp-o5" "d1a90003" "/srv/atlas" "Roux Gate-1 build on branch wp-o5" "" "7" "Roux" "start"
+post_work_event "$DAYJOB_KEY" "22222222-2222-4222-8222-000000000206" "build-ci-03" "hermes" "session.end" "work-roux-gate1-error" "failed" "bounded" "" "atlas" "#60" "wp-o5" "d1a9f00d" "/srv/atlas" "Roux Gate-1 build error on wp-o5" "6.70" "24" "Roux" "terminal"
+post_work_event "$DAYJOB_KEY" "22222222-2222-4222-8222-000000000207" "build-dev-01" "generic" "session.start" "work-lead-live-review" "running" "supervised" "52525" "atlas" "#63" "wp-o6" "d1a90004" "/srv/atlas" "Lead live review of wp-o6 recurrence query" "2.40" "12" "Lead" "start"
+post_work_event "$DAYJOB_KEY" "22222222-2222-4222-8222-000000000208" "build-dev-01" "generic" "session.heartbeat" "work-lead-live-review" "running" "supervised" "52525" "atlas" "#63" "wp-o6" "d1a90005" "/srv/atlas" "Lead heartbeat while reviewing wp-o6" "" "13" "Lead" "heartbeat"
+# Codex on the OpenAI API = METERED. This is the one agent whose dollar cost is real,
+# so the usage panel can demonstrate the $-overlay path alongside subscription agents.
+post_work_event "$DAYJOB_KEY" "22222222-2222-4222-8222-000000000209" "build-ci-04" "codex" "session.start" "work-codex-api-batch" "running" "bounded" "" "atlas" "#64" "wp-o7" "d1a90006" "/srv/atlas" "Codex (metered API) batch-fixing wp-o7 lint" "" "9" "Codex" "start"
+post_work_event "$DAYJOB_KEY" "22222222-2222-4222-8222-000000000210" "build-ci-04" "codex" "session.end" "work-codex-api-batch" "done" "bounded" "" "atlas" "#64" "wp-o7" "d1a9c12e" "/srv/atlas" "Codex (metered API) finished wp-o7 lint batch" "4.80" "18" "Codex" "terminal"
 
 log "adjusting seeded event clocks for realistic recency and stale-session coverage"
 psql_exec <<'SQL'
@@ -190,7 +219,9 @@ WITH seed(event_id, age) AS (
     ('22222222-2222-4222-8222-000000000205'::uuid, interval '6 minutes 50 seconds'),
     ('22222222-2222-4222-8222-000000000206'::uuid, interval '6 minutes 5 seconds'),
     ('22222222-2222-4222-8222-000000000207'::uuid, interval '2 minutes 0 seconds'),
-    ('22222222-2222-4222-8222-000000000208'::uuid, interval '45 seconds')
+    ('22222222-2222-4222-8222-000000000208'::uuid, interval '45 seconds'),
+    ('22222222-2222-4222-8222-000000000209'::uuid, interval '4 minutes 30 seconds'),
+    ('22222222-2222-4222-8222-000000000210'::uuid, interval '3 minutes 15 seconds')
 )
 UPDATE work_events AS we
 SET received_at = NOW() - seed.age,
@@ -209,9 +240,9 @@ WHERE summary LIKE '[seed-ui-demo]%'
    OR root_cause LIKE 'seed-ui-demo:%';
 SQL
 
-post_ledger "/api/ledger/runs" '{"event_type":"merge","pr_ref":"#57","wp_ref":"wp-o5","summary":"[seed-ui-demo] Roux merged wp-o5 build gate hardening after green CI","payload":{"seed":"ui-demo","tenant":"dayjob","project":"riftwing","agent":"Roux","branch":"wp-o5"}}'
-post_ledger "/api/ledger/runs" '{"event_type":"gate","pr_ref":"#44","wp_ref":"wp-o1","summary":"[seed-ui-demo] Lead passed Gate-2 orchestration design review","payload":{"seed":"ui-demo","tenant":"dayjob","project":"riftwing","agent":"Lead","gate":2}}'
-post_ledger "/api/ledger/runs" '{"event_type":"build","pr_ref":"#60","wp_ref":"wp-o5","summary":"[seed-ui-demo] Roux hit Gate-1 build error before retrying wp-o5","payload":{"seed":"ui-demo","tenant":"dayjob","project":"riftwing","agent":"Roux","status":"failed"}}'
+post_ledger "/api/ledger/runs" '{"event_type":"merge","pr_ref":"#57","wp_ref":"wp-o5","summary":"[seed-ui-demo] Roux merged wp-o5 build gate hardening after green CI","payload":{"seed":"ui-demo","tenant":"dayjob","project":"atlas","agent":"Roux","branch":"wp-o5"}}'
+post_ledger "/api/ledger/runs" '{"event_type":"gate","pr_ref":"#44","wp_ref":"wp-o1","summary":"[seed-ui-demo] Lead passed Gate-2 orchestration design review","payload":{"seed":"ui-demo","tenant":"dayjob","project":"atlas","agent":"Lead","gate":2}}'
+post_ledger "/api/ledger/runs" '{"event_type":"build","pr_ref":"#60","wp_ref":"wp-o5","summary":"[seed-ui-demo] Roux hit Gate-1 build error before retrying wp-o5","payload":{"seed":"ui-demo","tenant":"dayjob","project":"atlas","agent":"Roux","status":"failed"}}'
 post_ledger "/api/ledger/runs" '{"event_type":"merge","pr_ref":"#58","wp_ref":"spog-polish","summary":"[seed-ui-demo] Hermes merged SPOG polish for agent-os personal dashboard","payload":{"seed":"ui-demo","tenant":"personal","project":"agent-os","agent":"Hermes"}}'
 post_ledger "/api/ledger/runs" '{"event_type":"deploy","pr_ref":"#61","wp_ref":"demo-seed","summary":"[seed-ui-demo] agy refreshed local demo data for fleet and spend panels","payload":{"seed":"ui-demo","tenant":"personal","project":"agent-os","agent":"agy"}}'
 

@@ -17,12 +17,25 @@ const spendEpsilon = 1e-6
 // feq returns true if a and b are within spendEpsilon of each other.
 func feq(a, b float64) bool { return math.Abs(a-b) < spendEpsilon }
 
-// SpendRow is a single row in the spend aggregation response.
+// SpendRow is a single row in the spend/usage aggregation response.
+//
+// Usage (TotalTokens, TotalTurns) is ALWAYS populated and is the primary metric.
+// TotalCostUsd is a nullable pointer: nil means "no dollar cost applies" — either
+// the group is a subscription (flat-rate) account or no session reported a cost.
+// A non-nil 0 would mean "metered, but free"; nil means "cost not applicable."
 type SpendRow struct {
-	DimensionKey string  `json:"dimension_key"`
-	TotalCostUsd float64 `json:"total_cost_usd"`
-	EventCount   int64   `json:"event_count"`
-	TotalTurns   int64   `json:"total_turns"`
+	DimensionKey string   `json:"dimension_key"`
+	TotalCostUsd *float64 `json:"total_cost_usd"`
+	TotalTokens  int64    `json:"total_tokens"`
+	TotalTurns   int64    `json:"total_turns"`
+	SessionCount int64    `json:"session_count"`
+	// BillingMode classifies the group: "subscription" | "metered" | "unknown".
+	// Resolved from the provider map (Option A). Only authoritative when
+	// group_by=agent (a single harness → single provider); for project/tenant/day
+	// groups it is "unknown" because a group can span multiple providers.
+	BillingMode string `json:"billing_mode"`
+	// Provider is the resolved provider for agent-grouped rows ("" otherwise).
+	Provider string `json:"provider"`
 }
 
 // SpendResponse is the API response for GET /api/spend.
@@ -98,21 +111,48 @@ func (a *API) GetSpend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Convert pgtype.Numeric to float64 for JSON.
+	// Convert pgtype.Numeric to *float64 for JSON (nil = cost not applicable).
 	result := make([]SpendRow, 0, len(rows))
 	var totalGroups int64
 	for i, row := range rows {
-		cost, err := row.TotalCostUsd.Float64Value()
-		if err != nil {
-			slog.Default().Error("spend: numeric convert failed", "error", err)
-			writeError(w, http.StatusInternalServerError, "failed to read spend total")
-			return
+		var costPtr *float64
+		if row.TotalCostUsd.Valid {
+			cost, err := row.TotalCostUsd.Float64Value()
+			if err != nil {
+				slog.Default().Error("spend: numeric convert failed", "error", err)
+				writeError(w, http.StatusInternalServerError, "failed to read spend total")
+				return
+			}
+			if cost.Valid {
+				c := cost.Float64
+				costPtr = &c
+			}
 		}
+
+		// Provider/billing mode is only authoritative for agent-grouped rows,
+		// where dimension_key == harness → a single provider (Option A). For
+		// project/tenant/day a group can span providers, so leave it unknown.
+		var provider string
+		billingMode := string(BillingUnknown)
+		if groupBy == "agent" {
+			provider = ResolveProvider(row.DimensionKey, "")
+			billingMode = string(BillingModeFor(provider))
+		}
+
+		// For subscription/unknown groups, a dollar figure is not a real bill —
+		// suppress it so the UI never presents fabricated cost as spend.
+		if billingMode != string(BillingMetered) {
+			costPtr = nil
+		}
+
 		result = append(result, SpendRow{
 			DimensionKey: row.DimensionKey,
-			TotalCostUsd: cost.Float64,
-			EventCount:   row.EventCount,
+			TotalCostUsd: costPtr,
+			TotalTokens:  row.TotalTokens,
 			TotalTurns:   row.TotalTurns,
+			SessionCount: row.SessionCount,
+			BillingMode:  billingMode,
+			Provider:     provider,
 		})
 		// Every row carries the same total_groups (window function); take from first.
 		if i == 0 {

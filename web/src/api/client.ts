@@ -1176,11 +1176,25 @@ export function listIncidents(tenant: string, opts: {
 
 // --- SPOG Spend ---
 
+/**
+ * A single spend/usage aggregation row.
+ *
+ * Usage (total_tokens, total_turns) is ALWAYS meaningful and is the primary metric.
+ * total_cost_usd is NULLABLE: null means "no dollar cost applies" — the group is a
+ * subscription (flat-rate) account or no session reported a cost. Only render a $
+ * figure when billing_mode === 'metered' and total_cost_usd != null.
+ */
 export interface SpendRow {
   dimension_key: string
-  total_cost_usd: number
-  event_count: number
+  /** Null for subscription/unknown billing modes — do NOT render as $0. */
+  total_cost_usd: number | null
+  total_tokens: number
   total_turns: number
+  session_count: number
+  /** 'subscription' | 'metered' | 'unknown' — only authoritative for group_by=agent. */
+  billing_mode: 'subscription' | 'metered' | 'unknown'
+  /** Resolved provider for agent-grouped rows ('' otherwise), e.g. 'anthropic'. */
+  provider: string
 }
 
 export interface SpendResponse {

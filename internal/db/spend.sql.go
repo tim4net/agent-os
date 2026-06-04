@@ -19,11 +19,11 @@ WITH latest_per_session AS (
         tenant,
         ts::date                       AS day,
         cost_usd,
-        (payload->'telemetry'->>'turns')::int AS turns,
+        (payload->'telemetry'->>'turns')::int        AS turns,
+        (payload->'telemetry'->>'tokens_used')::bigint AS tokens_used,
         external_ref
     FROM work_events
-    WHERE cost_usd IS NOT NULL
-      AND ($4::text = '' OR tenant = $4::text)
+    WHERE ($4::text = '' OR tenant = $4::text)
       AND ($5::text = '' OR external_ref = $5::text)
     ORDER BY harness, session_id, received_at DESC
 ),
@@ -34,7 +34,8 @@ spend_source AS (
         tenant,
         day,
         cost_usd,
-        turns
+        turns,
+        tokens_used
     FROM latest_per_session
 )
 SELECT
@@ -45,10 +46,11 @@ SELECT
         WHEN 'day'    THEN day::text
         ELSE harness   -- default fallback = agent
     END::text  AS dimension_key,
-    SUM(cost_usd)::numeric          AS total_cost_usd,
-    COUNT(*)::bigint                AS event_count,
-    COALESCE(SUM(COALESCE(turns, 0))::bigint, 0)::bigint AS total_turns,
-    COUNT(*) OVER()::bigint          AS total_groups
+    SUM(cost_usd)::numeric                                AS total_cost_usd,
+    COALESCE(SUM(COALESCE(tokens_used, 0)), 0)::bigint    AS total_tokens,
+    COALESCE(SUM(COALESCE(turns, 0)), 0)::bigint          AS total_turns,
+    COUNT(*)::bigint                                      AS session_count,
+    COUNT(*) OVER()::bigint                               AS total_groups
 FROM spend_source
 GROUP BY
     CASE $1
@@ -58,8 +60,13 @@ GROUP BY
         WHEN 'day'    THEN day::text
         ELSE harness
     END::text
-HAVING SUM(cost_usd) > 0
-ORDER BY SUM(cost_usd) DESC
+HAVING COALESCE(SUM(COALESCE(tokens_used, 0)), 0) > 0
+    OR COALESCE(SUM(COALESCE(turns, 0)), 0) > 0
+    OR COALESCE(SUM(cost_usd), 0) > 0
+ORDER BY
+    COALESCE(SUM(COALESCE(tokens_used, 0)), 0) DESC,
+    COALESCE(SUM(COALESCE(turns, 0)), 0) DESC,
+    SUM(cost_usd) DESC NULLS LAST
 LIMIT $3 OFFSET $2
 `
 
@@ -74,22 +81,30 @@ type AggregateSpendParams struct {
 type AggregateSpendRow struct {
 	DimensionKey string         `json:"dimension_key"`
 	TotalCostUsd pgtype.Numeric `json:"total_cost_usd"`
-	EventCount   int64          `json:"event_count"`
+	TotalTokens  int64          `json:"total_tokens"`
 	TotalTurns   int64          `json:"total_turns"`
+	SessionCount int64          `json:"session_count"`
 	TotalGroups  int64          `json:"total_groups"`
 }
 
-// Aggregates cost_usd + num_turns (from telemetry) from work_events, grouped by the
-// requested dimension (agent/harness, project, tenant, or day). Pure read over
-// existing work_events — no migration needed (WP-K).
-// Cost has ONE source of truth: top-level cost_usd (contract §5).
-// Turns are counted from payload->telemetry->turns (non-null only).
-// Tenant-scoped: @tenant = ” returns all tenants; otherwise scopes to one.
-// external_ref filter: @external_ref = ” returns all; otherwise scopes to one.
-// Per the work-event contract (§5, lines 213-215), cost_usd is "cumulative for the
-// session; non-decreasing" and "latest received_at wins." We dedupe to the latest
-// event per (harness, session_id) before rolling up, so a session that emits
-// start=$0.05 then end=$0.07 contributes $0.07, not $0.12.
+// Aggregates USAGE (tokens_used + turns) and cost_usd from work_events, grouped by
+// the requested dimension (agent/harness, project, tenant, or day). Pure read over
+// existing work_events.
+//
+// Provider-aware spend (Option A): token/turn usage is ALWAYS meaningful and is the
+// primary metric. cost_usd is OPTIONAL — subscription accounts never report it, so we
+// must NOT drop sessions that lack a dollar figure (the old `WHERE cost_usd IS NOT NULL`
+// + `HAVING SUM(cost_usd) > 0` did exactly that, hiding all subscription usage). cost_usd
+// is summed as a nullable value: NULL when no session in the group reported a cost.
+//
+// Per contract §5, cost_usd / telemetry is cumulative for the session and "latest
+// received_at wins"; we dedupe to the latest event per (harness, session_id) before
+// rolling up. tokens_used and turns come from payload->telemetry (non-core fields).
+// Tenant-scoped: @tenant = ” returns all tenants; otherwise scopes to one (UNCHANGED —
+// this isolation predicate is load-bearing and must not regress).
+// Include any group with real activity: tokens OR turns OR a dollar cost. This keeps
+// subscription agents (cost NULL, tokens > 0) visible while still excluding empty noise.
+// Usage-first ordering: most tokens, then turns, then dollars (nulls last).
 func (q *Queries) AggregateSpend(ctx context.Context, arg AggregateSpendParams) ([]AggregateSpendRow, error) {
 	rows, err := q.db.Query(ctx, aggregateSpend,
 		arg.GroupBy,
@@ -108,8 +123,9 @@ func (q *Queries) AggregateSpend(ctx context.Context, arg AggregateSpendParams) 
 		if err := rows.Scan(
 			&i.DimensionKey,
 			&i.TotalCostUsd,
-			&i.EventCount,
+			&i.TotalTokens,
 			&i.TotalTurns,
+			&i.SessionCount,
 			&i.TotalGroups,
 		); err != nil {
 			return nil, err
@@ -130,11 +146,11 @@ WITH latest_per_session AS (
         tenant,
         ts::date                       AS day,
         cost_usd,
-        (payload->'telemetry'->>'turns')::int AS turns,
+        (payload->'telemetry'->>'turns')::int        AS turns,
+        (payload->'telemetry'->>'tokens_used')::bigint AS tokens_used,
         external_ref
     FROM work_events
-    WHERE cost_usd IS NOT NULL
-      AND ($2::text = '' OR tenant = $2::text)
+    WHERE ($2::text = '' OR tenant = $2::text)
       AND ($3::text = '' OR external_ref = $3::text)
     ORDER BY harness, session_id, received_at DESC
 ),
@@ -145,7 +161,8 @@ spend_source AS (
         tenant,
         day,
         cost_usd,
-        turns
+        turns,
+        tokens_used
     FROM latest_per_session
 )
 SELECT COUNT(*)::bigint AS total_groups
@@ -160,7 +177,9 @@ FROM (
             WHEN 'day'    THEN day::text
             ELSE harness
         END::text
-    HAVING SUM(cost_usd) > 0
+    HAVING COALESCE(SUM(COALESCE(tokens_used, 0)), 0) > 0
+        OR COALESCE(SUM(COALESCE(turns, 0)), 0) > 0
+        OR COALESCE(SUM(cost_usd), 0) > 0
 ) AS groups
 `
 
@@ -170,9 +189,9 @@ type CountSpendGroupsParams struct {
 	ExternalRef string `json:"external_ref"`
 }
 
-// Returns the total count of non-zero-cost groups matching the given filters,
-// without applying LIMIT/OFFSET. Used when the main query returns zero rows
-// (offset past end) so Total is still accurate.
+// Returns the total count of active groups matching the given filters, without
+// LIMIT/OFFSET. "Active" mirrors AggregateSpend's HAVING (tokens OR turns OR cost),
+// so the count stays consistent with the rows actually returned.
 func (q *Queries) CountSpendGroups(ctx context.Context, arg CountSpendGroupsParams) (int64, error) {
 	row := q.db.QueryRow(ctx, countSpendGroups, arg.GroupBy, arg.Tenant, arg.ExternalRef)
 	var total_groups int64

@@ -35,6 +35,16 @@ function formatCurrency(val: number) {
   }).format(val);
 }
 
+function formatTokens(tokens: number): string {
+  if (tokens >= 1_000_000) {
+    return `${(tokens / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
+  }
+  if (tokens >= 1_000) {
+    return `${(tokens / 1_000).toFixed(1).replace(/\.0$/, '')}K`;
+  }
+  return tokens.toString();
+}
+
 function getIncidentStatusColor(status: string) {
   switch (status.toLowerCase()) {
     case 'failed':
@@ -116,7 +126,7 @@ function getTenantStyles(tenant: string) {
       border: 'border-[var(--tenant-dayjob)]/20',
       text: 'text-[var(--tenant-dayjob)]',
       bar: 'bg-gradient-to-r from-[var(--tenant-dayjob)] to-[var(--tenant-dayjob-2)]',
-      label: 'Dayjob',
+      label: 'Work',
     };
   }
 
@@ -804,14 +814,14 @@ function SpendPanel({
   sessions: SessionStatus[]
   incidents: Incident[]
 }) {
-  const maxCost = Math.max(...rows.map(r => r.total_cost_usd), 0.01);
+  const maxTokens = Math.max(...rows.map(r => r.total_tokens), 1);
 
   return (
     <div className="glass-card p-5 space-y-4">
       <div className="flex items-center justify-between border-b border-[var(--border-subtle)] pb-3">
         <div className="flex items-center gap-2">
           <Icon name="payments" className="text-accent-purple" />
-          <h2 className="text-lg font-bold tracking-tight text-[var(--text-primary)]">Spend by agent</h2>
+          <h2 className="text-lg font-bold tracking-tight text-[var(--text-primary)]">Token usage by agent</h2>
         </div>
         <span className="text-xs font-mono text-[var(--text-muted)] bg-white/5 px-2 py-0.5 rounded-full">
           agent usage
@@ -836,19 +846,44 @@ function SpendPanel({
           {rows.map((row, idx) => {
             const derivedTenant = deriveTenant(row.dimension_key, agents, sessions, incidents);
             const tenantStyles = getTenantStyles(derivedTenant || '');
-            const pct = (row.total_cost_usd / maxCost) * 100;
+            const pct = (row.total_tokens / maxTokens) * 100;
+
+            let billingChip = null;
+            if (row.billing_mode === 'metered' && row.total_cost_usd !== null) {
+              billingChip = (
+                <span className={`px-1.5 py-0.5 rounded text-[9px] font-semibold font-mono uppercase tracking-wider shrink-0 ${tenantStyles.chip}`}>
+                  {row.provider ? `${row.provider} · ` : ''}metered · {formatCurrency(row.total_cost_usd)}
+                </span>
+              );
+            } else if (row.billing_mode === 'subscription') {
+              billingChip = (
+                <span className={`px-1.5 py-0.5 rounded text-[9px] font-semibold font-mono uppercase tracking-wider shrink-0 ${tenantStyles.chip}`}>
+                  {row.provider ? `${row.provider} · ` : ''}subscription
+                </span>
+              );
+            } else {
+              billingChip = (
+                <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold font-mono uppercase tracking-wider bg-white/5 text-[var(--text-secondary)] border border-white/10 shrink-0">
+                  {row.provider ? `${row.provider} · ` : ''}usage-only
+                </span>
+              );
+            }
+
             return (
               <div key={`${row.dimension_key}-${idx}`} className="space-y-1.5">
-                <div className="flex justify-between text-xs">
-                  <span className="font-semibold text-[var(--text-primary)] truncate pr-2">
-                    {row.dimension_key}
-                  </span>
+                <div className="flex justify-between items-center text-xs">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="font-semibold text-[var(--text-primary)] truncate">
+                      {row.dimension_key}
+                    </span>
+                    {billingChip}
+                  </div>
                   <div className="flex items-center gap-2 shrink-0">
                     <span className="text-[var(--text-muted)] font-mono">
-                      {row.event_count}e · {row.total_turns}t
+                      {row.total_turns} turns · {row.session_count} sessions
                     </span>
                     <span className="font-bold text-[var(--text-primary)]">
-                      {formatCurrency(row.total_cost_usd)}
+                      {formatTokens(row.total_tokens)}
                     </span>
                   </div>
                 </div>
@@ -945,7 +980,13 @@ export default function MissionControl({ agents }: { agents: Agent[] }) {
   const { state: controlState, loading: controlLoading, error: controlError } = useMissionControlState()
 
   const activeCount = sessions.filter(s => s.status.toLowerCase() === 'running').length
-  const spendTotal = spendRows.reduce((sum, row) => sum + row.total_cost_usd, 0)
+  
+  const totalTokensToday = spendRows.reduce((sum, row) => sum + (row.total_tokens ?? 0), 0)
+  const meteredSpendToday = spendRows.reduce((sum, row) => sum + (row.total_cost_usd ?? 0), 0)
+  const hasMeteredCost = spendRows.some(row => row.billing_mode === 'metered' && row.total_cost_usd !== null && row.total_cost_usd > 0)
+  const usageSubtext = hasMeteredCost
+    ? `+ ${formatCurrency(meteredSpendToday)} metered`
+    : 'subscription — no metered spend'
 
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto page-transition">
@@ -990,7 +1031,7 @@ export default function MissionControl({ agents }: { agents: Agent[] }) {
                 onClick={() => setTenantFilter(t)}
                 className={`px-4 py-1.5 rounded-md text-xs transition-all duration-[var(--duration-fast)] capitalize cursor-pointer ${activeClass}`}
               >
-                {t}
+                {t === 'dayjob' ? 'work' : t}
               </button>
             );
           })}
@@ -1020,9 +1061,9 @@ export default function MissionControl({ agents }: { agents: Agent[] }) {
         />
 
         <StatCard 
-          label="Spend today" 
-          value={formatCurrency(spendTotal)} 
-          subtext={spendRows.length > 0 ? 'total agent cost' : 'no spend records'}
+          label="USAGE TODAY" 
+          value={formatTokens(totalTokensToday)} 
+          subtext={usageSubtext}
           icon="payments" 
           loading={spendLoading}
           error={!!spendError}

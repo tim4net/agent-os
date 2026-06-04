@@ -45,15 +45,22 @@ func seedWorkEvent(t *testing.T, pool *pgxpool.Pool, harness, tenant string, cos
 	var pgEID pgtype.UUID
 	_ = pgEID.Scan(eventID.String())
 
-	// Build payload with telemetry.turns.
-	payload := "{}"
-	if turns > 0 {
-		payload = `{"telemetry":{"turns":` + strconv.Itoa(turns) + `}}`
-	}
-
 	cfg := seedConfig{sessionID: uuid.NewString()}
 	for _, o := range opts {
 		o(&cfg)
+	}
+
+	// Build payload with telemetry.turns and optional telemetry.tokens_used.
+	var teleParts []string
+	if turns > 0 {
+		teleParts = append(teleParts, `"turns":`+strconv.Itoa(turns))
+	}
+	if cfg.tokens > 0 {
+		teleParts = append(teleParts, `"tokens_used":`+strconv.Itoa(cfg.tokens))
+	}
+	payload := "{}"
+	if len(teleParts) > 0 {
+		payload = `{"telemetry":{` + strings.Join(teleParts, ",") + `}}`
 	}
 
 	projectFilter := "NULL"
@@ -98,10 +105,26 @@ type seedConfig struct {
 	sessionID   string
 	projectID   string
 	externalRef string
+	tokens      int
 }
 
 // seedOpt is a functional option for seedWorkEvent.
 type seedOpt func(*seedConfig)
+
+// withTokens sets telemetry.tokens_used for the event (usage metric).
+func withTokens(n int) seedOpt {
+	return func(c *seedConfig) { c.tokens = n }
+}
+
+// costVal dereferences a nullable cost pointer, failing the test if nil.
+// Use for METERED-harness rows where a real dollar cost is expected.
+func costVal(t *testing.T, p *float64) float64 {
+	t.Helper()
+	if p == nil {
+		t.Fatalf("expected a non-nil cost (metered harness), got nil")
+	}
+	return *p
+}
 
 // withSessionID sets the session_id to a specific value (for multi-event-per-session tests).
 func withSessionID(id string) seedOpt {
@@ -123,10 +146,11 @@ func TestHTTPSpend_GroupByAgent_RollsUpCorrectly(t *testing.T) {
 	a, pool, _ := newTestAPIWithDB(t)
 	defer pool.Close()
 
-	// Seed: claude $0.05 + 10 turns, claude $0.02 + 3 turns → claude total $0.07, 13 turns
-	// hermes $0.03 + 5 turns, hermes $0.01 + 2 turns → hermes total $0.04, 7 turns
-	seedWorkEvent(t, pool, "claude", tenant, 0.05, 10, time.Now())
-	seedWorkEvent(t, pool, "claude", tenant, 0.02, 3, time.Now())
+	// Seed: claude $0.05 + 10 turns/1000 tok, claude $0.02 + 3 turns/300 tok
+	//   → claude 13 turns, 1300 tokens (claude=anthropic=SUBSCRIPTION → cost suppressed)
+	// hermes $0.03 + 5 turns, hermes $0.01 + 2 turns → hermes 7 turns (subscription)
+	seedWorkEvent(t, pool, "claude", tenant, 0.05, 10, time.Now(), withTokens(1000))
+	seedWorkEvent(t, pool, "claude", tenant, 0.02, 3, time.Now(), withTokens(300))
 	seedWorkEvent(t, pool, "hermes", tenant, 0.03, 5, time.Now())
 	seedWorkEvent(t, pool, "hermes", tenant, 0.01, 2, time.Now())
 
@@ -153,28 +177,34 @@ func TestHTTPSpend_GroupByAgent_RollsUpCorrectly(t *testing.T) {
 		t.Fatalf("expected 2 rows, got %d; keys: %v", len(byKey), keys(byKey))
 	}
 
-	// claude: $0.07, 2 events, 13 turns
+	// claude: subscription → cost nil; usage rolls up: 2 sessions, 13 turns, 1300 tokens.
 	claude, ok := byKey["claude"]
 	if !ok {
 		t.Fatalf("expected claude row, got keys: %v", keys(byKey))
 	}
-	if !testFeq(claude.TotalCostUsd, 0.07) {
-		t.Fatalf("claude cost: expected 0.07, got %f", claude.TotalCostUsd)
+	if claude.TotalCostUsd != nil {
+		t.Fatalf("claude is subscription: expected nil cost, got %v", *claude.TotalCostUsd)
 	}
-	if claude.EventCount != 2 {
-		t.Fatalf("claude events: expected 2, got %d", claude.EventCount)
+	if claude.BillingMode != "subscription" {
+		t.Fatalf("claude billing_mode: expected subscription, got %q", claude.BillingMode)
+	}
+	if claude.SessionCount != 2 {
+		t.Fatalf("claude sessions: expected 2, got %d", claude.SessionCount)
 	}
 	if claude.TotalTurns != 13 {
 		t.Fatalf("claude turns: expected 13, got %d", claude.TotalTurns)
 	}
+	if claude.TotalTokens != 1300 {
+		t.Fatalf("claude tokens: expected 1300, got %d", claude.TotalTokens)
+	}
 
-	// hermes: $0.04, 2 events, 7 turns
+	// hermes: subscription → cost nil; 7 turns.
 	hermes, ok := byKey["hermes"]
 	if !ok {
 		t.Fatalf("expected hermes row, got keys: %v", keys(byKey))
 	}
-	if !testFeq(hermes.TotalCostUsd, 0.04) {
-		t.Fatalf("hermes cost: expected 0.04, got %f", hermes.TotalCostUsd)
+	if hermes.TotalCostUsd != nil {
+		t.Fatalf("hermes is subscription: expected nil cost, got %v", *hermes.TotalCostUsd)
 	}
 	if hermes.TotalTurns != 7 {
 		t.Fatalf("hermes turns: expected 7, got %d", hermes.TotalTurns)
@@ -214,13 +244,14 @@ func TestHTTPSpend_CumulativeCost_LatestWinsPerSession(t *testing.T) {
 		t.Fatalf("expected 1 row (one session), got %d", len(resp.Rows))
 	}
 
-	// Must be $0.07 (latest), NOT $0.12 (sum).
-	if !testFeq(resp.Rows[0].TotalCostUsd, 0.07) {
-		t.Fatalf("cumulative cost: expected 0.07 (latest per session), got %f — query may be SUM-ing all events", resp.Rows[0].TotalCostUsd)
+	// Must be 7 turns (latest), NOT 10 (sum of both events) — per-session dedup
+	// (latest received_at wins) applies to the usage rollup just as it does to cost.
+	if resp.Rows[0].TotalTurns != 7 {
+		t.Fatalf("cumulative turns: expected 7 (latest per session), got %d — query may be SUM-ing all events", resp.Rows[0].TotalTurns)
 	}
-	// Event count = 1 (one session deduped).
-	if resp.Rows[0].EventCount != 1 {
-		t.Fatalf("event_count: expected 1 (one session), got %d", resp.Rows[0].EventCount)
+	// Session count = 1 (one session deduped).
+	if resp.Rows[0].SessionCount != 1 {
+		t.Fatalf("session_count: expected 1 (one session), got %d", resp.Rows[0].SessionCount)
 	}
 }
 
@@ -230,11 +261,13 @@ func TestHTTPSpend_GroupByTenant_TenantIsolation(t *testing.T) {
 	a, pool, _ := newTestAPIWithDB(t)
 	defer pool.Close()
 
-	// Seed: tenantA $0.10, tenantB $0.20
+	// Seed: tenantA 5 turns, tenantB 10 turns (group_by=tenant spans providers →
+	// cost suppressed; tenant ISOLATION is proven via the usage rollup, same
+	// GROUP BY + WHERE path the cost would take).
 	seedWorkEvent(t, pool, "claude", tenantA, 0.10, 5, time.Now())
 	seedWorkEvent(t, pool, "claude", tenantB, 0.20, 10, time.Now())
 
-	// Query with tenant=tenantA → only tenantA costs
+	// Query with tenant=tenantA → only tenantA usage
 	req := newTestGET("/?group_by=tenant&tenant=" + tenantA)
 	rec := httptest.NewRecorder()
 	a.SpendRoutes().ServeHTTP(rec, req)
@@ -254,8 +287,8 @@ func TestHTTPSpend_GroupByTenant_TenantIsolation(t *testing.T) {
 	if resp.Rows[0].DimensionKey != tenantA {
 		t.Fatalf("expected %q, got %s", tenantA, resp.Rows[0].DimensionKey)
 	}
-	if !testFeq(resp.Rows[0].TotalCostUsd, 0.10) {
-		t.Fatalf("expected 0.10, got %f", resp.Rows[0].TotalCostUsd)
+	if resp.Rows[0].TotalTurns != 5 {
+		t.Fatalf("tenantA turns: expected 5 (isolation), got %d", resp.Rows[0].TotalTurns)
 	}
 
 	// Query with tenant=tenantB → only tenantB costs (tenant isolation)
@@ -278,8 +311,8 @@ func TestHTTPSpend_GroupByTenant_TenantIsolation(t *testing.T) {
 	if resp2.Rows[0].DimensionKey != tenantB {
 		t.Fatalf("expected %q, got %s", tenantB, resp2.Rows[0].DimensionKey)
 	}
-	if !testFeq(resp2.Rows[0].TotalCostUsd, 0.20) {
-		t.Fatalf("expected 0.20, got %f", resp2.Rows[0].TotalCostUsd)
+	if resp2.Rows[0].TotalTurns != 10 {
+		t.Fatalf("tenantB turns: expected 10 (isolation), got %d", resp2.Rows[0].TotalTurns)
 	}
 }
 
@@ -317,21 +350,22 @@ func TestHTTPSpend_GroupByDay_RollsUpByDate(t *testing.T) {
 		byKey[r.DimensionKey] = r
 	}
 
-	// day1: $0.08
+	// day1: 5+3 = 8 turns combined; day2: 2 turns. (group_by=day → cost suppressed;
+	// the date rollup invariant is identical via the usage sum.)
 	d1, ok := byKey["2026-05-30"]
 	if !ok {
 		t.Fatalf("expected day 2026-05-30, got keys: %v", keys(byKey))
 	}
-	if !testFeq(d1.TotalCostUsd, 0.08) {
-		t.Fatalf("day1 cost: expected 0.08, got %f", d1.TotalCostUsd)
+	if d1.TotalTurns != 8 {
+		t.Fatalf("day1 turns: expected 8, got %d", d1.TotalTurns)
 	}
-	// day2: $0.04
+	// day2: 2 turns
 	d2, ok := byKey["2026-05-31"]
 	if !ok {
 		t.Fatalf("expected day 2026-05-31, got keys: %v", keys(byKey))
 	}
-	if !testFeq(d2.TotalCostUsd, 0.04) {
-		t.Fatalf("day2 cost: expected 0.04, got %f", d2.TotalCostUsd)
+	if d2.TotalTurns != 2 {
+		t.Fatalf("day2 turns: expected 2, got %d", d2.TotalTurns)
 	}
 }
 
@@ -395,24 +429,24 @@ func TestHTTPSpend_GroupByProject(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected project %s, got keys: %v", projAlphaID.String(), keys(byKey))
 	}
-	if !testFeq(alpha.TotalCostUsd, 0.06) {
-		t.Fatalf("proj-alpha cost: expected 0.06, got %f", alpha.TotalCostUsd)
+	if alpha.TotalTurns != 4 {
+		t.Fatalf("proj-alpha turns: expected 4, got %d", alpha.TotalTurns)
 	}
-	// proj-beta (by UUID string): $0.03
+	// proj-beta (by UUID string): 2 turns
 	beta, ok := byKey[projBetaID.String()]
 	if !ok {
 		t.Fatalf("expected project %s, got keys: %v", projBetaID.String(), keys(byKey))
 	}
-	if !testFeq(beta.TotalCostUsd, 0.03) {
-		t.Fatalf("proj-beta cost: expected 0.03, got %f", beta.TotalCostUsd)
+	if beta.TotalTurns != 2 {
+		t.Fatalf("proj-beta turns: expected 2, got %d", beta.TotalTurns)
 	}
-	// NULL project → empty string key: $0.01
+	// NULL project → empty string key: 1 turn
 	nullProj, ok := byKey[""]
 	if !ok {
 		t.Fatalf("expected empty-string key for NULL project, got keys: %v", keys(byKey))
 	}
-	if !testFeq(nullProj.TotalCostUsd, 0.01) {
-		t.Fatalf("NULL-project cost: expected 0.01, got %f", nullProj.TotalCostUsd)
+	if nullProj.TotalTurns != 1 {
+		t.Fatalf("NULL-project turns: expected 1, got %d", nullProj.TotalTurns)
 	}
 }
 
@@ -463,13 +497,16 @@ func TestHTTPSpend_DefaultGroupBy_IsAgent(t *testing.T) {
 	}
 }
 
-func TestHTTPSpend_ZeroCost_EventsNotIncluded(t *testing.T) {
+// Under the usage-first model the inclusion rule is "tokens OR turns OR cost > 0",
+// not "cost > 0". A zero-cost session WITH usage (turns) must now appear (it's real
+// work on a subscription account); a session with NO usage and NO cost must not.
+func TestHTTPSpend_NoUsageNoCost_EventsNotIncluded(t *testing.T) {
 	tenant := testTenant(t, "zero")
 	a, pool, _ := newTestAPIWithDB(t)
 	defer pool.Close()
 
-	// Seed event with cost_usd = 0 → HAVING SUM(cost_usd) > 0 excludes it
-	seedWorkEvent(t, pool, "claude", tenant, 0.00, 5, time.Now())
+	// Event with cost 0 AND no turns/tokens → no activity → excluded.
+	seedWorkEvent(t, pool, "claude", tenant, 0.00, 0, time.Now())
 
 	req := newTestGET("/?group_by=agent&tenant=" + tenant)
 	rec := httptest.NewRecorder()
@@ -483,7 +520,80 @@ func TestHTTPSpend_ZeroCost_EventsNotIncluded(t *testing.T) {
 	json.Unmarshal(rec.Body.Bytes(), &resp)
 
 	if len(resp.Rows) != 0 {
-		t.Fatalf("expected 0 rows (zero cost excluded), got %d", len(resp.Rows))
+		t.Fatalf("expected 0 rows (no usage, no cost), got %d", len(resp.Rows))
+	}
+}
+
+// A zero-cost session WITH usage (turns) is real subscription work and must appear,
+// with cost suppressed to nil (claude=subscription).
+func TestHTTPSpend_ZeroCostWithUsage_IsIncluded(t *testing.T) {
+	tenant := testTenant(t, "zerouse")
+	a, pool, _ := newTestAPIWithDB(t)
+	defer pool.Close()
+
+	seedWorkEvent(t, pool, "claude", tenant, 0.00, 5, time.Now(), withTokens(800))
+
+	req := newTestGET("/?group_by=agent&tenant=" + tenant)
+	rec := httptest.NewRecorder()
+	a.SpendRoutes().ServeHTTP(rec, req)
+
+	if rec.Code != 200 {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var resp SpendResponse
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+
+	if len(resp.Rows) != 1 {
+		t.Fatalf("expected 1 row (zero cost but real usage), got %d", len(resp.Rows))
+	}
+	if resp.Rows[0].TotalCostUsd != nil {
+		t.Fatalf("claude subscription: expected nil cost, got %v", *resp.Rows[0].TotalCostUsd)
+	}
+	if resp.Rows[0].TotalTurns != 5 || resp.Rows[0].TotalTokens != 800 {
+		t.Fatalf("expected 5 turns / 800 tokens, got %d turns / %d tokens",
+			resp.Rows[0].TotalTurns, resp.Rows[0].TotalTokens)
+	}
+}
+
+// A metered harness (codex=openai) keeps a real, non-nil dollar cost — proving the
+// cost path still works end-to-end and the cumulative-latest-wins dedup holds.
+func TestHTTPSpend_MeteredHarness_ReportsRealCost(t *testing.T) {
+	tenant := testTenant(t, "metered")
+	a, pool, _ := newTestAPIWithDB(t)
+	defer pool.Close()
+
+	sessID := uuid.NewString()
+	seedWorkEvent(t, pool, "codex", tenant, 0.05, 3, time.Now(), withSessionID(sessID))
+	time.Sleep(10 * time.Millisecond)
+	seedWorkEvent(t, pool, "codex", tenant, 0.07, 7, time.Now(), withSessionID(sessID))
+
+	req := newTestGET("/?group_by=agent&tenant=" + tenant)
+	rec := httptest.NewRecorder()
+	a.SpendRoutes().ServeHTTP(rec, req)
+
+	if rec.Code != 200 {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp SpendResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	if len(resp.Rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(resp.Rows))
+	}
+	row := resp.Rows[0]
+	if row.BillingMode != "metered" {
+		t.Fatalf("codex billing_mode: expected metered, got %q", row.BillingMode)
+	}
+	// cumulative-latest-wins: $0.07, not $0.12.
+	if !testFeq(costVal(t, row.TotalCostUsd), 0.07) {
+		t.Fatalf("metered cost: expected 0.07 (latest per session), got %f", *row.TotalCostUsd)
+	}
+	if row.SessionCount != 1 {
+		t.Fatalf("session_count: expected 1 (one session deduped), got %d", row.SessionCount)
 	}
 }
 
@@ -492,7 +602,7 @@ func TestHTTPSpend_ResponseShape(t *testing.T) {
 	a, pool, _ := newTestAPIWithDB(t)
 	defer pool.Close()
 
-	seedWorkEvent(t, pool, "claude", tenant, 0.01, 1, time.Now())
+	seedWorkEvent(t, pool, "codex", tenant, 0.01, 1, time.Now())
 
 	req := newTestGET("/?group_by=agent&tenant=" + tenant + "&limit=5&offset=0")
 	rec := httptest.NewRecorder()
@@ -523,16 +633,23 @@ func TestHTTPSpend_ResponseShape(t *testing.T) {
 		t.Fatal("expected at least 1 row")
 	}
 
-	// Verify individual row fields
+	// Verify individual row fields. Use a metered harness (codex) so a positive
+	// dollar cost is expected; also assert the always-on usage fields.
 	row := resp.Rows[0]
 	if row.DimensionKey == "" {
 		t.Fatal("expected non-empty dimension_key")
 	}
-	if row.TotalCostUsd <= 0 {
-		t.Fatalf("expected positive cost, got %f", row.TotalCostUsd)
+	if row.TotalCostUsd == nil || *row.TotalCostUsd <= 0 {
+		t.Fatalf("expected positive cost for metered harness, got %v", row.TotalCostUsd)
 	}
-	if row.EventCount <= 0 {
-		t.Fatalf("expected positive event_count, got %d", row.EventCount)
+	if row.SessionCount <= 0 {
+		t.Fatalf("expected positive session_count, got %d", row.SessionCount)
+	}
+	if row.TotalTurns <= 0 {
+		t.Fatalf("expected positive total_turns, got %d", row.TotalTurns)
+	}
+	if row.BillingMode != "metered" {
+		t.Fatalf("expected billing_mode=metered, got %q", row.BillingMode)
 	}
 }
 
@@ -575,9 +692,10 @@ func TestHTTPSpend_ExternalRef_ScopesToWorkItem(t *testing.T) {
 	a, pool, _ := newTestAPIWithDB(t)
 	defer pool.Close()
 
-	// Seed two different external_refs under the same agent + tenant.
-	seedWorkEvent(t, pool, "claude", tenant, 0.05, 3, time.Now(), withExternalRef("SC-91130"))
-	seedWorkEvent(t, pool, "claude", tenant, 0.03, 2, time.Now(), withExternalRef("SC-99999"))
+	// Seed two different external_refs under the same agent + tenant. Use a metered
+	// harness (codex) so external_ref scoping is verified via real dollar costs.
+	seedWorkEvent(t, pool, "codex", tenant, 0.05, 3, time.Now(), withExternalRef("SC-91130"))
+	seedWorkEvent(t, pool, "codex", tenant, 0.03, 2, time.Now(), withExternalRef("SC-99999"))
 
 	// Query scoped to SC-91130 → only that cost.
 	req := newTestGET("/?group_by=agent&tenant=" + tenant + "&external_ref=SC-91130")
@@ -596,8 +714,8 @@ func TestHTTPSpend_ExternalRef_ScopesToWorkItem(t *testing.T) {
 	if len(resp.Rows) != 1 {
 		t.Fatalf("expected 1 row, got %d", len(resp.Rows))
 	}
-	if !testFeq(resp.Rows[0].TotalCostUsd, 0.05) {
-		t.Fatalf("SC-91130 cost: expected 0.05, got %f", resp.Rows[0].TotalCostUsd)
+	if !testFeq(costVal(t, resp.Rows[0].TotalCostUsd), 0.05) {
+		t.Fatalf("SC-91130 cost: expected 0.05, got %v", resp.Rows[0].TotalCostUsd)
 	}
 
 	// Query scoped to SC-99999 → only that cost.
@@ -617,8 +735,8 @@ func TestHTTPSpend_ExternalRef_ScopesToWorkItem(t *testing.T) {
 	if len(resp2.Rows) != 1 {
 		t.Fatalf("expected 1 row, got %d", len(resp2.Rows))
 	}
-	if !testFeq(resp2.Rows[0].TotalCostUsd, 0.03) {
-		t.Fatalf("SC-99999 cost: expected 0.03, got %f", resp2.Rows[0].TotalCostUsd)
+	if !testFeq(costVal(t, resp2.Rows[0].TotalCostUsd), 0.03) {
+		t.Fatalf("SC-99999 cost: expected 0.03, got %v", resp2.Rows[0].TotalCostUsd)
 	}
 
 	// Without external_ref → total = $0.08.
@@ -633,8 +751,8 @@ func TestHTTPSpend_ExternalRef_ScopesToWorkItem(t *testing.T) {
 	var resp3 SpendResponse
 	json.Unmarshal(rec3.Body.Bytes(), &resp3)
 
-	if !testFeq(resp3.Rows[0].TotalCostUsd, 0.08) {
-		t.Fatalf("unscoped cost: expected 0.08, got %f", resp3.Rows[0].TotalCostUsd)
+	if !testFeq(costVal(t, resp3.Rows[0].TotalCostUsd), 0.08) {
+		t.Fatalf("unscoped cost: expected 0.08, got %v", resp3.Rows[0].TotalCostUsd)
 	}
 }
 
@@ -684,11 +802,11 @@ func TestHTTPSpend_MixedCostGroup(t *testing.T) {
 
 	// Session A: cost=0, turns=1 (zero-cost event)
 	sessA := uuid.NewString()
-	seedWorkEvent(t, pool, "claude", tenant, 0.00, 1, time.Now(), withSessionID(sessA))
+	seedWorkEvent(t, pool, "codex", tenant, 0.00, 1, time.Now(), withSessionID(sessA))
 
 	// Session B: cost=0.05, turns=5 (non-zero)
 	sessB := uuid.NewString()
-	seedWorkEvent(t, pool, "claude", tenant, 0.05, 5, time.Now(), withSessionID(sessB))
+	seedWorkEvent(t, pool, "codex", tenant, 0.05, 5, time.Now(), withSessionID(sessB))
 
 	req := newTestGET("/?group_by=agent&tenant=" + tenant)
 	rec := httptest.NewRecorder()
@@ -704,23 +822,19 @@ func TestHTTPSpend_MixedCostGroup(t *testing.T) {
 	if len(resp.Rows) != 1 {
 		t.Fatalf("expected 1 row (one agent), got %d", len(resp.Rows))
 	}
-	// Cost should be 0.05 (only the non-zero session).
-	if !testFeq(resp.Rows[0].TotalCostUsd, 0.05) {
-		t.Fatalf("expected 0.05, got %f", resp.Rows[0].TotalCostUsd)
+	// codex is metered → cost is the sum across both deduped sessions = $0.05
+	// (A contributes 0). The zero-cost session is NOT dropped; it's a real session.
+	if !testFeq(costVal(t, resp.Rows[0].TotalCostUsd), 0.05) {
+		t.Fatalf("expected 0.05, got %v", resp.Rows[0].TotalCostUsd)
 	}
-	// event_count should be 1 (only the non-zero session; zero-cost session is
-	// excluded by HAVING SUM(cost_usd) > 0 at the group level, but since we
-	// dedupe per-session BEFORE grouping, the zero-cost session is excluded at
-	// the CTE level too — but actually the CTE includes all cost_usd IS NOT NULL,
-	// including 0. HAVING filters at group level. The 0.00 row passes
-	// cost_usd IS NOT NULL (0.00 is not NULL), so event_count from the
-	// DISTINCT ON CTE would be 2 sessions, but HAVING SUM>0 would keep only
-	// the group with total > 0. The COUNT(*) counts deduped sessions, not events.
-	// Since claude has sessions A($0) + B($0.05), SUM = $0.05 > 0, so the group
-	// passes HAVING. event_count = 2 (both deduped sessions). This is correct
-	// behavior — the zero-cost session is counted because it contributes 0 to
-	// the sum but the GROUP still has positive total. This is by design.
-	// We verify the total cost is correct; event_count being 2 is fine.
+	// session_count = 2: both deduped sessions are counted (A=$0 + B=$0.05). Usage
+	// rolls up across both: 1 + 5 = 6 turns.
+	if resp.Rows[0].SessionCount != 2 {
+		t.Fatalf("session_count: expected 2 (both sessions), got %d", resp.Rows[0].SessionCount)
+	}
+	if resp.Rows[0].TotalTurns != 6 {
+		t.Fatalf("total_turns: expected 6 (1+5), got %d", resp.Rows[0].TotalTurns)
+	}
 }
 
 // Non-blocking #6: 500 DB-error branch — forced-error via closed pool.
