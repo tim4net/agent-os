@@ -21,6 +21,12 @@
   --accent-cyan:    #22d3ee;
   --accent-pink:    #f472b6;
 
+  /* Tenant branding colors */
+  --tenant-personal:    var(--accent-cyan);
+  --tenant-personal-2:  var(--accent-blue);
+  --tenant-dayjob:      #fb923c;
+  --tenant-dayjob-2:    #f43f5e;
+
   /* Gradient stops */
   --gradient-start: #5b8def;
   --gradient-mid:   #a78bfa;
@@ -73,6 +79,11 @@
   --color-accent-purple:  var(--accent-purple);
   --color-accent-cyan:    var(--accent-cyan);
   --color-accent-pink:    var(--accent-pink);
+
+  --color-tenant-personal:    var(--tenant-personal);
+  --color-tenant-personal-2:  var(--tenant-personal-2);
+  --color-tenant-dayjob:      var(--tenant-dayjob);
+  --color-tenant-dayjob-2:    var(--tenant-dayjob-2);
 
   --color-text-primary:   var(--text-primary);
   --color-text-secondary: var(--text-secondary);
