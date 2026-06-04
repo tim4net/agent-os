@@ -146,7 +146,10 @@ try:
 except Exception as exc:
     print(f"invalid JSON: {exc}", file=sys.stderr)
     sys.exit(1)
-value = data.get(key)
+if key == "__array__":
+    value = data
+else:
+    value = data.get(key)
 if not isinstance(value, list) or len(value) == 0:
     print(f"expected non-empty {key}; got {value!r}", file=sys.stderr)
     sys.exit(1)
@@ -252,6 +255,203 @@ post_ledger "/api/ledger/findings" '{"pr_ref":"#44","wp_ref":"wp-o1","gate":2,"a
 post_ledger "/api/ledger/findings" '{"pr_ref":"#58","wp_ref":"spog-polish","gate":3,"author_agent":"Hermes","model":"gpt-5.5","severity":"low","class":"copy-drift","root_cause":"seed-ui-demo: panel empty-state copy diverged from incident semantics","summary":"[seed-ui-demo] Hermes should align SPOG empty-state copy"}'
 post_ledger "/api/ledger/findings" '{"pr_ref":"#57","wp_ref":"demo-seed","gate":2,"author_agent":"agy","model":"antigravity-coder","severity":"medium","class":"missing-observability","root_cause":"seed-ui-demo: seed run did not previously prove recurrence endpoint was populated","summary":"[seed-ui-demo] agy added recurrence verification coverage"}'
 
+log "seeding productivity planes (goals, tasks, workflows, skills, pipeline) through the real API"
+# These planes are populated via the same public REST endpoints the UI uses, so a
+# successful seed doubles as an end-to-end proof that each create/list path works.
+# Idempotent: every record carries a deterministic title/name; on re-run we delete
+# any existing record whose title/name matches our known seed set, then recreate.
+# Titles are kept clean (no marker text) so the demo UI reads naturally.
+API_URL="$API_URL" python3 - <<'PY'
+import json
+import os
+import urllib.request
+import urllib.error
+
+API = os.environ["API_URL"].rstrip("/")
+
+
+def req(method, path, body=None):
+    data = json.dumps(body).encode() if body is not None else None
+    r = urllib.request.Request(
+        API + path, data=data, method=method,
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(r) as resp:
+            raw = resp.read().decode()
+            return resp.status, (json.loads(raw) if raw.strip() else None)
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode()
+
+
+def as_list(payload):
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict):
+        for key in ("items", "goals", "tasks", "workflows", "skills", "records"):
+            if isinstance(payload.get(key), list):
+                return payload[key]
+    return []
+
+
+def resolve_agent(name):
+    _, agents = req("GET", "/api/agents")
+    for a in as_list(agents):
+        if a.get("name") == name:
+            return a["id"]
+    return None
+
+
+def reseed(plane, path, key_field, records, match_field="description"):
+    """Delete prior seed records, then (re)create them.
+
+    Idempotency is scoped tightly: a record is deleted ONLY when both its
+    ``key_field`` (title/name) AND its ``match_field`` (a content field we
+    author, e.g. description or type) are byte-identical to one of our seed
+    records. This mirrors the marker convention the rest of this script uses
+    for work_events/ledger rows, so a user-authored record that merely shares
+    a seed title is never destroyed — only our own previous seed output is
+    replaced. Keeps demo titles clean (no marker text) without the footgun.
+
+    A record may carry an optional ``_put`` dict of fields to apply via a
+    follow-up PUT — used for state the create endpoint forces to a default
+    (pipeline status, goal progress), so the demo board spreads across stages.
+    """
+    # Build the set of (key, match) tuples that identify OUR seed records.
+    owned = {(r[key_field], r.get(match_field)) for r in records}
+    status, existing = req("GET", path)
+    if status != 200:
+        raise SystemExit(f"FAIL seeding {plane}: GET {path} -> {status} {existing}")
+    deleted = 0
+    for item in as_list(existing):
+        ident = (item.get(key_field), item.get(match_field))
+        if ident in owned and item.get("id"):
+            code, body = req("DELETE", f"{path}/{item['id']}")
+            if code in (200, 204):
+                deleted += 1
+            elif code != 404:  # 404 = already gone (race); anything else is fatal
+                raise SystemExit(f"FAIL seeding {plane}: DELETE {item['id']} -> {code} {body}")
+    created = 0
+    for r in records:
+        put = r.pop("_put", None)
+        code, resp = req("POST", path, r)
+        if code in (200, 201):
+            created += 1
+            if put and isinstance(resp, dict) and resp.get("id"):
+                pcode, presp = req("PUT", f"{path}/{resp['id']}", put)
+                if pcode not in (200, 201):
+                    raise SystemExit(
+                        f"FAIL finalizing {plane} {resp['id']}: PUT -> {pcode} {presp}")
+        else:
+            raise SystemExit(f"FAIL seeding {plane}: POST {path} -> {code} {resp}")
+    print(f"[seed-ui-demo]   {plane}: deleted {deleted}, created {created}", flush=True)
+
+
+roux = resolve_agent("roux")
+crawbot = resolve_agent("crawbot")
+
+# --- Goals (Build > Goals): high-level objectives across personal + work ----
+reseed("goals", "/api/goals", "title", [
+    {"title": "Ship Agent OS SPOG v1", "status": "active",
+     "description": "Single pane of glass over every agent, project, and tenant — fleet, spend, control, and observability planes live.",
+     "target_date": "2026-06-30", "_put": {"progress": 72}},
+    {"title": "Cut fleet over to the work-event plane", "status": "active",
+     "description": "Retire the delegation-proxy timeline; all agent activity flows through agentos.work_event/v1 ingestion.",
+     "target_date": "2026-07-15", "_put": {"progress": 40}},
+    {"title": "Automate home-lab backup + restore drills", "status": "paused",
+     "description": "Personal: nightly restic snapshots to the NAS with a monthly automated restore verification.",
+     "target_date": "2026-08-01", "_put": {"progress": 15}},
+    {"title": "Three-gate review loop on every merge", "status": "completed",
+     "description": "Build + tests, independent model spec-compliance, and live render — authoritative locally when CI runners are inert.",
+     "target_date": "2026-05-31", "_put": {"progress": 100}},
+])
+
+# --- Tasks (Build > Board): kanban across all four columns, linked to agents --
+reseed("tasks", "/api/tasks", "title", [
+    {"title": "Wire productivity tabs to live data", "status": "in_progress",
+     "priority": 1, "agent_id": roux,
+     "description": "Seed goals/tasks/workflows/skills/pipeline through the public API so every tab renders real records."},
+    {"title": "Add tenant isolation test for wp-o1", "status": "backlog",
+     "priority": 2, "agent_id": roux,
+     "description": "Gate-2 flagged missing acceptance coverage for the tenant-scoped orchestration path."},
+    {"title": "Fix Sidebar nested-button a11y warning", "status": "backlog",
+     "priority": 3, "agent_id": crawbot,
+     "description": "Configure-agent button is nested inside the agent-select button; split into sibling controls."},
+    {"title": "Review wp-o5 build-gate hardening", "status": "review",
+     "priority": 1, "agent_id": roux,
+     "description": "Confirm the local build preflight now blocks pushes that skip artifact generation."},
+    {"title": "Migrate react-hooks eslint to v10", "status": "done",
+     "priority": 2, "agent_id": crawbot,
+     "description": "54 errors to zero with no behavior change; merged in #59."},
+    {"title": "Rebuild spend panel usage-first", "status": "done",
+     "priority": 2, "agent_id": roux,
+     "description": "Subscription sessions show token usage always; dollars only for metered providers."},
+])
+
+# --- Workflows (Automate): realistic multi-step agent workflows ---------------
+reseed("workflows", "/api/workflows", "name", [
+    {"name": "Nightly PR digest", "agent_id": roux,
+     "description": "Summarize the day's merged PRs and post a digest to Telegram each evening.",
+     "steps": [
+         {"name": "Collect merged PRs", "prompt": "List all PRs merged to main in the last 24h with author and summary."},
+         {"name": "Summarize", "prompt": "Write a concise digest grouping PRs by work package."},
+         {"name": "Deliver", "prompt": "Send the digest to the team Telegram channel."},
+     ]},
+    {"name": "Gate-2 review dispatch", "agent_id": roux,
+     "description": "On a new in-review PR, dispatch an independent model for spec-compliance review.",
+     "steps": [
+         {"name": "Detect in-review PR", "prompt": "Find the single PR currently awaiting Gate-2 review."},
+         {"name": "Run independent review", "prompt": "Review the diff against acceptance criteria; report PASS/FAIL with evidence."},
+         {"name": "Record finding", "prompt": "Post the verdict and any findings to the ledger."},
+     ]},
+    {"name": "Skill bloat scan", "agent_id": crawbot,
+     "description": "Weekly scan for oversized or stale skills and memory entries.",
+     "steps": [
+         {"name": "Scan skills + memory", "prompt": "Measure skill sizes and memory utilization against thresholds."},
+         {"name": "Report overruns", "prompt": "Flag anything over threshold and suggest consolidation."},
+     ]},
+])
+
+# --- Skills (Knowledge > Skills): realistic procedural skills -----------------
+reseed("skills", "/api/skills", "name", [
+    {"name": "three-gate-merge", "category": "devops", "agent_id": roux,
+     "description": "Authoritative local merge gate: build+tests, independent review, live render.",
+     "triggers": ["before merge", "pr ready", "gate check"],
+     "content": "# Three-Gate Merge\n\n1. Gate 1 — real build, vet, and full test suite green on a fresh DB.\n2. Gate 2 — independent model reviews the diff for spec compliance; re-verify every PASS claim.\n3. Gate 3 — live render in Chrome; zero new console errors.\n\nWhen CI runners are inert, the local loop is authoritative (ADR-005 D6)."},
+    {"name": "idempotent-api-seed", "category": "data", "agent_id": roux,
+     "description": "Seed demo data through the real REST API so the seed doubles as an e2e proof.",
+     "triggers": ["seed demo", "populate planes", "empty tabs"],
+     "content": "# Idempotent API Seed\n\nFor each plane: list existing, delete records whose title/name match the known seed set, then recreate. Keeps titles clean (no markers) while staying re-runnable. A green seed proves every create/list path end-to-end."},
+    {"name": "clean-worktree-grounding", "category": "github", "agent_id": crawbot,
+     "description": "Ground every session: verify repo root, remote, branch, worktree before substantive work.",
+     "triggers": ["new session", "before build", "worktree"],
+     "content": "# Clean Worktree Grounding\n\nBefore touching code: confirm repo root, remote URL, current branch, and that the target task belongs in THIS worktree. Cut a fresh worktree off origin/main rather than reusing a contested one."},
+])
+
+# --- Pipeline (Build > Pipeline): content across all four stages --------------
+# match_field="type" because pipeline records have no description field; type is
+# returned plainly by the API. Advanced items carry real `content` via _put so a
+# "published" article isn't an empty shell (outline-only).
+reseed("pipeline", "/api/pipeline", "title", [
+    {"title": "Agent OS launch announcement", "type": "blog",
+     "outline": "What a single pane of glass over every agent and project unlocks for solo builders.",
+     "_put": {"status": "published",
+              "content": "# Agent OS\n\nOne operating system for every project — personal and professional. Agent OS gives you a single pane of glass over every agent, work package, and tenant: live fleet status, token spend, the control plane, and full observability. No more tab-hopping between a dozen dashboards; the whole org of agents is one screen."}},
+    {"title": "How the three-gate review loop works", "type": "blog",
+     "outline": "Build+tests, independent spec review, live render — and why local gates can be authoritative.",
+     "_put": {"status": "human_review",
+              "content": "# The Three-Gate Review Loop\n\nEvery merge passes three gates: (1) a real build plus the full test suite on a fresh database, (2) an independent model reviewing the diff for spec compliance — and every PASS is re-verified, (3) a live render in the browser with zero new console errors. When CI runners are inert, this local loop is authoritative."}},
+    {"title": "Fleet radar: see every agent at once", "type": "social",
+     "outline": "Short thread on the work-event plane and live fleet observability.",
+     "_put": {"status": "ai_review",
+              "content": "Thread: every agent across every box reports into one work-event plane. Fleet radar shows who's running, who's stale, and who failed — in real time, across tenants. 1/4"}},
+    {"title": "Weekly build digest — work-package roundup", "type": "newsletter",
+     "outline": "Template for the automated nightly/weekly digest of merged work packages."},
+], match_field="type")
+
+print("[seed-ui-demo]   productivity planes seeded", flush=True)
+PY
+
 log "verification JSON follows; each listed endpoint must have a non-empty array"
 verify_endpoint "spend_personal" "$API_URL/api/spend?group_by=agent&tenant=personal" "rows"
 verify_endpoint "spend_dayjob" "$API_URL/api/spend?group_by=agent&tenant=dayjob" "rows"
@@ -262,5 +462,10 @@ verify_endpoint "fleet_dayjob" "$API_URL/api/fleet?tenant=dayjob" "sessions"
 verify_endpoint "ledger_runs" "$API_URL/api/ledger/runs" "records"
 verify_endpoint "ledger_findings" "$API_URL/api/ledger/findings" "records"
 verify_endpoint "ledger_recurrence" "$API_URL/api/ledger/recurrence?min_count=2" "records"
+verify_endpoint "goals" "$API_URL/api/goals" "__array__"
+verify_endpoint "tasks" "$API_URL/api/tasks" "__array__"
+verify_endpoint "workflows" "$API_URL/api/workflows" "__array__"
+verify_endpoint "skills" "$API_URL/api/skills" "__array__"
+verify_endpoint "pipeline" "$API_URL/api/pipeline" "__array__"
 
 log "done"
