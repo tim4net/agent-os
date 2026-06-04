@@ -182,6 +182,7 @@ export function FileTree({ onFileSelect, selectedPath }: FileTreeProps) {
   const [synthesisOpen, setSynthesisOpen] = useState(false)
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- async data fetch; setState lands after await
     setLoading(true)
     setError(null)
     // Load root with depth=0 (lazy loading — only top-level items, no children)

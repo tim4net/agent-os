@@ -32,6 +32,7 @@ export function GoalList() {
   }, [])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- async data fetch; setState lands after await, not synchronously
     loadGoals()
   }, [loadGoals])
 

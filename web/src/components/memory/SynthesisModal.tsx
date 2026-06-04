@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { saveMemoryFile, synthesizeMemory } from '../../api/client'
-import { showToast } from '../Toast'
+import { showToast } from '../toast-bus'
 import { Icon } from '../Icon'
 
 interface SynthesisModalProps {

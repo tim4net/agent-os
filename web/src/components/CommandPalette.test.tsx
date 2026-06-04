@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import CommandPalette, { scoreMatch, filterItems } from './CommandPalette'
+import CommandPalette from './CommandPalette'
+import { scoreMatch, filterItems } from './command-palette-utils'
 import type { Agent } from '../api/client'
 
 const mockTabs = ['Chat', 'Create', 'Build', 'Knowledge', 'Automate', 'Observe', 'Control', 'Settings'] as const

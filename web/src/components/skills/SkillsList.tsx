@@ -59,6 +59,7 @@ export function SkillsList() {
   }, [])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- async data fetch; setState lands after await
     loadSkills()
   }, [loadSkills])
 

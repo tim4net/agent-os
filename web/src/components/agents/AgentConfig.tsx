@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { Agent } from '../../api/client'
 import { getAgentConfig, updateAgentConfig } from '../../api/client'
-import { showToast } from '../Toast'
+import { showToast } from '../toast-bus'
 
 interface AgentConfigProps {
   agent: Agent
@@ -16,6 +16,7 @@ export function AgentConfig({ agent, onClose, onSaved }: AgentConfigProps) {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- async data fetch; loading state starts the agent config request and result state lands after the promise settles
     setLoading(true)
     getAgentConfig(agent.id)
       .then((config) => {

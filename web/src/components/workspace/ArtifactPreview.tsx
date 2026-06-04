@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import type { Artifact, LinkedNote } from '../../api/client'
 import { deleteArtifact, getArtifactNotes, exportArtifact } from '../../api/client'
-import { showToast } from '../Toast'
+import { showToast } from '../toast-bus'
 import { Icon } from '../Icon'
 
 interface ArtifactPreviewProps {
@@ -28,6 +28,7 @@ export function ArtifactPreview({ artifact, onClose, onDeleted }: ArtifactPrevie
   // Fetch actual content for code/text artifacts
   useEffect(() => {
     if (artifact.artifact_type === 'code' || artifact.artifact_type === 'text') {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- async data fetch; setState lands after await
       setLoadingText(true)
       fetch(`/api/artifacts/${artifact.id}/file`)
         .then((res) => {

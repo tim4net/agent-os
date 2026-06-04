@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { checkHealth } from '../api/client'
 
 interface StatusFooterProps {
@@ -9,6 +9,9 @@ interface StatusFooterProps {
 export function StatusFooter({ sseConnected, agents = [] }: StatusFooterProps) {
   const [backendStatus, setBackendStatus] = useState<'ok' | 'error' | 'checking'>('checking')
   const [lastCheck, setLastCheck] = useState<number>(0)
+  // A 1s clock so the "Xs ago" label updates live without reading Date.now()
+  // in the render body (which the react-hooks/purity rule forbids).
+  const [now, setNow] = useState<number>(() => Date.now())
 
   useEffect(() => {
     async function check() {
@@ -28,14 +31,26 @@ export function StatusFooter({ sseConnected, agents = [] }: StatusFooterProps) {
     return () => clearInterval(interval)
   }, [])
 
+  useEffect(() => {
+    const tick = setInterval(() => setNow(Date.now()), 1_000)
+    return () => clearInterval(tick)
+  }, [])
+
   const backendOk = backendStatus === 'ok'
   const backendChecking = backendStatus === 'checking'
 
-  const ago = lastCheck > 0 ? `${Math.round((Date.now() - lastCheck) / 1000)}s ago` : ''
+  // Elapsed since the last health check, derived from the ticking clock (no
+  // Date.now() in render — `now` is the impure read, captured in state).
+  const ago = lastCheck > 0 ? `${Math.max(0, Math.round((now - lastCheck) / 1000))}s ago` : ''
+
   // Backend now handles visibility filtering (agents.visible column)
-  const userAgents = agents.filter(a => a.status)
-  const onlineAgents = userAgents.filter(a => a.status === 'online').length
-  const totalAgents = userAgents.length
+  const { onlineAgents, totalAgents } = useMemo(() => {
+    const userAgents = agents.filter(a => a.status)
+    return {
+      onlineAgents: userAgents.filter(a => a.status === 'online').length,
+      totalAgents: userAgents.length,
+    }
+  }, [agents])
 
   return (
     <footer className="flex items-center gap-4 px-5 py-1 flex-shrink-0 bg-[var(--bg-base)]">

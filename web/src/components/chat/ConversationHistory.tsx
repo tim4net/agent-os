@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react'
+import { useCallback, useEffect, useState, useMemo } from 'react'
 import type { Agent, Conversation } from '../../api/client'
 import { listConversations } from '../../api/client'
 
@@ -20,6 +20,7 @@ export function ConversationHistory({
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- async data fetch; loading state starts the conversation list request and result state lands after the promise settles
     setLoading(true)
     setError(null)
     listConversations()
@@ -28,10 +29,10 @@ export function ConversationHistory({
       .finally(() => setLoading(false))
   }, [currentConversationId])
 
-  function getAgentName(agentId: string): string {
+  const getAgentName = useCallback((agentId: string): string => {
     const agent = agents.find((a) => a.id === agentId)
     return agent?.display_name || agent?.name || agentId
-  }
+  }, [agents])
 
   // Group conversations by agent_id for better organization
   const groupedConversations = useMemo(() => {
@@ -44,7 +45,7 @@ export function ConversationHistory({
       groups.get(conv.agent_id)!.convos.push(conv)
     }
     return Array.from(groups.entries())
-  }, [conversations, agents])
+  }, [conversations, getAgentName])
 
   return (
     <div className="flex flex-col h-full bg-gray-900/50">

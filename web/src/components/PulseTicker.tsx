@@ -5,7 +5,7 @@ import {
   getTenantStyles, 
   getSessionStatusStyles, 
   getIncidentStatusColor 
-} from './MissionControl'
+} from './mission-control-helpers'
 import type { SessionStatus, Incident } from '../api/client'
 
 export interface PulseItem {
@@ -44,8 +44,10 @@ export default function PulseTicker({
 
   const pulseItems = useMemo(() => {
     const items: PulseItem[] = []
+    const srcSessions = Array.isArray(sessions) ? sessions : []
+    const srcIncidents = Array.isArray(incidents) ? incidents : []
 
-    safeSessions.forEach((s, idx) => {
+    srcSessions.forEach((s, idx) => {
       if (!s) return
       items.push({
         kind: 'session',
@@ -58,7 +60,7 @@ export default function PulseTicker({
       })
     })
 
-    safeIncidents.forEach((i, idx) => {
+    srcIncidents.forEach((i, idx) => {
       if (!i) return
       items.push({
         kind: 'incident',
@@ -79,7 +81,7 @@ export default function PulseTicker({
         return (isNaN(timeB) ? 0 : timeB) - (isNaN(timeA) ? 0 : timeA)
       })
       .slice(0, 12)
-  }, [safeSessions, safeIncidents])
+  }, [sessions, incidents])
 
   const showLoading = loading && safeSessions.length === 0 && safeIncidents.length === 0
 

@@ -1,35 +1,10 @@
 import { useEffect, useState, useMemo, useRef } from 'react'
 import { getFleet, type SessionStatus } from '../../api/client'
 import { Icon } from '../Icon'
+import { getAngleFromSessionId, tenantLabel } from './fleet-radar-helpers'
 
 interface FleetRadarProps {
   tenant: string
-}
-
-// Display label for an internal tenant key. The 'dayjob' key is internal-only;
-// every user-visible surface must show 'Work'. Keeps the radar consistent with
-// Mission Control's tenant switcher labels.
-export function tenantLabel(tenant: string): string {
-  switch (tenant) {
-    case 'dayjob':
-      return 'Work'
-    case 'personal':
-      return 'Personal'
-    case 'all':
-      return 'All'
-    default:
-      return tenant
-  }
-}
-
-// Deterministic string hashing function to return angle in radians [0, 2*PI]
-export function getAngleFromSessionId(sessionId: string): number {
-  let hash = 0
-  for (let i = 0; i < sessionId.length; i++) {
-    hash = sessionId.charCodeAt(i) + ((hash << 5) - hash)
-  }
-  const degrees = Math.abs(hash) % 360
-  return (degrees * Math.PI) / 180
 }
 
 function syncedRel(iso: string): string {
@@ -60,7 +35,7 @@ export function FleetRadar({ tenant }: FleetRadarProps) {
   // Auto-refresh coordinates and relative times every 5 seconds
   useEffect(() => {
     const interval = setInterval(() => {
-      setTick((t) => t + 1)
+      setTick(Date.now())
     }, 5000)
     return () => clearInterval(interval)
   }, [])
@@ -73,6 +48,7 @@ export function FleetRadar({ tenant }: FleetRadarProps) {
       getFleet(tenant)
         .then((res) => {
           if (!cancelled) {
+            setTick(Date.now())
             setSessions(res.sessions ?? [])
             setError(null)
           }
@@ -89,6 +65,7 @@ export function FleetRadar({ tenant }: FleetRadarProps) {
         })
     }
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- starts async fleet fetch/polling on tenant change; loading tracks external request lifecycle, not render-derived state.
     setLoading(true)
     fetchFleet()
 
@@ -100,13 +77,12 @@ export function FleetRadar({ tenant }: FleetRadarProps) {
     }
   }, [tenant])
 
-  const now = useMemo(() => {
-    // eslint-disable-next-line @typescript-eslint/no-unused-expressions
-    tick
-    return Date.now()
+  const { now, maxWindow } = useMemo(() => {
+    return {
+      now: tick,
+      maxWindow: 12 * 60 * 60 * 1000, // 12 hours
+    }
   }, [tick])
-
-  const maxWindow = 12 * 60 * 60 * 1000 // 12 hours
   const minRadius = 25
   const maxRadius = 175
 
@@ -132,7 +108,7 @@ export function FleetRadar({ tenant }: FleetRadarProps) {
         angle,
       }
     })
-  }, [sessions, now])
+  }, [sessions, now, maxWindow])
 
   // Aggregate counts per status
   const counts = useMemo(() => {
