@@ -11,17 +11,24 @@ import (
 )
 
 type Querier interface {
-	// Aggregates cost_usd + num_turns (from telemetry) from work_events, grouped by the
-	// requested dimension (agent/harness, project, tenant, or day). Pure read over
-	// existing work_events — no migration needed (WP-K).
-	// Cost has ONE source of truth: top-level cost_usd (contract §5).
-	// Turns are counted from payload->telemetry->turns (non-null only).
-	// Tenant-scoped: @tenant = '' returns all tenants; otherwise scopes to one.
-	// external_ref filter: @external_ref = '' returns all; otherwise scopes to one.
-	// Per the work-event contract (§5, lines 213-215), cost_usd is "cumulative for the
-	// session; non-decreasing" and "latest received_at wins." We dedupe to the latest
-	// event per (harness, session_id) before rolling up, so a session that emits
-	// start=$0.05 then end=$0.07 contributes $0.07, not $0.12.
+	// Aggregates USAGE (tokens_used + turns) and cost_usd from work_events, grouped by
+	// the requested dimension (agent/harness, project, tenant, or day). Pure read over
+	// existing work_events.
+	//
+	// Provider-aware spend (Option A): token/turn usage is ALWAYS meaningful and is the
+	// primary metric. cost_usd is OPTIONAL — subscription accounts never report it, so we
+	// must NOT drop sessions that lack a dollar figure (the old `WHERE cost_usd IS NOT NULL`
+	// + `HAVING SUM(cost_usd) > 0` did exactly that, hiding all subscription usage). cost_usd
+	// is summed as a nullable value: NULL when no session in the group reported a cost.
+	//
+	// Per contract §5, cost_usd / telemetry is cumulative for the session and "latest
+	// received_at wins"; we dedupe to the latest event per (harness, session_id) before
+	// rolling up. tokens_used and turns come from payload->telemetry (non-core fields).
+	// Tenant-scoped: @tenant = '' returns all tenants; otherwise scopes to one (UNCHANGED —
+	// this isolation predicate is load-bearing and must not regress).
+	// Include any group with real activity: tokens OR turns OR a dollar cost. This keeps
+	// subscription agents (cost NULL, tokens > 0) visible while still excluding empty noise.
+	// Usage-first ordering: most tokens, then turns, then dollars (nulls last).
 	AggregateSpend(ctx context.Context, arg AggregateSpendParams) ([]AggregateSpendRow, error)
 	AppendFinding(ctx context.Context, arg AppendFindingParams) (Finding, error)
 	AppendRunLog(ctx context.Context, arg AppendRunLogParams) (RunLog, error)
@@ -47,9 +54,9 @@ type Querier interface {
 	// Counts distinct (harness, session_id) pairs that have at least one
 	// session lifecycle event for a given tenant.
 	CountSessions(ctx context.Context, tenant string) (int64, error)
-	// Returns the total count of non-zero-cost groups matching the given filters,
-	// without applying LIMIT/OFFSET. Used when the main query returns zero rows
-	// (offset past end) so Total is still accurate.
+	// Returns the total count of active groups matching the given filters, without
+	// LIMIT/OFFSET. "Active" mirrors AggregateSpend's HAVING (tokens OR turns OR cost),
+	// so the count stays consistent with the rows actually returned.
 	CountSpendGroups(ctx context.Context, arg CountSpendGroupsParams) (int64, error)
 	CountSubtasks(ctx context.Context, parentTaskID pgtype.UUID) (int64, error)
 	CountTrackerItemsByProject(ctx context.Context, arg CountTrackerItemsByProjectParams) (int64, error)

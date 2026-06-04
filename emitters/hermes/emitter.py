@@ -98,6 +98,36 @@ class LivenessMode(str, Enum):
     BOUNDED = "bounded"
 
 
+# Frozen telemetry field set (contract §5). Telemetry field NAMES are frozen, and
+# cost has ONE source of truth: top-level cost_usd. We refuse to write any other
+# key into payload.telemetry so a core-interpreted field (cost_usd, billing_mode,
+# liveness_mode, ...) can never leak in and be silently ignored or double-counted.
+_ALLOWED_TELEMETRY_KEYS = frozenset(
+    {"model", "context_window", "tokens_used", "turn_ms", "turns"}
+)
+
+
+def _clean_telemetry(telemetry: dict[str, Any]) -> dict[str, Any]:
+    """Drop None values and reject any key not frozen by contract §5.
+
+    A rejected key (e.g. cost_usd, billing_mode) raises ValueError rather than
+    being silently dropped, so a caller mis-routing cost through telemetry fails
+    loudly at the source instead of producing a contract-violating event.
+    """
+    cleaned: dict[str, Any] = {}
+    for k, v in telemetry.items():
+        if v is None:
+            continue
+        if k not in _ALLOWED_TELEMETRY_KEYS:
+            raise ValueError(
+                f"telemetry key {k!r} is not a contract §5 field "
+                f"(allowed: {sorted(_ALLOWED_TELEMETRY_KEYS)}); "
+                f"cost belongs at top-level cost_usd"
+            )
+        cleaned[k] = v
+    return cleaned
+
+
 # ---------------------------------------------------------------------------
 # Work-event builder
 # ---------------------------------------------------------------------------
@@ -422,8 +452,15 @@ class HermesEmitter:
         *,
         cost_usd: float | None = None,
         title: str | None = None,
+        telemetry: dict[str, Any] | None = None,
     ) -> int:
         """Emit a ``session.end`` event with a terminal status.
+
+        ``telemetry`` (optional) self-reports usage at ``payload.telemetry`` per
+        contract §5 — e.g. ``model``, ``context_window``, ``tokens_used``, ``turns``.
+        Only non-None fields are sent; a missing/empty block is omitted entirely
+        (never fabricate a value — contract §5 / F10). Cost stays the top-level
+        ``cost_usd`` (single source of truth); telemetry carries no cost field.
 
         Returns the HTTP status code.
         Raises ``_PostError`` if the endpoint rejects or is unreachable
@@ -443,6 +480,11 @@ class HermesEmitter:
             ev.cost_usd = cost_usd
         if title is not None:
             ev.title = title
+        if telemetry:
+            # Drop None fields and reject non-contract keys (contract §5/F10).
+            clean = _clean_telemetry(telemetry)
+            if clean:
+                ev.payload = {**ev.payload, "telemetry": clean}
         self._ended = True
         await self._stop_heartbeats()
         return await self._post(ev)
@@ -483,16 +525,22 @@ class HermesEmitter:
         project_hint: str | None = None,
         external_ref: str | None = None,
         cost_usd: float | None = None,
+        telemetry: dict[str, Any] | None = None,
     ) -> _SupervisedSession:
         """Return an async context manager that wraps a supervised session.
 
         Emits session.start on entry, starts heartbeats, emits session.end
         on exit (done, cancelled, or failed based on exit conditions).
 
+        Usage telemetry (tokens, turns, model) is usually only known once work
+        finishes, so update it during the block via ``session.record(...)``; the
+        latest values are reported on the terminal session.end (contract §5).
+
         Example::
 
-            async with emitter.supervised(title="fix auth bug"):
-                await do_work()
+            async with emitter.supervised(title="fix auth bug") as s:
+                result = await do_work()
+                s.record(tokens_used=result.tokens, model=result.model, turns=result.turns)
         """
         return _SupervisedSession(
             emitter=self,
@@ -500,6 +548,7 @@ class HermesEmitter:
             project_hint=project_hint,
             external_ref=external_ref,
             cost_usd=cost_usd,
+            telemetry=dict(telemetry) if telemetry else {},
         )
 
     async def close(self) -> None:
@@ -517,6 +566,28 @@ class _SupervisedSession:
     project_hint: str | None = None
     external_ref: str | None = None
     cost_usd: float | None = None
+    telemetry: dict[str, Any] = field(default_factory=dict)
+
+    def record(self, **fields: Any) -> None:
+        """Update usage telemetry to report on session.end (contract §5).
+
+        Call during the supervised block as usage becomes known, e.g.
+        ``s.record(tokens_used=142378, model="claude-opus-4-8", turns=7)``.
+        None values are ignored so a metric is never fabricated. Later calls
+        overwrite earlier values for the same key (latest wins). Keys outside
+        the frozen contract §5 set (e.g. ``cost_usd``) raise ValueError — cost
+        is reported via the top-level ``cost_usd``, never through telemetry.
+        """
+        for k, v in fields.items():
+            if v is None:
+                continue
+            if k not in _ALLOWED_TELEMETRY_KEYS:
+                raise ValueError(
+                    f"telemetry key {k!r} is not a contract §5 field "
+                    f"(allowed: {sorted(_ALLOWED_TELEMETRY_KEYS)}); "
+                    f"cost belongs at top-level cost_usd"
+                )
+            self.telemetry[k] = v
 
     async def __aenter__(self) -> _SupervisedSession:
         await self.emitter.start(
@@ -531,7 +602,9 @@ class _SupervisedSession:
         if exc_type is not None and issubclass(exc_type, asyncio.CancelledError):
             # CancelledError → emit end("cancelled") and re-raise
             try:
-                await self.emitter.end(Status.CANCELLED.value, cost_usd=self.cost_usd)
+                await self.emitter.end(
+                    Status.CANCELLED.value, cost_usd=self.cost_usd, telemetry=self.telemetry
+                )
             except _PostError as post_err:
                 logger.warning(
                     "agentos.hermes: terminal session.end POST failed "
@@ -543,7 +616,9 @@ class _SupervisedSession:
             # Work raised an exception — try to emit end("failed") but
             # NEVER let a delivery failure mask the original exception.
             try:
-                await self.emitter.end(Status.FAILED.value, cost_usd=self.cost_usd)
+                await self.emitter.end(
+                    Status.FAILED.value, cost_usd=self.cost_usd, telemetry=self.telemetry
+                )
             except _PostError as post_err:
                 logger.warning(
                     "agentos.hermes: terminal session.end POST failed "
@@ -552,7 +627,9 @@ class _SupervisedSession:
                     repr(exc_val),
                 )
         else:
-            await self.emitter.end(Status.DONE.value, cost_usd=self.cost_usd)
+            await self.emitter.end(
+                Status.DONE.value, cost_usd=self.cost_usd, telemetry=self.telemetry
+            )
         # Always re-raise exceptions — the emitter recorded the failure but
         # the caller should see it.
         return False

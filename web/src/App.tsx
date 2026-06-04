@@ -26,6 +26,7 @@ import { ControlView } from './components/control/ControlView'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { StatusFooter } from './components/StatusFooter'
 import { ToastContainer } from './components/Toast'
+import CommandPalette from './components/CommandPalette'
 
 const MOBILE_BREAKPOINT = 768
 
@@ -73,6 +74,7 @@ function App() {
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false) // mobile overlay
+  const [paletteOpen, setPaletteOpen] = useState(false)
   const [isMobile, setIsMobile] = useState(false)
   const [artifactGridKey, setArtifactGridKey] = useState(0)
   const [memoryFilePath, setMemoryFilePath] = useState<string | null>(null)
@@ -105,6 +107,18 @@ function App() {
     return () => window.removeEventListener('resize', checkMobile)
   }, [])
 
+  // Listen for global command palette keyboard shortcut (⌘K / Ctrl+K)
+  useEffect(() => {
+    function handleGlobalKeyDown(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setPaletteOpen((prev) => !prev)
+      }
+    }
+    window.addEventListener('keydown', handleGlobalKeyDown)
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown)
+  }, [])
+
   const handleSelectAgent = useCallback((agent: Agent) => {
     setSelectedAgent(agent)
     setActiveTab('Chat')
@@ -130,11 +144,9 @@ function App() {
       }
     }
 
-    const onlineAgent = agents.find((a) => a.status === 'online')
-    if (onlineAgent) {
-      setSelectedAgent(onlineAgent)
-      setActiveTab('Chat')
-    }
+    // Fresh load (no active conversation to restore) lands on Mission Control —
+    // the SPOG home. We intentionally do NOT auto-select an online agent here,
+    // which would bury the dashboard behind a chat view on every page load.
   }, [agents])
 
   // Persist active conversation to sessionStorage on change
@@ -502,6 +514,17 @@ function App() {
 
       {/* Global toast container */}
       <ToastContainer />
+
+      {/* Command Palette */}
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        tabs={tabs}
+        agents={agents}
+        onNavigate={(tab) => setActiveTab(tab as Tab)}
+        onSelectAgent={handleSelectAgent}
+        onNewChat={handleNewChat}
+      />
     </div>
   )
 }
