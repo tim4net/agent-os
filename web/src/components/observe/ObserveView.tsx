@@ -4,8 +4,9 @@ import { Icon } from '../Icon'
 import { WorkUnitCard } from './WorkUnitCard'
 import { UncorrelatedBucket } from './UncorrelatedBucket'
 import { TrackersView } from './TrackersView'
+import { FleetRadar } from './FleetRadar'
 
-type SubView = 'activity' | 'trackers'
+type SubView = 'activity' | 'trackers' | 'radar'
 
 /** Default tenant. Mixing tenants in one glance is what the ADR-002 wall prevents,
  *  so we default to 'personal' and offer an explicit switcher. */
@@ -63,7 +64,7 @@ export function ObserveView() {
           </label>
           {/* sub-tabs */}
           <div className="flex gap-1.5">
-            {(['activity', 'trackers'] as SubView[]).map((s) => (
+            {(['activity', 'trackers', 'radar'] as SubView[]).map((s) => (
               <button
                 key={s}
                 onClick={() => setSub(s)}
@@ -84,6 +85,8 @@ export function ObserveView() {
       <div className="flex-1 min-h-0 overflow-auto">
         {sub === 'trackers' ? (
           <TrackersView tenant={tenant} />
+        ) : sub === 'radar' ? (
+          <FleetRadar tenant={tenant} />
         ) : (
           <div className="p-6">
             {/* stat row */}
