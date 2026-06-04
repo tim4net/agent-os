@@ -6,6 +6,22 @@ interface FleetRadarProps {
   tenant: string
 }
 
+// Display label for an internal tenant key. The 'dayjob' key is internal-only;
+// every user-visible surface must show 'Work'. Keeps the radar consistent with
+// Mission Control's tenant switcher labels.
+export function tenantLabel(tenant: string): string {
+  switch (tenant) {
+    case 'dayjob':
+      return 'Work'
+    case 'personal':
+      return 'Personal'
+    case 'all':
+      return 'All'
+    default:
+      return tenant
+  }
+}
+
 // Deterministic string hashing function to return angle in radians [0, 2*PI]
 export function getAngleFromSessionId(sessionId: string): number {
   let hash = 0
@@ -253,7 +269,7 @@ export function FleetRadar({ tenant }: FleetRadarProps) {
                 {counts.total}
               </text>
               <text x="200" y="210" textAnchor="middle" className="fill-[var(--text-muted)] text-[8px] uppercase tracking-wider font-mono font-semibold">
-                {tenant}
+                {tenantLabel(tenant)}
               </text>
             </g>
 
@@ -346,7 +362,7 @@ export function FleetRadar({ tenant }: FleetRadarProps) {
                 <Icon name="radar" className="text-[var(--color-text-muted)] mb-1 flex justify-center" size={24} />
                 <h4 className="text-xs font-bold text-[var(--color-text-primary)] uppercase tracking-wider">No active signal</h4>
                 <p className="text-[11px] text-[var(--color-text-muted)] mt-1.5 leading-relaxed">
-                  No sessions found for tenant <span className="font-mono text-[var(--color-text-secondary)] font-semibold">{tenant}</span>
+                  No sessions found for tenant <span className="font-mono text-[var(--color-text-secondary)] font-semibold">{tenantLabel(tenant)}</span>
                 </p>
               </div>
             </div>

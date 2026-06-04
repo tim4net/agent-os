@@ -129,15 +129,18 @@ func (a *API) GetSpend(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// Provider/billing mode is only authoritative for agent-grouped rows,
-		// where dimension_key == harness → a single provider (Option A). For
-		// project/tenant/day a group can span providers, so leave it unknown.
-		var provider string
-		billingMode := string(BillingUnknown)
+		// Provider/billing mode resolves from the group's representative telemetry
+		// model (most specific signal) plus harness. For agent groups the harness
+		// is constant; the model refines it (e.g. harness=generic + model=gpt-* →
+		// openai/metered). For project/tenant/day a group can span providers, but
+		// a homogeneous group still classifies correctly; mixed groups fall back to
+		// the dominant model captured by the query.
+		harnessHint := ""
 		if groupBy == "agent" {
-			provider = ResolveProvider(row.DimensionKey, "")
-			billingMode = string(BillingModeFor(provider))
+			harnessHint = row.DimensionKey
 		}
+		provider := ResolveProvider(harnessHint, row.GroupModel)
+		billingMode := string(BillingModeFor(provider))
 
 		// For subscription/unknown groups, a dollar figure is not a real bill —
 		// suppress it so the UI never presents fabricated cost as spend.

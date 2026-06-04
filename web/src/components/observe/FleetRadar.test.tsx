@@ -58,7 +58,9 @@ describe('FleetRadar Component', () => {
     // Grid details should render
     expect(screen.getByText('No active signal')).toBeInTheDocument()
     expect(screen.getByText(/No sessions found for tenant/i)).toBeInTheDocument()
-    expect(screen.getAllByText('dayjob').length).toBeGreaterThan(0)
+    // Internal 'dayjob' key must be displayed as 'Work', never leaked raw.
+    expect(screen.getAllByText('Work').length).toBeGreaterThan(0)
+    expect(screen.queryByText('dayjob')).not.toBeInTheDocument()
     expect(screen.getAllByText('0').length).toBe(5) // Center label total + 4 legend items
   })
 

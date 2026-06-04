@@ -98,6 +98,36 @@ class LivenessMode(str, Enum):
     BOUNDED = "bounded"
 
 
+# Frozen telemetry field set (contract §5). Telemetry field NAMES are frozen, and
+# cost has ONE source of truth: top-level cost_usd. We refuse to write any other
+# key into payload.telemetry so a core-interpreted field (cost_usd, billing_mode,
+# liveness_mode, ...) can never leak in and be silently ignored or double-counted.
+_ALLOWED_TELEMETRY_KEYS = frozenset(
+    {"model", "context_window", "tokens_used", "turn_ms", "turns"}
+)
+
+
+def _clean_telemetry(telemetry: dict[str, Any]) -> dict[str, Any]:
+    """Drop None values and reject any key not frozen by contract §5.
+
+    A rejected key (e.g. cost_usd, billing_mode) raises ValueError rather than
+    being silently dropped, so a caller mis-routing cost through telemetry fails
+    loudly at the source instead of producing a contract-violating event.
+    """
+    cleaned: dict[str, Any] = {}
+    for k, v in telemetry.items():
+        if v is None:
+            continue
+        if k not in _ALLOWED_TELEMETRY_KEYS:
+            raise ValueError(
+                f"telemetry key {k!r} is not a contract §5 field "
+                f"(allowed: {sorted(_ALLOWED_TELEMETRY_KEYS)}); "
+                f"cost belongs at top-level cost_usd"
+            )
+        cleaned[k] = v
+    return cleaned
+
+
 # ---------------------------------------------------------------------------
 # Work-event builder
 # ---------------------------------------------------------------------------
@@ -451,8 +481,8 @@ class HermesEmitter:
         if title is not None:
             ev.title = title
         if telemetry:
-            # Strip None fields so a missing metric is never fabricated (contract §5/F10).
-            clean = {k: v for k, v in telemetry.items() if v is not None}
+            # Drop None fields and reject non-contract keys (contract §5/F10).
+            clean = _clean_telemetry(telemetry)
             if clean:
                 ev.payload = {**ev.payload, "telemetry": clean}
         self._ended = True
@@ -544,11 +574,20 @@ class _SupervisedSession:
         Call during the supervised block as usage becomes known, e.g.
         ``s.record(tokens_used=142378, model="claude-opus-4-8", turns=7)``.
         None values are ignored so a metric is never fabricated. Later calls
-        overwrite earlier values for the same key (latest wins).
+        overwrite earlier values for the same key (latest wins). Keys outside
+        the frozen contract §5 set (e.g. ``cost_usd``) raise ValueError — cost
+        is reported via the top-level ``cost_usd``, never through telemetry.
         """
         for k, v in fields.items():
-            if v is not None:
-                self.telemetry[k] = v
+            if v is None:
+                continue
+            if k not in _ALLOWED_TELEMETRY_KEYS:
+                raise ValueError(
+                    f"telemetry key {k!r} is not a contract §5 field "
+                    f"(allowed: {sorted(_ALLOWED_TELEMETRY_KEYS)}); "
+                    f"cost belongs at top-level cost_usd"
+                )
+            self.telemetry[k] = v
 
     async def __aenter__(self) -> _SupervisedSession:
         await self.emitter.start(

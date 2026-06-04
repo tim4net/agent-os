@@ -19,8 +19,13 @@ WITH latest_per_session AS (
         tenant,
         ts::date                       AS day,
         cost_usd,
-        (payload->'telemetry'->>'turns')::int        AS turns,
-        (payload->'telemetry'->>'tokens_used')::bigint AS tokens_used,
+        -- Guarded numeric extraction: a single malformed telemetry value
+        -- (e.g. "tokens_used":"abc") must NOT 500 the whole spend query.
+        CASE WHEN jsonb_typeof(payload->'telemetry'->'turns') = 'number'
+             THEN (payload->'telemetry'->>'turns')::int END        AS turns,
+        CASE WHEN jsonb_typeof(payload->'telemetry'->'tokens_used') = 'number'
+             THEN (payload->'telemetry'->>'tokens_used')::bigint END AS tokens_used,
+        payload->'telemetry'->>'model' AS model,
         external_ref
     FROM work_events
     WHERE ($4::text = '' OR tenant = $4::text)
@@ -35,7 +40,8 @@ spend_source AS (
         day,
         cost_usd,
         turns,
-        tokens_used
+        tokens_used,
+        model
     FROM latest_per_session
 )
 SELECT
@@ -50,6 +56,11 @@ SELECT
     COALESCE(SUM(COALESCE(tokens_used, 0)), 0)::bigint    AS total_tokens,
     COALESCE(SUM(COALESCE(turns, 0)), 0)::bigint          AS total_turns,
     COUNT(*)::bigint                                      AS session_count,
+    -- Representative telemetry model for the group (latest-token session wins via
+    -- MAX; for agent groups the harness is constant so the model refines the
+    -- provider, fixing harness=generic + model=gpt-* metered classification).
+    -- COALESCE to '' so a group with no telemetry model scans as empty, not NULL.
+    COALESCE(MAX(model), '')::text                       AS group_model,
     COUNT(*) OVER()::bigint                               AS total_groups
 FROM spend_source
 GROUP BY
@@ -84,6 +95,7 @@ type AggregateSpendRow struct {
 	TotalTokens  int64          `json:"total_tokens"`
 	TotalTurns   int64          `json:"total_turns"`
 	SessionCount int64          `json:"session_count"`
+	GroupModel   string         `json:"group_model"`
 	TotalGroups  int64          `json:"total_groups"`
 }
 
@@ -126,6 +138,7 @@ func (q *Queries) AggregateSpend(ctx context.Context, arg AggregateSpendParams) 
 			&i.TotalTokens,
 			&i.TotalTurns,
 			&i.SessionCount,
+			&i.GroupModel,
 			&i.TotalGroups,
 		); err != nil {
 			return nil, err
@@ -146,8 +159,10 @@ WITH latest_per_session AS (
         tenant,
         ts::date                       AS day,
         cost_usd,
-        (payload->'telemetry'->>'turns')::int        AS turns,
-        (payload->'telemetry'->>'tokens_used')::bigint AS tokens_used,
+        CASE WHEN jsonb_typeof(payload->'telemetry'->'turns') = 'number'
+             THEN (payload->'telemetry'->>'turns')::int END        AS turns,
+        CASE WHEN jsonb_typeof(payload->'telemetry'->'tokens_used') = 'number'
+             THEN (payload->'telemetry'->>'tokens_used')::bigint END AS tokens_used,
         external_ref
     FROM work_events
     WHERE ($2::text = '' OR tenant = $2::text)

@@ -75,7 +75,6 @@ _telemetry = {
     "model": _model,
     "context_window": _ctx,
     "turns": _turns,
-    "model_calls": max(1, _turns // 3),
 }
 if _tokens_used > 0:
     _telemetry["tokens_used"] = _tokens_used

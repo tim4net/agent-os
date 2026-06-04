@@ -388,6 +388,21 @@ class TestHermesEmitter:
         await em.close()
 
     @pytest.mark.asyncio
+    async def test_end_telemetry_rejects_non_contract_keys(self) -> None:
+        """Cost has ONE source of truth (top-level cost_usd). Routing it through
+        telemetry must fail loudly, not silently produce a contract-violating
+        event (contract §5: telemetry field names are frozen)."""
+        em = self._make_emitter()
+        with pytest.raises(ValueError, match="cost_usd"):
+            await em.end(
+                "done",
+                telemetry={"tokens_used": 5000, "cost_usd": 1.23},
+            )
+        # Nothing should have been posted — the event was rejected at build time.
+        assert not em._test_posted  # type: ignore[attr-defined]
+        await em.close()
+
+    @pytest.mark.asyncio
     async def test_end_empty_telemetry_omits_block(self) -> None:
         """An all-None / empty telemetry dict produces no telemetry sub-block."""
         em = self._make_emitter()

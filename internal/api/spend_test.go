@@ -58,6 +58,9 @@ func seedWorkEvent(t *testing.T, pool *pgxpool.Pool, harness, tenant string, cos
 	if cfg.tokens > 0 {
 		teleParts = append(teleParts, `"tokens_used":`+strconv.Itoa(cfg.tokens))
 	}
+	if cfg.model != "" {
+		teleParts = append(teleParts, `"model":"`+cfg.model+`"`)
+	}
 	payload := "{}"
 	if len(teleParts) > 0 {
 		payload = `{"telemetry":{` + strings.Join(teleParts, ",") + `}}`
@@ -106,6 +109,7 @@ type seedConfig struct {
 	projectID   string
 	externalRef string
 	tokens      int
+	model       string
 }
 
 // seedOpt is a functional option for seedWorkEvent.
@@ -114,6 +118,12 @@ type seedOpt func(*seedConfig)
 // withTokens sets telemetry.tokens_used for the event (usage metric).
 func withTokens(n int) seedOpt {
 	return func(c *seedConfig) { c.tokens = n }
+}
+
+// withModel sets telemetry.model for the event. Drives provider/billing
+// resolution (e.g. model "gpt-5.5" → openai → metered) independent of harness.
+func withModel(m string) seedOpt {
+	return func(c *seedConfig) { c.model = m }
 }
 
 // costVal dereferences a nullable cost pointer, failing the test if nil.
@@ -594,6 +604,47 @@ func TestHTTPSpend_MeteredHarness_ReportsRealCost(t *testing.T) {
 	}
 	if row.SessionCount != 1 {
 		t.Fatalf("session_count: expected 1 (one session deduped), got %d", row.SessionCount)
+	}
+}
+
+// Regression (Gate-2 finding): a session whose harness is unmapped ("generic")
+// but whose telemetry.model is an OpenAI model ("gpt-5.5") must classify as
+// METERED with its real dollar cost surfaced. Before the fix the handler called
+// ResolveProvider(harness, "") and ignored the model, so this returned
+// billing_mode="unknown" and suppressed the cost — hiding real metered spend.
+func TestHTTPSpend_GenericHarnessWithModel_ClassifiesMetered(t *testing.T) {
+	tenant := testTenant(t, "genmodel")
+	a, pool, _ := newTestAPIWithDB(t)
+	defer pool.Close()
+
+	sessID := uuid.NewString()
+	seedWorkEvent(t, pool, "generic", tenant, 0.42, 4, time.Now(),
+		withSessionID(sessID), withTokens(1500), withModel("gpt-5.5"))
+
+	req := newTestGET("/?group_by=agent&tenant=" + tenant)
+	rec := httptest.NewRecorder()
+	a.SpendRoutes().ServeHTTP(rec, req)
+
+	if rec.Code != 200 {
+		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp SpendResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+	if len(resp.Rows) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(resp.Rows))
+	}
+	row := resp.Rows[0]
+	if row.Provider != "openai" {
+		t.Fatalf("provider: expected openai (from telemetry.model gpt-5.5), got %q", row.Provider)
+	}
+	if row.BillingMode != "metered" {
+		t.Fatalf("billing_mode: expected metered, got %q", row.BillingMode)
+	}
+	if !testFeq(costVal(t, row.TotalCostUsd), 0.42) {
+		t.Fatalf("metered cost: expected 0.42 surfaced, got %v", *row.TotalCostUsd)
 	}
 }
 

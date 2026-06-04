@@ -22,7 +22,10 @@ import PulseTicker from './PulseTicker'
 /* ─── Helpers ─── */
 export function timeAgo(iso: string): string {
   if (!iso) return 'never'
-  const diff = Date.now() - new Date(iso).getTime()
+  const ts = new Date(iso).getTime()
+  if (!Number.isFinite(ts)) return 'unknown'
+  const diff = Date.now() - ts
+  if (diff < 0) return 'just now'
   const mins = Math.floor(diff / 60000)
   if (mins < 1) return 'just now'
   if (mins < 60) return `${mins}m ago`
@@ -993,11 +996,11 @@ export default function MissionControl({ agents }: { agents: Agent[] }) {
   const activeCount = sessions.filter(s => s.status.toLowerCase() === 'running').length
   
   const totalTokensToday = spendRows.reduce((sum, row) => sum + (row.total_tokens ?? 0), 0)
-  const meteredSpendToday = spendRows.reduce((sum, row) => sum + (row.total_cost_usd ?? 0), 0)
-  const hasMeteredCost = spendRows.some(row => row.billing_mode === 'metered' && row.total_cost_usd !== null && row.total_cost_usd > 0)
-  const usageSubtext = hasMeteredCost
+  const meteredSpendToday = spendRows.reduce((sum, row) => sum + (row.billing_mode === 'metered' ? (row.total_cost_usd ?? 0) : 0), 0)
+  const hasMeteredRows = spendRows.some(row => row.billing_mode === 'metered' && row.total_cost_usd !== null)
+  const usageSubtext = hasMeteredRows
     ? `+ ${formatCurrency(meteredSpendToday)} metered`
-    : 'subscription — no metered spend'
+    : 'no metered spend'
 
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto page-transition">
