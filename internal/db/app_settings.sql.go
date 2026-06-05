@@ -19,7 +19,8 @@ func (q *Queries) DeleteSetting(ctx context.Context, key string) error {
 }
 
 const getSetting = `-- name: GetSetting :one
-SELECT key, value, is_secret, enc_value, last4, updated_at FROM app_settings WHERE key = $1
+SELECT key, value, is_secret, enc_value, last4, updated_at
+FROM app_settings WHERE key = $1
 `
 
 func (q *Queries) GetSetting(ctx context.Context, key string) (AppSetting, error) {
@@ -37,7 +38,8 @@ func (q *Queries) GetSetting(ctx context.Context, key string) (AppSetting, error
 }
 
 const listSettings = `-- name: ListSettings :many
-SELECT key, value, is_secret, enc_value, last4, updated_at FROM app_settings ORDER BY key
+SELECT key, value, is_secret, enc_value, last4, updated_at
+FROM app_settings ORDER BY key
 `
 
 func (q *Queries) ListSettings(ctx context.Context) ([]AppSetting, error) {

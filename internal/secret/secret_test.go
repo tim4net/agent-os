@@ -164,8 +164,8 @@ func TestResolveMasterKeyFileFallbackGeneratesAndPersists(t *testing.T) {
 func TestLast4(t *testing.T) {
 	cases := map[string]string{
 		"":             "",
-		"ab":           "ab",
-		"abcd":         "abcd",
+		"ab":           "",
+		"abcd":         "", // <=4 chars: masked entirely so plaintext never leaks
 		"sk-0123456":   "3456",
 		"longer-token": "oken",
 	}

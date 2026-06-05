@@ -1,8 +1,10 @@
 -- name: GetSetting :one
-SELECT * FROM app_settings WHERE key = $1;
+SELECT key, value, is_secret, enc_value, last4, updated_at
+FROM app_settings WHERE key = $1;
 
 -- name: ListSettings :many
-SELECT * FROM app_settings ORDER BY key;
+SELECT key, value, is_secret, enc_value, last4, updated_at
+FROM app_settings ORDER BY key;
 
 -- name: UpsertSetting :one
 INSERT INTO app_settings (key, value, is_secret, enc_value, last4, updated_at)
@@ -13,7 +15,7 @@ ON CONFLICT (key) DO UPDATE
       enc_value = EXCLUDED.enc_value,
       last4 = EXCLUDED.last4,
       updated_at = NOW()
-RETURNING *;
+RETURNING key, value, is_secret, enc_value, last4, updated_at;
 
 -- name: DeleteSetting :exec
 DELETE FROM app_settings WHERE key = $1;

@@ -132,11 +132,14 @@ func decodeKey(s string) ([]byte, error) {
 }
 
 // Last4 returns the last 4 characters of a secret for masked display.
-// Shorter secrets are reported in full to avoid implying more entropy.
+// For secrets of 4 characters or fewer it returns "" — revealing the whole
+// (or nearly whole) value would defeat masking. Real provider keys are long;
+// this only guards pathological short inputs so the "plaintext never appears"
+// invariant holds unconditionally.
 func Last4(s string) string {
 	r := []rune(s)
 	if len(r) <= 4 {
-		return string(r)
+		return ""
 	}
 	return string(r[len(r)-4:])
 }

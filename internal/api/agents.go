@@ -20,7 +20,7 @@ func (a *API) ListAgents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(agents)
+	json.NewEncoder(w).Encode(sanitizeAgents(agents))
 }
 
 // GetAgent returns a single agent by ID.
@@ -40,7 +40,7 @@ func (a *API) GetAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(agent)
+	json.NewEncoder(w).Encode(sanitizeAgent(agent))
 }
 
 // CreateAgentRequest is the request body for creating an agent.
@@ -72,17 +72,13 @@ func (a *API) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// auth_token (if provided) is carried in metadata; buildHarnessConfig reads
-	// it for openclaw. Stored as JSONB — not a top-level secret in app_settings
-	// because it is per-agent, not a global provider key.
-	metadata := []byte("{}")
-	if req.AuthToken != "" {
-		b, err := json.Marshal(map[string]string{"auth_token": req.AuthToken})
-		if err != nil {
-			http.Error(w, "failed to encode metadata", http.StatusInternalServerError)
-			return
-		}
-		metadata = b
+	// auth_token (if provided) is encrypted at rest in metadata; buildHarnessConfig
+	// decrypts it for openclaw. If a token is supplied but encryption is unavailable,
+	// refuse rather than persist plaintext.
+	metadata, ok := a.encodeAuthTokenMetadata(req.AuthToken)
+	if !ok {
+		http.Error(w, "secret storage is disabled: set AOS_MASTER_KEY on the server to store an agent auth token", http.StatusServiceUnavailable)
+		return
 	}
 
 	agent, err := a.queries.CreateAgent(r.Context(), db.CreateAgentParams{
@@ -99,7 +95,7 @@ func (a *API) CreateAgent(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(agent)
+	json.NewEncoder(w).Encode(sanitizeAgent(agent))
 }
 
 // DeleteAgent handles DELETE /api/agents/{id}.
@@ -166,7 +162,7 @@ func (a *API) UpdateAgentConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(agent)
+	json.NewEncoder(w).Encode(sanitizeAgent(agent))
 }
 
 // GetAgentConfig handles GET /api/agents/{id}/config and returns role, system_prompt, persona.

@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -94,13 +93,11 @@ func (a *API) buildHarnessConfig(ctx context.Context, agent db.Agent) map[string
 			config["litellm_url"] = a.litellmURL
 		}
 	}
-	// Pass auth_token for openclaw from metadata
+	// Pass auth_token for openclaw from metadata (decrypted; supports legacy
+	// plaintext rows transparently).
 	if agent.Harness == "openclaw" {
-		var meta map[string]any
-		if err := json.Unmarshal(agent.Metadata, &meta); err == nil {
-			if token, ok := meta["auth_token"].(string); ok && token != "" {
-				config["auth_token"] = token
-			}
+		if token := a.decodeAuthToken(agent.Metadata); token != "" {
+			config["auth_token"] = token
 		}
 	}
 	return config
