@@ -1,10 +1,12 @@
 import { useTheme, THEME_META, type ThemeName } from '../theme-context'
+import { ApiKeysSection } from './settings/ApiKeysSection'
+import { AgentsSection } from './settings/AgentsSection'
 
 export default function SettingsPanel() {
   const { theme, setTheme } = useTheme()
 
   return (
-    <div className="fade-in max-w-2xl mx-auto p-6">
+    <div className="fade-in max-w-3xl mx-auto p-6">
       <h2 className="text-xl font-semibold mb-6" style={{ color: 'var(--text-primary)' }}>
         Settings
       </h2>
@@ -12,7 +14,7 @@ export default function SettingsPanel() {
       {/* Theme Selector */}
       <section className="mb-8">
         <h3 className="text-sm font-medium uppercase tracking-wider mb-4" style={{ color: 'var(--text-muted)' }}>
-          Theme
+          Appearance
         </h3>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {THEME_META.map((t) => (
@@ -56,6 +58,10 @@ export default function SettingsPanel() {
           ))}
         </div>
       </section>
+
+      <ApiKeysSection />
+
+      <AgentsSection />
 
       {/* About */}
       <section>

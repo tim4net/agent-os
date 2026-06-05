@@ -81,6 +81,92 @@ export function getAgentCommands(id: string): Promise<AgentCommand[]> {
   return request<AgentCommand[]>(`/api/agents/${id}/commands`)
 }
 
+// ---------------------------------------------------------------------------
+// Settings control plane (provider keys + general config), harness catalog,
+// and agent create/delete. Secrets are write-only: the API returns is_set +
+// last4 only, never plaintext.
+// ---------------------------------------------------------------------------
+
+export interface SettingView {
+  key: string
+  label: string
+  group: string // "Providers" | "General"
+  is_secret: boolean
+  help?: string
+  env_var?: string
+  is_set: boolean
+  last4?: string
+  value?: string // non-secret plaintext only
+  source: 'stored' | 'env' | 'unset'
+  updated_at?: string
+}
+
+export interface SettingsResponse {
+  settings: SettingView[]
+  secrets_enabled: boolean
+}
+
+export function listSettings(): Promise<SettingsResponse> {
+  return request<SettingsResponse>('/api/settings/')
+}
+
+export function updateSetting(key: string, value: string): Promise<SettingView> {
+  return request<SettingView>(`/api/settings/${key}`, {
+    method: 'PUT',
+    body: JSON.stringify({ value }),
+  })
+}
+
+export async function deleteSetting(key: string): Promise<void> {
+  const res = await fetch(`/api/settings/${key}`, { method: 'DELETE' })
+  if (!res.ok && res.status !== 204) {
+    throw new Error(`API error ${res.status}: ${res.statusText}`)
+  }
+}
+
+export interface HarnessInfo {
+  name: string
+  description: string
+  requires_auth_token: boolean
+}
+
+export function listHarnesses(): Promise<HarnessInfo[]> {
+  return request<HarnessInfo[]>('/api/harnesses')
+}
+
+export interface CreateAgentInput {
+  name: string
+  display_name: string
+  harness: string
+  base_url: string
+  auth_token?: string
+}
+
+export function createAgent(input: CreateAgentInput): Promise<Agent> {
+  return request<Agent>('/api/agents', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export async function deleteAgent(id: string): Promise<void> {
+  const res = await fetch(`/api/agents/${id}`, { method: 'DELETE' })
+  if (!res.ok && res.status !== 204) {
+    throw new Error(`API error ${res.status}: ${res.statusText}`)
+  }
+}
+
+export function updateAgentConfigFull(
+  id: string,
+  body: { role: string; system_prompt: string; persona?: Record<string, unknown> },
+): Promise<Agent> {
+  return request<Agent>(`/api/agents/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ persona: {}, ...body }),
+  })
+}
+
+
 export function listConversations(): Promise<Conversation[]> {
   return request<Conversation[]>('/api/conversations')
 }
