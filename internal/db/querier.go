@@ -77,6 +77,7 @@ type Querier interface {
 	CreateMessage(ctx context.Context, arg CreateMessageParams) (Message, error)
 	CreatePipelineItem(ctx context.Context, arg CreatePipelineItemParams) (PipelineItem, error)
 	CreateProject(ctx context.Context, arg CreateProjectParams) (Project, error)
+	CreateResource(ctx context.Context, arg CreateResourceParams) (Resource, error)
 	CreateSkill(ctx context.Context, arg CreateSkillParams) (Skill, error)
 	CreateSubtask(ctx context.Context, arg CreateSubtaskParams) (Task, error)
 	CreateTask(ctx context.Context, arg CreateTaskParams) (Task, error)
@@ -92,6 +93,7 @@ type Querier interface {
 	DeleteMessage(ctx context.Context, id pgtype.UUID) error
 	DeleteMessagesByConversation(ctx context.Context, conversationID pgtype.UUID) (int64, error)
 	DeletePipelineItem(ctx context.Context, id pgtype.UUID) error
+	DeleteResource(ctx context.Context, id pgtype.UUID) error
 	DeleteSkill(ctx context.Context, id pgtype.UUID) error
 	DeleteTask(ctx context.Context, id pgtype.UUID) error
 	DeleteWorkflow(ctx context.Context, id pgtype.UUID) error
@@ -153,6 +155,8 @@ type Querier interface {
 	GetPipelineItem(ctx context.Context, id pgtype.UUID) (PipelineItem, error)
 	GetProject(ctx context.Context, id pgtype.UUID) (Project, error)
 	GetProjectBySlug(ctx context.Context, slug string) (Project, error)
+	GetResource(ctx context.Context, id pgtype.UUID) (Resource, error)
+	GetResourceBySlug(ctx context.Context, slug string) (Resource, error)
 	// Returns the received_at of the first session.start event for a session.
 	// Used to compute bounded_max_age (6h backstop from contract §4).
 	// Tenant-scoped to prevent cross-tenant absorption (ADR-002).
@@ -175,6 +179,7 @@ type Querier interface {
 	GetWorkUnitEvents(ctx context.Context, arg GetWorkUnitEventsParams) ([]WorkEvent, error)
 	GetWorkflow(ctx context.Context, id pgtype.UUID) (Workflow, error)
 	GetWorkflowRun(ctx context.Context, id pgtype.UUID) (WorkflowRun, error)
+	GrantResource(ctx context.Context, arg GrantResourceParams) (AgentGrant, error)
 	// Upsert by event_id: inserts new row, on conflict does nothing and returns nothing (pgx.ErrNoRows).
 	InsertWorkEvent(ctx context.Context, arg InsertWorkEventParams) (WorkEvent, error)
 	// Agent session liveness queries for the fleet monitor (WP-J, F10).
@@ -189,6 +194,7 @@ type Querier interface {
 	// Tenant is required (never empty — ADR-002).
 	ListActiveSessions(ctx context.Context, tenant string) ([]ListActiveSessionsRow, error)
 	ListAgents(ctx context.Context) ([]Agent, error)
+	ListAllGrants(ctx context.Context) ([]AgentGrant, error)
 	// Lists app instances scoped to a tenant. Returns all if tenant is empty.
 	// Supports pagination with limit/offset.
 	// Orders by last_probed_at DESC NULLS LAST (never-probed instances at end).
@@ -201,6 +207,8 @@ type Querier interface {
 	ListFindingsBySeverity(ctx context.Context, arg ListFindingsBySeverityParams) ([]Finding, error)
 	ListFindingsByWpRef(ctx context.Context, arg ListFindingsByWpRefParams) ([]Finding, error)
 	ListGoals(ctx context.Context) ([]Goal, error)
+	ListGrantsForAgent(ctx context.Context, agentID pgtype.UUID) ([]AgentGrant, error)
+	ListGrantsForResource(ctx context.Context, resourceID pgtype.UUID) ([]AgentGrant, error)
 	// Lists all liveness records for a tenant, ordered by seen_at DESC.
 	// Returns all if tenant is empty.
 	ListHostLiveness(ctx context.Context, arg ListHostLivenessParams) ([]HostLiveness, error)
@@ -211,6 +219,9 @@ type Querier interface {
 	ListOrchestratorWorkUnits(ctx context.Context) ([]WorkUnit, error)
 	ListPipelineItems(ctx context.Context, arg ListPipelineItemsParams) ([]PipelineItem, error)
 	ListProjects(ctx context.Context) ([]Project, error)
+	ListResources(ctx context.Context) ([]Resource, error)
+	ListResourcesByKind(ctx context.Context, kind string) ([]Resource, error)
+	ListResourcesForAgent(ctx context.Context, agentID pgtype.UUID) ([]Resource, error)
 	ListRunLog(ctx context.Context, arg ListRunLogParams) ([]RunLog, error)
 	ListRunLogByWpRef(ctx context.Context, arg ListRunLogByWpRefParams) ([]RunLog, error)
 	ListSkillSummaries(ctx context.Context) ([]ListSkillSummariesRow, error)
@@ -248,6 +259,7 @@ type Querier interface {
 	RequeueWorkUnit(ctx context.Context, id int64) (WorkUnit, error)
 	// Revoke an ingest key by setting revoked_at to now.
 	RevokeIngestKey(ctx context.Context, id int64) error
+	RevokeResource(ctx context.Context, arg RevokeResourceParams) error
 	SearchMemory(ctx context.Context, arg SearchMemoryParams) ([]MemoryIndex, error)
 	SetControlMode(ctx context.Context, mode ControlMode) (ControlState, error)
 	UpdateAgent(ctx context.Context, arg UpdateAgentParams) (Agent, error)
@@ -265,6 +277,7 @@ type Querier interface {
 	UpdateInstanceProbeStatus(ctx context.Context, arg UpdateInstanceProbeStatusParams) error
 	UpdatePipelineItem(ctx context.Context, arg UpdatePipelineItemParams) (PipelineItem, error)
 	UpdateProjectTracker(ctx context.Context, arg UpdateProjectTrackerParams) (Project, error)
+	UpdateResource(ctx context.Context, arg UpdateResourceParams) (Resource, error)
 	UpdateSkill(ctx context.Context, arg UpdateSkillParams) (Skill, error)
 	UpdateTask(ctx context.Context, arg UpdateTaskParams) (Task, error)
 	UpdateWorkflow(ctx context.Context, arg UpdateWorkflowParams) (Workflow, error)

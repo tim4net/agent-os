@@ -38,17 +38,19 @@ func main() {
 	// provider-registration with no DB or network I/O, so route registration is
 	// safe with nil deps. We only ever call Router(), never serve traffic.
 	a := api.NewAPI(
-		nil,                     // queries
-		nil,                     // pool
-		nil,                     // registry
-		nil,                     // bus
-		nil,                     // feed
-		"",                      // litellmURL
-		"",                      // artifactsPath
-		"",                      // obsidianPath
-		"",                      // hermesSkillsPath
-		map[string]string{},     // apiKeys
-		"", "", "", "",          // hermes/zai/openrouter keys, llmModel
+		nil,                 // queries
+		nil,                 // pool
+		nil,                 // registry
+		nil,                 // bus
+		nil,                 // feed
+		nil,                 // cipher
+		"",                  // litellmURL
+		"",                  // artifactsPath
+		"",                  // obsidianPath
+		"",                  // hermesSkillsPath
+		map[string]string{}, // apiKeys
+		api.ProviderKeys{},  // provider env-fallback keys
+		"",                  // llmModel
 	)
 
 	// The router is mounted at /api in cmd/server/main.go; replicate that prefix

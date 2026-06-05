@@ -1,76 +1,150 @@
+import { useState } from 'react'
 import { useTheme, THEME_META, type ThemeName } from '../theme-context'
+import { AgentsSection } from './settings/AgentsSection'
+import { AccessMatrix } from './settings/AccessMatrix'
+import { VaultManager } from './settings/VaultManager'
+import { AgentAccessDrawer } from './settings/AgentAccessDrawer'
+import { type Agent } from '../api/client'
 
 export default function SettingsPanel() {
   const { theme, setTheme } = useTheme()
+  const [activeTab, setActiveTab] = useState<'access' | 'vault' | 'agents' | 'general'>('access')
+  const [selectedAgentForAccess, setSelectedAgentForAccess] = useState<Agent | null>(null)
 
   return (
-    <div className="fade-in max-w-2xl mx-auto p-6">
-      <h2 className="text-xl font-semibold mb-6" style={{ color: 'var(--text-primary)' }}>
-        Settings
-      </h2>
-
-      {/* Theme Selector */}
-      <section className="mb-8">
-        <h3 className="text-sm font-medium uppercase tracking-wider mb-4" style={{ color: 'var(--text-muted)' }}>
-          Theme
-        </h3>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          {THEME_META.map((t) => (
+    <div className="fade-in max-w-5xl mx-auto p-6">
+      <div className="flex items-center justify-between mb-6">
+        <h2 className="text-xl font-semibold" style={{ color: 'var(--text-primary)' }}>
+          Settings
+        </h2>
+        
+        {/* Segmented Control */}
+        <div className="flex p-1 rounded-lg" style={{ backgroundColor: 'var(--bg-surface)', border: '1px solid var(--border-subtle)' }}>
+          {(['access', 'vault', 'agents', 'general'] as const).map(tab => (
             <button
-              key={t.name}
-              onClick={() => setTheme(t.name)}
-              className={`glass-card text-left p-4 cursor-pointer transition-all ${
-                theme === t.name
-                  ? 'ring-2 scale-[1.02]'
-                  : 'hover:scale-[1.01]'
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              className={`px-4 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                activeTab === tab ? 'shadow-sm' : 'opacity-70 hover:opacity-100'
               }`}
               style={{
-                borderColor: theme === t.name ? 'var(--accent-blue)' : undefined,
-                boxShadow: theme === t.name ? 'var(--shadow-glow)' : undefined,
+                backgroundColor: activeTab === tab ? 'var(--bg-active)' : 'transparent',
+                color: activeTab === tab ? 'var(--color-text-primary)' : 'var(--color-text-muted)'
               }}
             >
-              <div className="flex items-center gap-3 mb-2">
-                <ThemeSwatch themeName={t.name} />
-                <span
-                  className="font-semibold text-sm"
-                  style={{ color: 'var(--text-primary)' }}
-                >
-                  {t.label}
-                </span>
-                {theme === t.name && (
-                  <span
-                    className="ml-auto text-xs px-2 py-0.5 rounded-full"
-                    style={{
-                      background: 'var(--accent-blue)',
-                      color: 'var(--text-inverse)',
-                    }}
-                  >
-                    Active
-                  </span>
-                )}
-              </div>
-              <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
-                {t.description}
-              </p>
+              {tab.charAt(0).toUpperCase() + tab.slice(1)}
             </button>
           ))}
         </div>
-      </section>
+      </div>
 
-      {/* About */}
-      <section>
-        <h3 className="text-sm font-medium uppercase tracking-wider mb-4" style={{ color: 'var(--text-muted)' }}>
-          About
-        </h3>
-        <div className="glass-card p-4">
-          <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-            <strong style={{ color: 'var(--text-primary)' }}>AgentOS</strong> — Multi-agent operating system
-          </p>
-          <p className="text-xs mt-2" style={{ color: 'var(--text-muted)' }}>
-            Stack: Go (Chi + sqlc + pgx) • React 19 + TypeScript 5 + Tailwind CSS v4 • PostgreSQL 17
-          </p>
+      {activeTab === 'access' && (
+        <section className="fade-in mb-8">
+          <div className="mb-4">
+            <h3 className="text-sm font-medium uppercase tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>
+              Access Matrix
+            </h3>
+            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+              Manage which agents have access to specific resources.
+            </p>
+          </div>
+          <AccessMatrix onOpenAgent={setSelectedAgentForAccess} />
+        </section>
+      )}
+
+      {activeTab === 'vault' && (
+        <section className="fade-in mb-8">
+          <div className="mb-4">
+            <h3 className="text-sm font-medium uppercase tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>
+              Vault
+            </h3>
+            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+              Manage your credentials, integrations, and MCP servers.
+            </p>
+          </div>
+          <VaultManager />
+        </section>
+      )}
+
+      {activeTab === 'agents' && (
+        <div className="fade-in">
+          <AgentsSection onOpenAccess={setSelectedAgentForAccess} />
         </div>
-      </section>
+      )}
+
+      {activeTab === 'general' && (
+        <div className="fade-in">
+          {/* Theme Selector */}
+          <section className="mb-8">
+            <h3 className="text-sm font-medium uppercase tracking-wider mb-4" style={{ color: 'var(--text-muted)' }}>
+              Appearance
+            </h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-3xl">
+              {THEME_META.map((t) => (
+                <button
+                  key={t.name}
+                  onClick={() => setTheme(t.name)}
+                  className={`glass-card text-left p-4 cursor-pointer transition-all ${
+                    theme === t.name
+                      ? 'ring-2 scale-[1.02]'
+                      : 'hover:scale-[1.01]'
+                  }`}
+                  style={{
+                    borderColor: theme === t.name ? 'var(--accent-blue)' : undefined,
+                    boxShadow: theme === t.name ? 'var(--shadow-glow)' : undefined,
+                  }}
+                >
+                  <div className="flex items-center gap-3 mb-2">
+                    <ThemeSwatch themeName={t.name} />
+                    <span
+                      className="font-semibold text-sm"
+                      style={{ color: 'var(--text-primary)' }}
+                    >
+                      {t.label}
+                    </span>
+                    {theme === t.name && (
+                      <span
+                        className="ml-auto text-xs px-2 py-0.5 rounded-full"
+                        style={{
+                          background: 'var(--accent-blue)',
+                          color: 'var(--text-inverse)',
+                        }}
+                      >
+                        Active
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                    {t.description}
+                  </p>
+                </button>
+              ))}
+            </div>
+          </section>
+
+          {/* About */}
+          <section className="max-w-3xl">
+            <h3 className="text-sm font-medium uppercase tracking-wider mb-4" style={{ color: 'var(--text-muted)' }}>
+              About
+            </h3>
+            <div className="glass-card p-4">
+              <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+                <strong style={{ color: 'var(--text-primary)' }}>AgentOS</strong> — Multi-agent operating system
+              </p>
+              <p className="text-xs mt-2" style={{ color: 'var(--text-muted)' }}>
+                Stack: Go (Chi + sqlc + pgx) • React 19 + TypeScript 5 + Tailwind CSS v4 • PostgreSQL 17
+              </p>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {selectedAgentForAccess && (
+        <AgentAccessDrawer 
+          agent={selectedAgentForAccess} 
+          onClose={() => setSelectedAgentForAccess(null)} 
+        />
+      )}
     </div>
   )
 }

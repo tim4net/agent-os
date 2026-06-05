@@ -120,7 +120,7 @@ func (a *API) AutoRegisterAgents(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"registered": registered_agents,
+		"registered": sanitizeAgents(registered_agents),
 		"count":      len(registered_agents),
 	})
 }
@@ -139,7 +139,7 @@ func getTailscaleOnlineHosts() map[string]bool {
 	var status struct {
 		Peer map[string]struct {
 			HostName string `json:"HostName"`
-			Online  bool   `json:"Online"`
+			Online   bool   `json:"Online"`
 		} `json:"Peer"`
 		Self struct {
 			HostName string `json:"HostName"`

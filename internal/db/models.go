@@ -115,6 +115,14 @@ type Agent struct {
 	Visible      bool               `json:"visible"`
 }
 
+type AgentGrant struct {
+	ID         pgtype.UUID        `json:"id"`
+	AgentID    pgtype.UUID        `json:"agent_id"`
+	ResourceID pgtype.UUID        `json:"resource_id"`
+	Scope      string             `json:"scope"`
+	GrantedAt  pgtype.Timestamptz `json:"granted_at"`
+}
+
 type AppInstance struct {
 	ID            pgtype.UUID        `json:"id"`
 	Harness       string             `json:"harness"`
@@ -262,6 +270,22 @@ type Project struct {
 	Tracker     string             `json:"tracker"`
 	ExternalRef pgtype.Text        `json:"external_ref"`
 	RepoUrl     pgtype.Text        `json:"repo_url"`
+}
+
+type Resource struct {
+	ID        pgtype.UUID        `json:"id"`
+	Slug      string             `json:"slug"`
+	Kind      string             `json:"kind"`
+	Label     string             `json:"label"`
+	Provider  string             `json:"provider"`
+	IsSecret  bool               `json:"is_secret"`
+	EncValue  []byte             `json:"enc_value"`
+	EncConfig []byte             `json:"enc_config"`
+	Config    []byte             `json:"config"`
+	Last4     string             `json:"last4"`
+	Status    string             `json:"status"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
 }
 
 type RunLog struct {
