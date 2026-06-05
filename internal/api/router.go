@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -77,27 +78,99 @@ type ProviderKeys struct {
 	OpenRouter string
 }
 
-// buildHarnessConfig creates a harness config map for the given agent.
-// Secrets (hermes api_key) resolve through the settings store first, then the
-// env fallback, so a key set in the Settings UI takes effect without a redeploy.
+// buildHarnessConfig creates a harness config map for the given agent by
+// resolving its GRANTED vault resources (default-deny). Only resources explicitly
+// granted to the agent are injected; revoking a grant removes the capability at
+// the next build. Secrets are decrypted here and never cached.
 func (a *API) buildHarnessConfig(ctx context.Context, agent db.Agent) map[string]any {
 	config := map[string]any{
 		"base_url": agent.BaseUrl,
 	}
-	// Pass harness-specific config for hermes
-	if agent.Harness == "hermes" {
-		if key := a.resolveSecret(ctx, "hermes_api_key"); key != "" {
-			config["api_key"] = key
+	if a.litellmURL != "" && agent.Harness == "hermes" {
+		config["litellm_url"] = a.litellmURL
+	}
+
+	// Load granted resources (default-deny: nothing granted → nothing injected).
+	granted, err := a.queries.ListResourcesForAgent(ctx, agent.ID)
+	if err != nil {
+		// On lookup failure, fall back to legacy per-agent openclaw token so a
+		// transient DB error doesn't silently strip an agent's only credential.
+		if agent.Harness == "openclaw" {
+			if token := a.decodeAuthToken(agent.Metadata); token != "" {
+				config["auth_token"] = token
+			}
 		}
-		if a.litellmURL != "" {
-			config["litellm_url"] = a.litellmURL
+		return config
+	}
+
+	var mcpServers []map[string]any
+	for _, res := range granted {
+		switch res.Kind {
+		case "credential":
+			secret := a.resolveResourceSecret(res)
+			if secret == "" {
+				continue
+			}
+			// Inject the first granted credential as the harness key. The harness
+			// (hermes/openclaw) consumes whichever key field it expects.
+			switch agent.Harness {
+			case "hermes":
+				if _, set := config["api_key"]; !set {
+					config["api_key"] = secret
+				}
+			case "openclaw":
+				if _, set := config["auth_token"]; !set {
+					config["auth_token"] = secret
+				}
+			default:
+				if _, set := config["api_key"]; !set {
+					config["api_key"] = secret
+				}
+			}
+		case "mcp_server":
+			srv := map[string]any{"slug": res.Slug, "label": res.Label}
+			var cfg map[string]any
+			if len(res.Config) > 0 {
+				_ = json.Unmarshal(res.Config, &cfg)
+			}
+			for k, v := range cfg {
+				srv[k] = v
+			}
+			if secret := a.resolveResourceSecret(res); secret != "" {
+				srv["auth_token"] = secret
+			}
+			mcpServers = append(mcpServers, srv)
+		case "integration":
+			// Integrations expose non-secret config + an optional token, namespaced
+			// by slug so multiple integrations can coexist.
+			intg := map[string]any{}
+			var cfg map[string]any
+			if len(res.Config) > 0 {
+				_ = json.Unmarshal(res.Config, &cfg)
+			}
+			for k, v := range cfg {
+				intg[k] = v
+			}
+			if secret := a.resolveResourceSecret(res); secret != "" {
+				intg["token"] = secret
+			}
+			if config["integrations"] == nil {
+				config["integrations"] = map[string]any{}
+			}
+			config["integrations"].(map[string]any)[res.Slug] = intg
 		}
 	}
-	// Pass auth_token for openclaw from metadata (decrypted; supports legacy
-	// plaintext rows transparently).
+	if len(mcpServers) > 0 {
+		config["mcp_servers"] = mcpServers
+	}
+
+	// Legacy fallback: an openclaw agent with a per-agent metadata token but no
+	// granted credential still works (back-compat for pre-vault agents).
 	if agent.Harness == "openclaw" {
-		if token := a.decodeAuthToken(agent.Metadata); token != "" {
-			config["auth_token"] = token
+		if _, set := config["auth_token"]; !set {
+			if token := a.decodeAuthToken(agent.Metadata); token != "" {
+				config["auth_token"] = token
+			}
 		}
 	}
 	return config
@@ -113,12 +186,17 @@ func (a *API) Router() http.Handler {
 	// Activity feed
 	r.Get("/activity", a.GetActivity)
 
-	// Settings (orchestrator control plane): provider keys + general config.
-	r.Route("/settings", func(r chi.Router) {
-		r.Get("/", a.ListSettings)
-		r.Put("/{key}", a.UpdateSetting)
-		r.Delete("/{key}", a.DeleteSetting)
+	// Resource vault (orchestrator control plane): credentials, integrations,
+	// MCP servers. Secrets encrypted at rest; responses masked.
+	r.Route("/resources", func(r chi.Router) {
+		r.Get("/", a.ListResources)
+		r.Post("/", a.CreateResource)
+		r.Put("/{id}", a.UpdateResource)
+		r.Delete("/{id}", a.DeleteResource)
 	})
+
+	// Grants: the permission matrix edges. GET /grants = all edges for the matrix.
+	r.Get("/grants", a.ListAllGrants)
 
 	// Harness catalog: the registered harness types an agent can use.
 	r.Get("/harnesses", a.ListHarnesses)
@@ -137,6 +215,10 @@ func (a *API) Router() http.Handler {
 			r.Get("/models", a.GetAgentModels)
 			r.Get("/commands", a.GetAgentCommands)
 			r.Post("/chat", a.ChatWithAgent)
+			// Per-agent capability grants (the Access drawer).
+			r.Get("/grants", a.ListAgentGrants)
+			r.Put("/grants/{resourceId}", a.GrantAgentResource)
+			r.Delete("/grants/{resourceId}", a.RevokeAgentResource)
 		})
 	})
 
