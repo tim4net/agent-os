@@ -244,7 +244,9 @@ func (a *API) ChatWithAgent(w http.ResponseWriter, r *http.Request) {
 	// point where SSE headers are written.
 	failPreStream := func(msg string, code int) {
 		if conversationCreated {
-			if delErr := a.queries.DeleteConversation(context.Background(), convID); delErr != nil {
+			delCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if delErr := a.queries.DeleteConversation(delCtx, convID); delErr != nil {
 				slog.Warn("failed to roll back orphan conversation after pre-stream error",
 					"conversation_id", convID.String(), "error", delErr)
 			} else {
@@ -469,7 +471,9 @@ func (a *API) ChatWithAgent(w http.ResponseWriter, r *http.Request) {
 	// never an existing thread the user was continuing — and never one the client
 	// already learned about via a done event.
 	if conversationCreated && !doneSent {
-		if delErr := a.queries.DeleteConversation(context.Background(), convID); delErr != nil {
+		delCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if delErr := a.queries.DeleteConversation(delCtx, convID); delErr != nil {
 			slog.Warn("failed to roll back orphan conversation after failed stream",
 				"conversation_id", convID.String(), "stream_errored", streamErrored, "error", delErr)
 		} else {

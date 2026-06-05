@@ -20,8 +20,9 @@ import (
 // network dependency. Used to exercise the chat handler's orphan-conversation
 // rollback deterministically.
 type mockHarness struct {
-	reply   string // streamed as a single content chunk when non-empty
-	failErr error  // when non-nil, Chat streams an error chunk instead
+	reply        string // streamed as a single content chunk when non-empty
+	failErr      error  // when non-nil, Chat streams an error chunk (in-stream failure)
+	preStreamErr error  // when non-nil, Chat returns (nil, err) before any stream opens
 }
 
 func (m *mockHarness) Name() string { return "mock" }
@@ -36,6 +37,9 @@ func (m *mockHarness) Init(config map[string]any) error { return nil }
 func (m *mockHarness) Close() error                     { return nil }
 
 func (m *mockHarness) Chat(ctx context.Context, messages []harness.ChatMessage, opts harness.ChatOptions) (<-chan harness.ChatChunk, error) {
+	if m.preStreamErr != nil {
+		return nil, m.preStreamErr
+	}
 	ch := make(chan harness.ChatChunk, 2)
 	go func() {
 		defer close(ch)
@@ -137,6 +141,18 @@ func countMessages(t *testing.T, a *API, convID string) int {
 	return n
 }
 
+// countAllMessages returns the total message row count, used to prove the
+// messages FK actually cascades when a rolled-back conversation is deleted.
+func countAllMessages(t *testing.T, a *API) int {
+	t.Helper()
+	var n int
+	err := a.pool.QueryRow(context.Background(), "SELECT COUNT(*) FROM messages").Scan(&n)
+	if err != nil {
+		t.Fatalf("count all messages: %v", err)
+	}
+	return n
+}
+
 // TestChat_SuccessPersistsConversation proves a successful turn creates a
 // conversation and persists both the user and assistant messages.
 func TestChat_SuccessPersistsConversation(t *testing.T) {
@@ -172,6 +188,7 @@ func TestChat_FailedTurnRollsBackNewConversation(t *testing.T) {
 	agentID := seedChatAgent(t, a, "mockfail")
 
 	before := countConversations(t, a, agentID)
+	msgsBefore := countAllMessages(t, a)
 	rec, convID := postChat(t, a, agentID, `{"message":"this will fail"}`)
 
 	// The stream opens (200) then emits an error event; no done/conversation_id.
@@ -186,6 +203,41 @@ func TestChat_FailedTurnRollsBackNewConversation(t *testing.T) {
 	}
 	if got := countConversations(t, a, agentID); got != before {
 		t.Fatalf("ghost conversation left behind: count %d -> %d", before, got)
+	}
+	// The user message must have been cascaded away with the rolled-back
+	// conversation — no orphan message rows.
+	if got := countAllMessages(t, a); got != msgsBefore {
+		t.Fatalf("orphan message rows left behind (cascade failed): %d -> %d", msgsBefore, got)
+	}
+}
+
+// TestChat_PreStreamFailureRollsBackNewConversation proves a failure BEFORE the
+// SSE stream opens (harness.Chat returns (nil, err)) also rolls back a
+// brand-new conversation via failPreStream — exercising the pre-stream path
+// distinct from the in-stream error-chunk path.
+func TestChat_PreStreamFailureRollsBackNewConversation(t *testing.T) {
+	a, reg := newTestAPIForChat(t)
+	reg.Register("mockprefail", func() harness.Harness {
+		return &mockHarness{preStreamErr: context.DeadlineExceeded}
+	})
+	agentID := seedChatAgent(t, a, "mockprefail")
+
+	before := countConversations(t, a, agentID)
+	msgsBefore := countAllMessages(t, a)
+	rec, convID := postChat(t, a, agentID, `{"message":"fails before stream"}`)
+
+	// Pre-stream failure returns a non-200 http.Error (no SSE headers written).
+	if rec.Code == http.StatusOK {
+		t.Fatalf("expected a non-200 pre-stream error, got 200; body=%q", rec.Body.String())
+	}
+	if convID != "" {
+		t.Fatalf("expected NO conversation_id on pre-stream failure, got %q", convID)
+	}
+	if got := countConversations(t, a, agentID); got != before {
+		t.Fatalf("ghost conversation left behind after pre-stream failure: count %d -> %d", before, got)
+	}
+	if got := countAllMessages(t, a); got != msgsBefore {
+		t.Fatalf("orphan message rows after pre-stream failure (cascade failed): %d -> %d", msgsBefore, got)
 	}
 }
 
