@@ -40,7 +40,7 @@ export function TrackersView({ tenant }: { tenant: string }) {
           read-only
         </span>
         <span className="text-[11px] text-[var(--color-text-muted)]">
-          Agent OS never writes back to trackers (ADR-001 D4)
+          AgentOS never writes back to trackers (ADR-001 D4)
         </span>
       </div>
 

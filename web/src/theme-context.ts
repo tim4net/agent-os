@@ -20,7 +20,7 @@ export const THEME_META: { name: ThemeName; label: string; description: string }
   {
     name: 'default',
     label: 'Gemini Dark',
-    description: 'Blue/purple glass morphism — the default Agent OS look',
+    description: 'Blue/purple glass morphism — the default AgentOS look',
   },
   {
     name: 'noir',

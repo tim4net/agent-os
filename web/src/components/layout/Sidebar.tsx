@@ -211,9 +211,16 @@ export function Sidebar({
         {/* Logo + New Chat */}
         <div className="p-4 pb-3 border-b border-[var(--border-subtle)]">
           <div className="flex items-center justify-between mb-3">
-            <h1 className="text-lg font-bold gradient-text tracking-tight">
-              <span className={collapsed ? 'hidden' : ''}>Agent OS</span>
-              <span className={collapsed ? '' : 'hidden'}>OS</span>
+            <h1 className="text-lg font-bold gradient-text tracking-tight flex items-center gap-2">
+              <img
+                src="/favicon.svg"
+                alt=""
+                aria-hidden="true"
+                className="w-6 h-6 flex-shrink-0"
+                width={24}
+                height={24}
+              />
+              <span className={collapsed ? 'hidden' : ''}>AgentOS</span>
             </h1>
             <span className="text-[10px] text-[var(--text-muted)] opacity-60">
               {!collapsed && <>{onlineCount}/{agents.length}</>}
