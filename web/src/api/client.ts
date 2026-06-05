@@ -82,43 +82,100 @@ export function getAgentCommands(id: string): Promise<AgentCommand[]> {
 }
 
 // ---------------------------------------------------------------------------
-// Settings control plane (provider keys + general config), harness catalog,
-// and agent create/delete. Secrets are write-only: the API returns is_set +
-// last4 only, never plaintext.
+// Resource vault (credentials / integrations / mcp_servers), capability grants,
+// harness catalog, and agent create/delete. Secrets are write-only: the API
+// returns is_set + last4 only, never plaintext.
 // ---------------------------------------------------------------------------
 
-export interface SettingView {
-  key: string
+export type ResourceKind = 'credential' | 'integration' | 'mcp_server'
+
+export interface Resource {
+  id: string
+  slug: string
+  kind: ResourceKind
   label: string
-  group: string // "Providers" | "General"
+  provider: string
   is_secret: boolean
-  help?: string
-  env_var?: string
   is_set: boolean
   last4?: string
-  value?: string // non-secret plaintext only
-  source: 'stored' | 'env' | 'unset'
+  config: Record<string, unknown>
+  status: string
+  created_at?: string
   updated_at?: string
 }
 
-export interface SettingsResponse {
-  settings: SettingView[]
+export interface ResourcesResponse {
+  resources: Resource[]
   secrets_enabled: boolean
 }
 
-export function listSettings(): Promise<SettingsResponse> {
-  return request<SettingsResponse>('/api/settings/')
+export function listResources(kind?: ResourceKind): Promise<ResourcesResponse> {
+  const q = kind ? `?kind=${kind}` : ''
+  return request<ResourcesResponse>(`/api/resources${q}`)
 }
 
-export function updateSetting(key: string, value: string): Promise<SettingView> {
-  return request<SettingView>(`/api/settings/${key}`, {
-    method: 'PUT',
-    body: JSON.stringify({ value }),
+export interface CreateResourceInput {
+  slug: string
+  kind: ResourceKind
+  label?: string
+  provider?: string
+  secret?: string // plaintext; encrypted server-side
+  config?: Record<string, unknown>
+}
+
+export function createResource(input: CreateResourceInput): Promise<Resource> {
+  return request<Resource>('/api/resources', {
+    method: 'POST',
+    body: JSON.stringify(input),
   })
 }
 
-export async function deleteSetting(key: string): Promise<void> {
-  const res = await fetch(`/api/settings/${key}`, { method: 'DELETE' })
+export interface UpdateResourceInput {
+  label?: string
+  provider?: string
+  secret?: string // omit to leave unchanged; "" to clear
+  config?: Record<string, unknown>
+}
+
+export function updateResource(id: string, input: UpdateResourceInput): Promise<Resource> {
+  return request<Resource>(`/api/resources/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  })
+}
+
+export async function deleteResource(id: string): Promise<void> {
+  const res = await fetch(`/api/resources/${id}`, { method: 'DELETE' })
+  if (!res.ok && res.status !== 204) {
+    throw new Error(`API error ${res.status}: ${res.statusText}`)
+  }
+}
+
+// Grant edges for the permission matrix.
+export interface GrantEdge {
+  agent_id: string
+  resource_id: string
+  scope: string
+  granted_at?: string
+}
+
+export function listAllGrants(): Promise<{ grants: GrantEdge[] }> {
+  return request<{ grants: GrantEdge[] }>('/api/grants')
+}
+
+export function listAgentGrants(agentId: string): Promise<{ resources: Resource[] }> {
+  return request<{ resources: Resource[] }>(`/api/agents/${agentId}/grants`)
+}
+
+export function grantResource(agentId: string, resourceId: string): Promise<GrantEdge> {
+  return request<GrantEdge>(`/api/agents/${agentId}/grants/${resourceId}`, {
+    method: 'PUT',
+    body: JSON.stringify({ scope: 'use' }),
+  })
+}
+
+export async function revokeResource(agentId: string, resourceId: string): Promise<void> {
+  const res = await fetch(`/api/agents/${agentId}/grants/${resourceId}`, { method: 'DELETE' })
   if (!res.ok && res.status !== 204) {
     throw new Error(`API error ${res.status}: ${res.statusText}`)
   }
