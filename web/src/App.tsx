@@ -3,9 +3,9 @@ import type { Agent } from './api/client'
 import { uploadArtifact } from './api/client'
 import { useAgents } from './hooks/useAgents'
 import { useSSE } from './hooks/useSSE'
-import { Icon } from './components/Icon'
 import SettingsPanel from './components/SettingsPanel'
 import { Sidebar } from './components/layout/Sidebar'
+import { VerticalRail } from './components/layout/VerticalRail'
 
 import MissionControl from './components/MissionControl'
 import { ChatPanel } from './components/chat/ChatPanel'
@@ -90,7 +90,6 @@ function App() {
   const { agents, loading: _loading, refresh: refreshAgents } = useAgents()
   const { sseConnected } = useSSE()
   const uploadInputRef = useRef<HTMLInputElement>(null)
-  const tablistRef = useRef<HTMLDivElement>(null)
 
   // Detect mobile viewport
   useEffect(() => {
@@ -183,6 +182,15 @@ function App() {
     setActiveConversationId(null)
     setActiveTab('Chat')
     if (isMobile) setSidebarOpen(false)
+  }, [isMobile])
+
+  // Rail toggle: on mobile, open/close the sidebar overlay; on desktop, collapse it inline.
+  const handleToggleSidebar = useCallback(() => {
+    if (isMobile) {
+      setSidebarOpen((prev) => !prev)
+    } else {
+      setSidebarCollapsed((prev) => !prev)
+    }
   }, [isMobile])
 
   function handleConversationCreated(convId: string) {
@@ -395,6 +403,17 @@ function App() {
         />
       )}
 
+      {/* Primary navigation — vertical icon rail (replaces horizontal tab bar) */}
+      <VerticalRail
+        tabs={tabs}
+        tabMeta={tabMeta}
+        activeTab={activeTab}
+        onSelect={(t) => setActiveTab(t as Tab)}
+        onToggleSidebar={handleToggleSidebar}
+        sidebarCollapsed={sidebarCollapsed}
+        isMobile={isMobile}
+      />
+
       {/* Sidebar: inline on desktop, overlay on mobile */}
       <div className={isMobile ? (sidebarOpen ? 'fixed inset-y-0 left-0 z-50' : 'hidden') : ''}>
         <Sidebar
@@ -412,90 +431,6 @@ function App() {
       </div>
 
       <div className="flex-1 flex flex-col min-w-0">
-        {/* Horizontal tab nav bar — compact scrollable on mobile */}
-        <nav className="flex-shrink-0 bg-[var(--bg-surface)]/60 backdrop-blur-sm border-b border-[var(--border-subtle)]">
-          <div
-            ref={tablistRef}
-            role="tablist"
-            aria-label="Main navigation"
-            className={`flex items-center gap-1 px-3 md:px-6 py-2 ${isMobile ? 'overflow-x-auto' : 'flex-wrap'}`}
-            onKeyDown={(e) => {
-              const currentIdx = tabs.indexOf(activeTab)
-              if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
-                e.preventDefault()
-                const next = tabs[(currentIdx + 1) % tabs.length]
-                setActiveTab(next)
-              } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
-                e.preventDefault()
-                const prev = tabs[(currentIdx - 1 + tabs.length) % tabs.length]
-                setActiveTab(prev)
-              } else if (e.key === 'Home') {
-                e.preventDefault()
-                setActiveTab(tabs[0])
-              } else if (e.key === 'End') {
-                e.preventDefault()
-                setActiveTab(tabs[tabs.length - 1])
-              }
-            }}
-          >
-            {/* Sidebar toggle */}
-            <button
-              onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-              aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-              className="flex-shrink-0 p-1.5 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-elevated)]/40 transition-all duration-200 mr-1"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                {sidebarCollapsed ? (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-                ) : (
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
-                )}
-              </svg>
-            </button>
-
-            {/* Flat list of 6 tabs */}
-            {tabs.map((tab) => {
-              const isActive = activeTab === tab
-              return (
-                <button
-                  key={tab}
-                  role="tab"
-                  aria-selected={isActive}
-                  tabIndex={isActive ? 0 : -1}
-                  onClick={() => setActiveTab(tab)}
-                  className={`
-                    relative px-3 md:px-4 py-1.5 text-xs md:text-sm font-medium rounded-full whitespace-nowrap transition-all duration-200
-                    ${isActive
-                      ? 'text-white'
-                      : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] hover:bg-[var(--bg-elevated)]/40'
-                    }
-                  `}
-                >
-                  <span className="flex items-center gap-1.5">
-                    <Icon name={tabMeta[tab]} size={16} />
-                    <span>{tab}</span>
-                  </span>
-                  {/* Gradient underline accent for active tab */}
-                  {isActive && (
-                    <span
-                      className="absolute bottom-0 left-2 right-2 h-0.5 rounded-full"
-                      style={{
-                        background: 'linear-gradient(to right, var(--accent-blue), var(--accent-purple))',
-                      }}
-                    />
-                  )}
-                  {/* Subtle hover glow for inactive tabs */}
-                  {!isActive && (
-                    <span className="absolute inset-0 rounded-full opacity-0 hover:opacity-100 transition-opacity duration-300 pointer-events-none"
-                      style={{ boxShadow: '0 0 12px 2px rgba(91,141,239,0.06)' }}
-                    />
-                  )}
-                </button>
-              )
-            })}
-          </div>
-        </nav>
-
         {/* Content with page transition */}
         <main role="tabpanel" aria-label={`${activeTab} panel`} className="flex-1 overflow-auto page-transition" key={activeTab}>
           {renderContent()}
