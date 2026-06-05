@@ -16,6 +16,7 @@ import (
 	"github.com/tim4net/agent-os/internal/config"
 	"github.com/tim4net/agent-os/internal/db"
 	"github.com/tim4net/agent-os/internal/harness"
+	"github.com/tim4net/agent-os/internal/secret"
 	"github.com/tim4net/agent-os/internal/service"
 )
 
@@ -97,13 +98,13 @@ func main() {
 			// Skip timeout for SSE streams and endpoints that call the LLM
 			// (goals breakdown, pipeline generate, workflows can take 60s+)
 			switch {
-		case strings.HasPrefix(r.URL.Path, "/api/events"):
-			next.ServeHTTP(w, r)
-			return
-		case strings.HasSuffix(r.URL.Path, "/chat"):
-			next.ServeHTTP(w, r)
-			return
-		case strings.HasSuffix(r.URL.Path, "/breakdown"):
+			case strings.HasPrefix(r.URL.Path, "/api/events"):
+				next.ServeHTTP(w, r)
+				return
+			case strings.HasSuffix(r.URL.Path, "/chat"):
+				next.ServeHTTP(w, r)
+				return
+			case strings.HasSuffix(r.URL.Path, "/breakdown"):
 				next.ServeHTTP(w, r)
 				return
 			case strings.HasSuffix(r.URL.Path, "/generate"):
@@ -130,7 +131,39 @@ func main() {
 		"gemini":     cfg.GeminiAPIKey,
 		"fal":        cfg.FALKey,
 	}
-	a := api.NewAPI(queries, pool, harness.DefaultRegistry, bus, feed, cfg.LiteLLMURL, cfg.ArtifactsPath, cfg.ObsidianPath, cfg.HermesSkillsPath, apiKeys, cfg.HermesAPIKey, cfg.ZAIAPIKey, cfg.OpenRouterAPIKey, cfg.LLMModel)
+
+	// Resolve the master key for encrypted secrets at rest. Preference:
+	// AOS_MASTER_KEY env, else a generated key persisted on the artifacts
+	// volume so secrets survive redeploys. A nil cipher = secrets disabled
+	// (the API refuses to store secrets rather than persisting plaintext).
+	masterKey, err := secret.ResolveMasterKey(cfg.ArtifactsPath)
+	if err != nil {
+		slog.Error("failed to resolve secret master key", "error", err)
+		os.Exit(1)
+	}
+	var cipher *secret.Cipher
+	if masterKey != nil {
+		cipher, err = secret.NewCipher(masterKey)
+		if err != nil {
+			slog.Error("failed to init secret cipher", "error", err)
+			os.Exit(1)
+		}
+		slog.Info("secret encryption enabled (AES-256-GCM)")
+	} else {
+		slog.Warn("secret encryption DISABLED — set AOS_MASTER_KEY to enable encrypted API-key storage")
+	}
+
+	providerKeys := api.ProviderKeys{
+		Hermes:     cfg.HermesAPIKey,
+		Anthropic:  cfg.AnthropicAPIKey,
+		OpenAI:     cfg.OpenAIAPIKey,
+		Gemini:     cfg.GeminiAPIKey,
+		XAI:        cfg.XAIAPIKey,
+		FAL:        cfg.FALKey,
+		ZAI:        cfg.ZAIAPIKey,
+		OpenRouter: cfg.OpenRouterAPIKey,
+	}
+	a := api.NewAPI(queries, pool, harness.DefaultRegistry, bus, feed, cipher, cfg.LiteLLMURL, cfg.ArtifactsPath, cfg.ObsidianPath, cfg.HermesSkillsPath, apiKeys, providerKeys, cfg.LLMModel)
 	r.Mount("/api", a.Router())
 
 	// Start background title worker (hourly re-summarization of active conversations)

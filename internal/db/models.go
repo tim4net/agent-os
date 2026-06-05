@@ -134,6 +134,15 @@ type AppInstance struct {
 	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
 }
 
+type AppSetting struct {
+	Key       string             `json:"key"`
+	Value     string             `json:"value"`
+	IsSecret  bool               `json:"is_secret"`
+	EncValue  []byte             `json:"enc_value"`
+	Last4     string             `json:"last4"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Artifact struct {
 	ID          pgtype.UUID        `json:"id"`
 	AgentID     pgtype.UUID        `json:"agent_id"`

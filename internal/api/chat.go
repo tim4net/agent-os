@@ -173,7 +173,7 @@ func (a *API) ChatWithAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	config := a.buildHarnessConfig(agent)
+	config := a.buildHarnessConfig(r.Context(), agent)
 	if err := h.Init(config); err != nil {
 		http.Error(w, "harness init failed", http.StatusInternalServerError)
 		return

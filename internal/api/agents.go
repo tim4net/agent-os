@@ -49,6 +49,7 @@ type CreateAgentRequest struct {
 	DisplayName string `json:"display_name"`
 	Harness     string `json:"harness"`
 	BaseURL     string `json:"base_url"`
+	AuthToken   string `json:"auth_token"` // optional; stored in metadata for harnesses that use it
 }
 
 // CreateAgent creates a new agent.
@@ -64,12 +65,32 @@ func (a *API) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate the harness is a registered type so we never persist an agent
+	// pointing at a non-existent driver.
+	if _, err := a.registry.Get(req.Harness); err != nil {
+		http.Error(w, "unknown harness: "+req.Harness, http.StatusBadRequest)
+		return
+	}
+
+	// auth_token (if provided) is carried in metadata; buildHarnessConfig reads
+	// it for openclaw. Stored as JSONB — not a top-level secret in app_settings
+	// because it is per-agent, not a global provider key.
+	metadata := []byte("{}")
+	if req.AuthToken != "" {
+		b, err := json.Marshal(map[string]string{"auth_token": req.AuthToken})
+		if err != nil {
+			http.Error(w, "failed to encode metadata", http.StatusInternalServerError)
+			return
+		}
+		metadata = b
+	}
+
 	agent, err := a.queries.CreateAgent(r.Context(), db.CreateAgentParams{
 		Name:        req.Name,
 		DisplayName: req.DisplayName,
 		Harness:     req.Harness,
 		BaseUrl:     req.BaseURL,
-		Metadata:    []byte("{}"),
+		Metadata:    metadata,
 	})
 	if err != nil {
 		http.Error(w, "failed to create agent: "+err.Error(), http.StatusInternalServerError)
@@ -79,6 +100,30 @@ func (a *API) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(agent)
+}
+
+// DeleteAgent handles DELETE /api/agents/{id}.
+func (a *API) DeleteAgent(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+
+	var id pgtype.UUID
+	if err := id.Scan(idStr); err != nil {
+		http.Error(w, "invalid agent ID", http.StatusBadRequest)
+		return
+	}
+
+	// Confirm it exists first so a bad id returns 404, not a silent 204.
+	if _, err := a.queries.GetAgent(r.Context(), id); err != nil {
+		http.Error(w, "agent not found", http.StatusNotFound)
+		return
+	}
+
+	if err := a.queries.DeleteAgent(r.Context(), id); err != nil {
+		http.Error(w, "failed to delete agent: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // UpdateAgentConfigRequest is the request body for updating agent config.
@@ -172,7 +217,7 @@ func (a *API) GetAgentModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	config := a.buildHarnessConfig(agent)
+	config := a.buildHarnessConfig(r.Context(), agent)
 	if err := h.Init(config); err != nil {
 		http.Error(w, "harness init failed: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -220,13 +265,13 @@ func (a *API) GetAgentModels(w http.ResponseWriter, r *http.Request) {
 // This mapping lives server-side so the frontend doesn't need a label map.
 func modelDisplayName(id string) string {
 	names := map[string]string{
-		"local-qwen":  "Qwen (Local)",
-		"local-chat":  "Chat (Local)",
-		"free-chat":   "Chat (Free)",
-		"free-fast":   "Fast (Free)",
-		"free-deep":   "Deep Think (Free)",
-		"free-gpt":    "GPT (Free)",
-		"clovis":      "Clovis",
+		"local-qwen": "Qwen (Local)",
+		"local-chat": "Chat (Local)",
+		"free-chat":  "Chat (Free)",
+		"free-fast":  "Fast (Free)",
+		"free-deep":  "Deep Think (Free)",
+		"free-gpt":   "GPT (Free)",
+		"clovis":     "Clovis",
 	}
 	if name, ok := names[id]; ok {
 		return name
@@ -256,7 +301,7 @@ func (a *API) GetAgentCommands(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	config := a.buildHarnessConfig(agent)
+	config := a.buildHarnessConfig(r.Context(), agent)
 	if err := h.Init(config); err != nil {
 		// Return empty commands if harness can't init (e.g., offline agent)
 		w.Header().Set("Content-Type", "application/json")

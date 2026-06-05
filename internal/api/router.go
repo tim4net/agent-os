@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 
@@ -8,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/tim4net/agent-os/internal/db"
 	"github.com/tim4net/agent-os/internal/harness"
+	"github.com/tim4net/agent-os/internal/secret"
 	"github.com/tim4net/agent-os/internal/service"
 )
 
@@ -18,10 +20,16 @@ type API struct {
 	registry         *harness.Registry
 	bus              *service.EventBus
 	feed             *service.ActivityFeed
+	cipher           *secret.Cipher
 	litellmURL       string
 	obsidianPath     string
 	hermesSkillsPath string
 	hermesAPIKey     string
+	anthropicAPIKey  string
+	openaiAPIKey     string
+	geminiAPIKey     string
+	xaiAPIKey        string
+	falKey           string
 	zaiAPIKey        string
 	openrouterAPIKey string
 	llmModel         string
@@ -31,19 +39,25 @@ type API struct {
 }
 
 // NewAPI creates a new API instance with the given dependencies.
-func NewAPI(queries *db.Queries, pool *pgxpool.Pool, registry *harness.Registry, bus *service.EventBus, feed *service.ActivityFeed, litellmURL string, artifactsPath string, obsidianPath string, hermesSkillsPath string, apiKeys map[string]string, hermesAPIKey string, zaiAPIKey string, openrouterAPIKey string, llmModel string) *API {
+func NewAPI(queries *db.Queries, pool *pgxpool.Pool, registry *harness.Registry, bus *service.EventBus, feed *service.ActivityFeed, cipher *secret.Cipher, litellmURL string, artifactsPath string, obsidianPath string, hermesSkillsPath string, apiKeys map[string]string, keys ProviderKeys, llmModel string) *API {
 	return &API{
 		queries:          queries,
 		pool:             pool,
 		registry:         registry,
 		bus:              bus,
 		feed:             feed,
+		cipher:           cipher,
 		litellmURL:       litellmURL,
 		obsidianPath:     obsidianPath,
 		hermesSkillsPath: hermesSkillsPath,
-		hermesAPIKey:     hermesAPIKey,
-		zaiAPIKey:        zaiAPIKey,
-		openrouterAPIKey: openrouterAPIKey,
+		hermesAPIKey:     keys.Hermes,
+		anthropicAPIKey:  keys.Anthropic,
+		openaiAPIKey:     keys.OpenAI,
+		geminiAPIKey:     keys.Gemini,
+		xaiAPIKey:        keys.XAI,
+		falKey:           keys.FAL,
+		zaiAPIKey:        keys.ZAI,
+		openrouterAPIKey: keys.OpenRouter,
 		llmModel:         llmModel,
 		artifacts:        NewArtifactAPI(queries, artifactsPath),
 		memory:           NewMemoryAPI(queries, obsidianPath, litellmURL, llmModel),
@@ -51,15 +65,30 @@ func NewAPI(queries *db.Queries, pool *pgxpool.Pool, registry *harness.Registry,
 	}
 }
 
+// ProviderKeys bundles the env-fallback provider credentials so the API
+// constructor signature stays manageable as providers are added.
+type ProviderKeys struct {
+	Hermes     string
+	Anthropic  string
+	OpenAI     string
+	Gemini     string
+	XAI        string
+	FAL        string
+	ZAI        string
+	OpenRouter string
+}
+
 // buildHarnessConfig creates a harness config map for the given agent.
-func (a *API) buildHarnessConfig(agent db.Agent) map[string]any {
+// Secrets (hermes api_key) resolve through the settings store first, then the
+// env fallback, so a key set in the Settings UI takes effect without a redeploy.
+func (a *API) buildHarnessConfig(ctx context.Context, agent db.Agent) map[string]any {
 	config := map[string]any{
 		"base_url": agent.BaseUrl,
 	}
 	// Pass harness-specific config for hermes
 	if agent.Harness == "hermes" {
-		if a.hermesAPIKey != "" {
-			config["api_key"] = a.hermesAPIKey
+		if key := a.resolveSecret(ctx, "hermes_api_key"); key != "" {
+			config["api_key"] = key
 		}
 		if a.litellmURL != "" {
 			config["litellm_url"] = a.litellmURL
@@ -87,6 +116,16 @@ func (a *API) Router() http.Handler {
 	// Activity feed
 	r.Get("/activity", a.GetActivity)
 
+	// Settings (orchestrator control plane): provider keys + general config.
+	r.Route("/settings", func(r chi.Router) {
+		r.Get("/", a.ListSettings)
+		r.Put("/{key}", a.UpdateSetting)
+		r.Delete("/{key}", a.DeleteSetting)
+	})
+
+	// Harness catalog: the registered harness types an agent can use.
+	r.Get("/harnesses", a.ListHarnesses)
+
 	// Agent routes
 	r.Route("/agents", func(r chi.Router) {
 		r.Get("/", a.ListAgents)
@@ -96,6 +135,7 @@ func (a *API) Router() http.Handler {
 		r.Route("/{id}", func(r chi.Router) {
 			r.Get("/", a.GetAgent)
 			r.Patch("/", a.UpdateAgentConfig)
+			r.Delete("/", a.DeleteAgent)
 			r.Get("/config", a.GetAgentConfig)
 			r.Get("/models", a.GetAgentModels)
 			r.Get("/commands", a.GetAgentCommands)

@@ -92,6 +92,7 @@ type Querier interface {
 	DeleteMessage(ctx context.Context, id pgtype.UUID) error
 	DeleteMessagesByConversation(ctx context.Context, conversationID pgtype.UUID) (int64, error)
 	DeletePipelineItem(ctx context.Context, id pgtype.UUID) error
+	DeleteSetting(ctx context.Context, key string) error
 	DeleteSkill(ctx context.Context, id pgtype.UUID) error
 	DeleteTask(ctx context.Context, id pgtype.UUID) error
 	DeleteWorkflow(ctx context.Context, id pgtype.UUID) error
@@ -163,6 +164,7 @@ type Querier interface {
 	// Tenant-scoped to prevent cross-tenant absorption (ADR-002).
 	// Returns pgx.ErrNoRows if no terminal event exists.
 	GetSessionTerminalEvent(ctx context.Context, arg GetSessionTerminalEventParams) (GetSessionTerminalEventRow, error)
+	GetSetting(ctx context.Context, key string) (AppSetting, error)
 	GetSkill(ctx context.Context, id pgtype.UUID) (Skill, error)
 	GetTask(ctx context.Context, id pgtype.UUID) (Task, error)
 	GetTrackerItem(ctx context.Context, arg GetTrackerItemParams) (TrackerItem, error)
@@ -213,6 +215,7 @@ type Querier interface {
 	ListProjects(ctx context.Context) ([]Project, error)
 	ListRunLog(ctx context.Context, arg ListRunLogParams) ([]RunLog, error)
 	ListRunLogByWpRef(ctx context.Context, arg ListRunLogByWpRefParams) ([]RunLog, error)
+	ListSettings(ctx context.Context) ([]AppSetting, error)
 	ListSkillSummaries(ctx context.Context) ([]ListSkillSummariesRow, error)
 	ListSkills(ctx context.Context) ([]Skill, error)
 	ListSkillsByAgent(ctx context.Context, agentID pgtype.UUID) ([]Skill, error)
@@ -283,6 +286,7 @@ type Querier interface {
 	// separate consumer concern (WP-J / follow-on WPs).
 	UpsertHostLiveness(ctx context.Context, arg UpsertHostLivenessParams) (HostLiveness, error)
 	UpsertMemory(ctx context.Context, arg UpsertMemoryParams) (MemoryIndex, error)
+	UpsertSetting(ctx context.Context, arg UpsertSettingParams) (AppSetting, error)
 	UpsertSkill(ctx context.Context, arg UpsertSkillParams) (Skill, error)
 	// Upsert a tracker item on (project_id, external_ref). Updates title/status/type/url/payload and bumps synced_at.
 	UpsertTrackerItem(ctx context.Context, arg UpsertTrackerItemParams) (TrackerItem, error)
