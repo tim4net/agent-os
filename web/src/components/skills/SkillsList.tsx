@@ -4,8 +4,6 @@ import { listSkills, getSkill, deleteSkill, syncSkillsFromHermes } from '../../a
 import { Icon } from '../Icon'
 import { SkillEditor } from './SkillEditor'
 
-const CATEGORIES = ['general', 'coding', 'research', 'writing', 'automation', 'creative', 'devops', 'gaming', 'media', 'productivity', 'software-development', 'mlops', 'apple', 'email', 'github', 'mcp', 'smart-home', 'social-media', 'red-teaming', 'note-taking', 'data-science', 'diagramming', 'dogfood', 'domain', 'inference-sh', 'multi-tier-llm-routing', 'autonomous-ai-agents', 'yuanbao'] as const
-
 const CATEGORY_COLORS: Record<string, string> = {
   general: 'bg-gray-700 text-gray-300',
   coding: 'bg-blue-900/50 text-blue-300 border border-blue-800',
@@ -109,6 +107,8 @@ export function SkillsList() {
     ? skills
     : skills.filter(s => s.category === categoryFilter)
 
+  const presentCategories = Array.from(new Set(skills.map(s => s.category).filter(Boolean))).sort()
+
   if (creating || editingSkill) {
     return (
       <div className="p-6">
@@ -173,7 +173,7 @@ export function SkillsList() {
           >
             All ({skills.length})
           </button>
-          {CATEGORIES.filter(cat => skills.some(s => s.category === cat)).map(cat => {
+          {presentCategories.map(cat => {
             const count = skills.filter(s => s.category === cat).length
             return (
               <button
