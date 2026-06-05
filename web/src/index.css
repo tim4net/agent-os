@@ -558,6 +558,121 @@
   /* Tab bar uses flex-wrap — all tabs always visible */
 }
 
+/* --------------------------------------------------------------------------
+   Vertical navigation rail (primary nav) — replaces the horizontal tab bar
+   that wrapped to a 2nd row at tablet widths. Pinned far-left, scales freely.
+   -------------------------------------------------------------------------- */
+.vertical-rail {
+  width: 76px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 0 20px;
+  background: var(--bg-surface);
+  border-right: 1px solid var(--border-subtle);
+  z-index: 10;
+}
+
+.rail-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 60px;
+  height: 44px;
+  margin-bottom: 6px;
+  border-radius: var(--radius-md);
+  color: var(--text-muted);
+  transition: color var(--duration-fast) ease, background var(--duration-fast) ease;
+}
+.rail-toggle:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.rail-items {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+}
+.rail-items--bottom {
+  margin-top: auto;
+}
+
+.rail-item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  width: 60px;
+  height: 60px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-lg);
+  color: var(--text-secondary);
+  box-sizing: border-box;
+  transition: all var(--duration-base) var(--ease-out-expo);
+}
+.rail-item:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+.rail-item--active {
+  color: var(--text-primary);
+  background: linear-gradient(135deg, rgba(91, 141, 239, 0.10) 0%, rgba(167, 139, 250, 0.10) 100%);
+  border-color: rgba(167, 139, 250, 0.12);
+}
+.rail-item--active::before {
+  content: '';
+  position: absolute;
+  left: -8px; /* (76 - 60) / 2 */
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 32px;
+  background: linear-gradient(to bottom, var(--accent-blue), var(--accent-purple));
+  border-radius: 0 4px 4px 0;
+  box-shadow: 0 0 12px rgba(167, 139, 250, 0.4);
+}
+.rail-item__label {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: -0.2px;
+}
+.rail-item--active .rail-item__icon {
+  font-variation-settings: 'FILL' 1;
+  background: linear-gradient(to right, var(--accent-blue), var(--accent-purple));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.rail-item--active .rail-item__label {
+  background: linear-gradient(to right, var(--accent-blue), var(--accent-purple));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* Narrow widths: collapse rail to icon-only */
+@media (max-width: 768px) {
+  .vertical-rail {
+    width: 64px;
+    padding: 10px 0 16px;
+  }
+  .rail-toggle { width: 48px; }
+  .rail-item {
+    width: 48px;
+    height: 48px;
+    gap: 0;
+  }
+  .rail-item__label { display: none; }
+  .rail-item--active::before { left: -8px; } /* (64 - 48) / 2 */
+}
+
 /* Standalone PWA: add safe area padding for notch devices */
 @media (display-mode: standalone) {
   body {
