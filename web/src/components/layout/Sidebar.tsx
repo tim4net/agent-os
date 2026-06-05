@@ -339,7 +339,7 @@ export function Sidebar({
                     <div className="relative group">
                       <button
                         onClick={() => toggleAgentTree(agent.id)}
-                        className={`w-full flex items-center gap-2 px-2.5 py-2 rounded-xl text-xs transition-all duration-200 ${
+                        className={`w-full flex items-center gap-2 pl-2.5 pr-8 py-2 rounded-xl text-xs transition-all duration-200 ${
                           isSelected
                             ? 'bg-[var(--bg-active)] text-[var(--text-primary)]'
                             : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'
@@ -358,26 +358,26 @@ export function Sidebar({
                         >
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                         </svg>
-                        {/* Gear icon */}
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            setConfigAgent(agent)
-                          }}
-                          title="Configure agent"
-                          aria-label="Configure agent"
-                          className="opacity-0 group-hover:opacity-100 p-1 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-active)] transition-all"
-                        >
-                          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth={2}
-                              d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 01-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 011.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
-                            />
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                          </svg>
-                        </button>
+                      </button>
+                      {/* Gear icon — sibling button (not nested) for valid a11y semantics */}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setConfigAgent(agent)
+                        }}
+                        title="Configure agent"
+                        aria-label="Configure agent"
+                        className="absolute right-1.5 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 p-1 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-active)] transition-all"
+                      >
+                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 01-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 011.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
+                          />
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                        </svg>
                       </button>
                     </div>
 
@@ -474,7 +474,7 @@ export function Sidebar({
                       <div className="relative group">
                         <button
                           onClick={() => onSelectAgent(agent)}
-                          className={`w-full flex items-center gap-2 px-2.5 py-2 rounded-xl text-xs transition-all duration-200 ${
+                          className={`w-full flex items-center gap-2 pl-2.5 pr-8 py-2 rounded-xl text-xs transition-all duration-200 ${
                             isSelected
                               ? 'bg-[var(--bg-active)] text-[var(--text-primary)]'
                               : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]'
@@ -484,25 +484,26 @@ export function Sidebar({
                           <span className={`flex-1 text-left font-medium truncate`}>
                             {agent.display_name || agent.name}
                           </span>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              setConfigAgent(agent)
-                            }}
-                            title="Configure agent"
-                            aria-label="Configure agent"
-                            className="opacity-0 group-hover:opacity-100 p-1 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-active)] transition-all"
-                          >
-                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                strokeWidth={2}
-                                d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 01-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 011.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
-                              />
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                            </svg>
-                          </button>
+                        </button>
+                        {/* Gear icon — sibling button (not nested) for valid a11y semantics */}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setConfigAgent(agent)
+                          }}
+                          title="Configure agent"
+                          aria-label="Configure agent"
+                          className="absolute right-1.5 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 p-1 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-active)] transition-all"
+                        >
+                          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2}
+                              d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 01-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 011.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
+                            />
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                          </svg>
                         </button>
                       </div>
                     </div>
