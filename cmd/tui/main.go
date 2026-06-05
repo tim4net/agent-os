@@ -341,6 +341,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case key.Matches(km, keys.SwitchAgent):
 				m.state = agentPickerView
 				return m, tea.Batch(cmds...)
+			case km.String() == "/" && composerEmpty:
+				// Slash on an empty composer is a quick "switch agent" command.
+				// With text in the composer it falls through to the default
+				// branch below and is typed literally (e.g. "1/2", "a/b").
+				m.state = agentPickerView
+				return m, tea.Batch(cmds...)
 			case key.Matches(km, keys.History):
 				// Open history for the active agent and load its conversations.
 				if m.activeAgent != nil {
@@ -433,19 +439,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg := msg.(type) {
-	case tea.MouseMsg:
-		switch m.state {
-		case chatView:
-			m.viewport, vpCmd = m.viewport.Update(msg)
-			cmds = append(cmds, vpCmd)
-		case agentPickerView:
-			m.agentList, lsCmd = m.agentList.Update(msg)
-			cmds = append(cmds, lsCmd)
-		case historyView:
-			m.convList, lsCmd = m.convList.Update(msg)
-			cmds = append(cmds, lsCmd)
-		}
-
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
