@@ -13,6 +13,12 @@ INSERT INTO conversations (agent_id, title, metadata)
 VALUES ($1, $2, $3)
 RETURNING *;
 
+-- name: DeleteConversation :exec
+-- Deletes a conversation and (via ON DELETE CASCADE) its messages. Used to roll
+-- back a freshly-created conversation when the very first chat turn fails before
+-- streaming, so a failed send never leaves an orphan conversation behind.
+DELETE FROM conversations WHERE id = $1;
+
 -- name: UpdateConversation :one
 UPDATE conversations SET title = $2, updated_at = NOW()
 WHERE id = $1
