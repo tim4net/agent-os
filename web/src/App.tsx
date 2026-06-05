@@ -44,6 +44,12 @@ const tabMeta: Record<string, string> = {
 const tabs = ['Chat', 'Create', 'Build', 'Knowledge', 'Automate', 'Observe', 'Control', 'Settings'] as const
 type Tab = (typeof tabs)[number]
 
+// Tabs that consume the chat/agent sidebar (agent picker + conversation tree).
+// Chat is the primary consumer; Create attributes generated media to the
+// selected agent. Every other tab ignores the sidebar, so it is unmounted there
+// — the content area reclaims the full width instead of carrying a dead column.
+const SIDEBAR_TABS = new Set<Tab>(['Chat', 'Create'])
+
 /** Reusable segmented toggle for sub-views within a tab */
 function SubViewToggle({ options, value, onChange }: {
   options: { key: string; label: string }[]
@@ -213,6 +219,14 @@ function App() {
     }
     e.target.value = ''
   }
+
+  // ── Contextual sidebar ──
+  // The chat/agent sidebar is mounted only on tabs that use it (Chat, Create);
+  // on every other tab it is unmounted so the content area reclaims the width.
+  // Mobile is unchanged: the sidebar is always an on-demand overlay there.
+  const tabConsumesSidebar = SIDEBAR_TABS.has(activeTab)
+  const showSidebar = isMobile || tabConsumesSidebar
+  const effectiveCollapsed = isMobile ? false : sidebarCollapsed
 
   function renderContent() {
     switch (activeTab) {
@@ -414,21 +428,25 @@ function App() {
         isMobile={isMobile}
       />
 
-      {/* Sidebar: inline on desktop, overlay on mobile */}
-      <div className={isMobile ? (sidebarOpen ? 'fixed inset-y-0 left-0 z-50' : 'hidden') : ''}>
-        <Sidebar
-          agents={agents}
-          selectedAgent={selectedAgent}
-          onSelectAgent={handleSelectAgent}
-          onAgentsChanged={refreshAgents}
-          collapsed={isMobile ? false : sidebarCollapsed}
-          activeConversationId={activeConversationId}
-          onSelectConversation={handleSelectConversation}
-          onNewChat={handleNewChat}
-          onNewChatWithAgent={handleNewChatWithAgent}
-          conversationVersion={conversationVersion}
-        />
-      </div>
+      {/* Sidebar: inline on desktop, overlay on mobile. Unmounted on tabs that
+          don't use it (Build/Knowledge/Automate/Observe/Control/Settings) so the
+          content area reclaims that width. */}
+      {showSidebar && (
+        <div className={isMobile ? (sidebarOpen ? 'fixed inset-y-0 left-0 z-50' : 'hidden') : ''}>
+          <Sidebar
+            agents={agents}
+            selectedAgent={selectedAgent}
+            onSelectAgent={handleSelectAgent}
+            onAgentsChanged={refreshAgents}
+            collapsed={effectiveCollapsed}
+            activeConversationId={activeConversationId}
+            onSelectConversation={handleSelectConversation}
+            onNewChat={handleNewChat}
+            onNewChatWithAgent={handleNewChatWithAgent}
+            conversationVersion={conversationVersion}
+          />
+        </div>
+      )}
 
       <div className="flex-1 flex flex-col min-w-0">
         {/* Content with page transition */}

@@ -87,6 +87,10 @@ type Querier interface {
 	// Deletes an app instance by ID.
 	DeleteAppInstance(ctx context.Context, id pgtype.UUID) error
 	DeleteArtifact(ctx context.Context, id pgtype.UUID) error
+	// Deletes a conversation and (via ON DELETE CASCADE) its messages. Used to roll
+	// back a freshly-created conversation when the very first chat turn fails before
+	// streaming, so a failed send never leaves an orphan conversation behind.
+	DeleteConversation(ctx context.Context, id pgtype.UUID) error
 	DeleteGoal(ctx context.Context, id pgtype.UUID) error
 	DeleteLastExchange(ctx context.Context, conversationID pgtype.UUID) (int64, error)
 	DeleteMemory(ctx context.Context, filePath string) error

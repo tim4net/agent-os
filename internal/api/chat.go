@@ -187,6 +187,12 @@ func (a *API) ChatWithAgent(w http.ResponseWriter, r *http.Request) {
 	var convID pgtype.UUID
 	var convMeta conversationMeta
 
+	// Tracks whether THIS request created the conversation. If the first turn of
+	// a brand-new conversation fails before we start streaming, we roll it back
+	// (delete) so a failed send never leaves an orphan conversation in history.
+	// We never roll back a pre-existing conversation the user is continuing.
+	conversationCreated := false
+
 	if req.ConversationID != "" {
 		if err := convID.Scan(req.ConversationID); err != nil {
 			http.Error(w, "invalid conversation_id", http.StatusBadRequest)
@@ -227,6 +233,26 @@ func (a *API) ChatWithAgent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		convID = conv.ID
+		conversationCreated = true
+	}
+
+	// failPreStream rolls back a brand-new conversation (and its cascaded user
+	// message) before returning an error, so a chat turn that fails before the
+	// SSE stream starts never leaves an orphan conversation in history. For an
+	// existing conversation it is a no-op rollback — we only delete what this
+	// request created. Use this for every error return between here and the
+	// point where SSE headers are written.
+	failPreStream := func(msg string, code int) {
+		if conversationCreated {
+			if delErr := a.queries.DeleteConversation(context.Background(), convID); delErr != nil {
+				slog.Warn("failed to roll back orphan conversation after pre-stream error",
+					"conversation_id", convID.String(), "error", delErr)
+			} else {
+				slog.Debug("rolled back orphan conversation after pre-stream error",
+					"conversation_id", convID.String())
+			}
+		}
+		http.Error(w, msg, code)
 	}
 
 	// Store the user message
@@ -237,7 +263,7 @@ func (a *API) ChatWithAgent(w http.ResponseWriter, r *http.Request) {
 		Metadata:       []byte("{}"),
 	})
 	if err != nil {
-		http.Error(w, "failed to store message", http.StatusInternalServerError)
+		failPreStream("failed to store message", http.StatusInternalServerError)
 		return
 	}
 
@@ -288,10 +314,10 @@ func (a *API) ChatWithAgent(w http.ResponseWriter, r *http.Request) {
 		chunkCh, err = hermesHarness.SessionChat(r.Context(), convMeta.HermesSessionID, req.Message)
 		if err != nil {
 			if err == harness.ErrNotSupported {
-				http.Error(w, "chat not supported for this agent", http.StatusNotImplemented)
+				failPreStream("chat not supported for this agent", http.StatusNotImplemented)
 				return
 			}
-			http.Error(w, "chat failed: "+err.Error(), http.StatusInternalServerError)
+			failPreStream("chat failed: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 	} else {
@@ -311,7 +337,7 @@ func (a *API) ChatWithAgent(w http.ResponseWriter, r *http.Request) {
 		// Get conversation history for context
 		history, err := a.queries.ListMessages(r.Context(), convID)
 		if err != nil {
-			http.Error(w, "failed to load history", http.StatusInternalServerError)
+			failPreStream("failed to load history", http.StatusInternalServerError)
 			return
 		}
 
@@ -342,10 +368,10 @@ func (a *API) ChatWithAgent(w http.ResponseWriter, r *http.Request) {
 		chunkCh, err = h.Chat(r.Context(), messages, opts)
 		if err != nil {
 			if err == harness.ErrNotSupported {
-				http.Error(w, "chat not supported for this agent", http.StatusNotImplemented)
+				failPreStream("chat not supported for this agent", http.StatusNotImplemented)
 				return
 			}
-			http.Error(w, "chat failed: "+err.Error(), http.StatusInternalServerError)
+			failPreStream("chat failed: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 	}
@@ -367,6 +393,8 @@ func (a *API) ChatWithAgent(w http.ResponseWriter, r *http.Request) {
 
 	// Collect full response for storage
 	var fullContent string
+	streamErrored := false
+	doneSent := false
 
 	for chunk := range chunkCh {
 		if chunk.Error != nil {
@@ -376,6 +404,7 @@ func (a *API) ChatWithAgent(w http.ResponseWriter, r *http.Request) {
 			if canFlush {
 				flusher.Flush()
 			}
+			streamErrored = true
 			break
 		}
 
@@ -413,10 +442,10 @@ func (a *API) ChatWithAgent(w http.ResponseWriter, r *http.Request) {
 			}
 
 			doneData, _ := json.Marshal(map[string]any{
-				"done":                true,
-				"conversation_id":     convID.String(),
-				"context_sources":     ragSources,
-				"user_message_id":     userMsg.ID.String(),
+				"done":            true,
+				"conversation_id": convID.String(),
+				"context_sources": ragSources,
+				"user_message_id": userMsg.ID.String(),
 				"assistant_message_id": func() string {
 					if storeErr == nil {
 						return assistantMsg.ID.String()
@@ -428,6 +457,24 @@ func (a *API) ChatWithAgent(w http.ResponseWriter, r *http.Request) {
 			if canFlush {
 				flusher.Flush()
 			}
+			doneSent = true
+		}
+	}
+
+	// Roll back an orphan: if THIS request created the conversation but no done
+	// event was ever sent (an error chunk, or an empty stream that never
+	// completed), the client never received the conversation_id — so delete the
+	// conversation (cascading its lone user message) rather than leave a one-sided
+	// ghost in history. We only roll back conversations this request created —
+	// never an existing thread the user was continuing — and never one the client
+	// already learned about via a done event.
+	if conversationCreated && !doneSent {
+		if delErr := a.queries.DeleteConversation(context.Background(), convID); delErr != nil {
+			slog.Warn("failed to roll back orphan conversation after failed stream",
+				"conversation_id", convID.String(), "stream_errored", streamErrored, "error", delErr)
+		} else {
+			slog.Debug("rolled back orphan conversation after failed stream",
+				"conversation_id", convID.String(), "stream_errored", streamErrored)
 		}
 	}
 

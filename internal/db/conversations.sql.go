@@ -70,6 +70,18 @@ func (q *Queries) CreateMessage(ctx context.Context, arg CreateMessageParams) (M
 	return i, err
 }
 
+const deleteConversation = `-- name: DeleteConversation :exec
+DELETE FROM conversations WHERE id = $1
+`
+
+// Deletes a conversation and (via ON DELETE CASCADE) its messages. Used to roll
+// back a freshly-created conversation when the very first chat turn fails before
+// streaming, so a failed send never leaves an orphan conversation behind.
+func (q *Queries) DeleteConversation(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteConversation, id)
+	return err
+}
+
 const deleteLastExchange = `-- name: DeleteLastExchange :execrows
 WITH last_user AS (
     SELECT id FROM messages
