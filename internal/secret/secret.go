@@ -1,6 +1,7 @@
 // Package secret provides authenticated symmetric encryption (AES-256-GCM)
-// for secrets stored at rest in the app_settings table, plus a master-key
-// resolver that survives container redeploys.
+// for secrets stored at rest in the resource vault (resources.enc_value /
+// enc_config) and per-agent metadata, plus a master-key resolver that survives
+// container redeploys.
 //
 // Threat model: protect provider API keys / agent auth tokens so a DB dump
 // (volume snapshot, pg_dump, backup leak) does not expose plaintext secrets.

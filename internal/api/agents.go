@@ -186,7 +186,7 @@ func (a *API) GetAgentConfig(w http.ResponseWriter, r *http.Request) {
 		"id":            agent.ID,
 		"role":          agent.Role,
 		"system_prompt": agent.SystemPrompt,
-		"persona":       agent.Persona,
+		"persona":       redactSecretKeys(agent.Persona),
 	})
 }
 

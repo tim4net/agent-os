@@ -46,13 +46,13 @@ export function AccessMatrix({ onOpenAgent }: { onOpenAgent: (agent: Agent) => v
 
   const toggleGrant = async (agentId: string, resourceId: string, isGranted: boolean) => {
     const key = `${agentId}:${resourceId}`
-    const newGrants = new Set(grants)
-    if (isGranted) {
-      newGrants.delete(key)
-    } else {
-      newGrants.add(key)
-    }
-    setGrants(newGrants)
+    // Optimistic update (functional, so concurrent toggles don't clobber each other).
+    setGrants(prev => {
+      const next = new Set(prev)
+      if (isGranted) next.delete(key)
+      else next.add(key)
+      return next
+    })
 
     try {
       if (isGranted) {
@@ -62,9 +62,13 @@ export function AccessMatrix({ onOpenAgent }: { onOpenAgent: (agent: Agent) => v
       }
     } catch (err) {
       showToast((err as Error).message || 'Failed to update grant', 'error')
-      // Revert
-      const reverted = new Set(grants)
-      setGrants(reverted)
+      // Revert ONLY this edge, preserving any other in-flight toggles.
+      setGrants(prev => {
+        const next = new Set(prev)
+        if (isGranted) next.add(key)
+        else next.delete(key)
+        return next
+      })
     }
   }
 

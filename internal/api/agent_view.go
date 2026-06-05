@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/base64"
 	"encoding/json"
+	"strings"
 
 	"github.com/tim4net/agent-os/internal/db"
 )
@@ -11,6 +12,40 @@ import (
 // OMITS the raw Metadata/Persona JSONB blobs, which can carry per-agent secret
 // material (e.g. an encrypted openclaw auth token). Every agent HTTP response
 // goes through sanitizeAgent so secret material never leaves the server.
+
+// secretKeyRe matches persona/config keys that may carry secret material and
+// must be redacted before serialization.
+var secretKeyPattern = []string{"token", "secret", "api_key", "apikey", "password", "passwd", "auth", "key"}
+
+// redactSecretKeys parses a JSONB blob and replaces the values of any
+// secret-looking top-level keys with "***", returning a json.RawMessage safe to
+// serialize. On parse failure it returns an empty object rather than the raw blob.
+func redactSecretKeys(blob []byte) json.RawMessage {
+	if len(blob) == 0 {
+		return json.RawMessage("{}")
+	}
+	var m map[string]any
+	if err := json.Unmarshal(blob, &m); err != nil {
+		return json.RawMessage("{}")
+	}
+	for k, v := range m {
+		lk := strings.ToLower(k)
+		for _, pat := range secretKeyPattern {
+			if strings.Contains(lk, pat) {
+				if _, isStr := v.(string); isStr {
+					m[k] = "***"
+				}
+				break
+			}
+		}
+	}
+	out, err := json.Marshal(m)
+	if err != nil {
+		return json.RawMessage("{}")
+	}
+	return out
+}
+
 type agentView struct {
 	ID           any    `json:"id"`
 	Name         string `json:"name"`

@@ -188,3 +188,20 @@ func mustJSON(v any) string {
 	b, _ := json.Marshal(v)
 	return string(b)
 }
+
+// TestRedactSecretKeys proves persona/config blobs are redacted before serialize.
+func TestRedactSecretKeys(t *testing.T) {
+	in := []byte(`{"role":"dev","api_key":"sk-leak","nested_token":"t0p","count":3,"note":"safe"}`)
+	out := redactSecretKeys(in)
+	s := string(out)
+	if strings.Contains(s, "sk-leak") || strings.Contains(s, "t0p") {
+		t.Fatalf("redaction leaked a secret value: %s", s)
+	}
+	if !strings.Contains(s, `"role":"dev"`) || !strings.Contains(s, `"note":"safe"`) {
+		t.Fatalf("redaction dropped non-secret fields: %s", s)
+	}
+	// malformed → empty object, never the raw blob
+	if got := string(redactSecretKeys([]byte("not json"))); got != "{}" {
+		t.Fatalf("malformed blob should redact to {}, got %s", got)
+	}
+}

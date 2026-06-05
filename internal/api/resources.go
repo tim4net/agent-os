@@ -47,13 +47,23 @@ func toResourceView(r db.Resource) resourceView {
 		Label:     r.Label,
 		Provider:  r.Provider,
 		IsSecret:  r.IsSecret,
-		IsSet:     len(r.EncValue) > 0 || !r.IsSecret,
+		IsSet:     resourceIsSet(r),
 		Last4:     r.Last4,
 		Config:    cfg,
 		Status:    r.Status,
 		CreatedAt: r.CreatedAt,
 		UpdatedAt: r.UpdatedAt,
 	}
+}
+
+// resourceIsSet reports whether a resource is "configured". A SECRET resource is
+// set only when it actually holds ciphertext; a non-secret resource (e.g. an
+// MCP server defined purely by config) is always considered set.
+func resourceIsSet(r db.Resource) bool {
+	if r.IsSecret {
+		return len(r.EncValue) > 0
+	}
+	return true
 }
 
 func toResourceViews(in []db.Resource) []resourceView {
@@ -214,6 +224,7 @@ func (a *API) UpdateResource(w http.ResponseWriter, r *http.Request) {
 			isSecret = false
 			encValue = nil
 			last4 = ""
+			status = "unset"
 		} else {
 			if !a.cipher.Enabled() {
 				http.Error(w, "secret storage is disabled: set AOS_MASTER_KEY on the server", http.StatusServiceUnavailable)
@@ -369,6 +380,15 @@ func (a *API) RevokeAgentResource(w http.ResponseWriter, r *http.Request) {
 	}
 	resourceID, ok := parseUUIDParam(w, r, "resourceId")
 	if !ok {
+		return
+	}
+	// Validate both ends exist so a bad id returns 404 (consistent with grant).
+	if _, err := a.queries.GetAgent(r.Context(), agentID); err != nil {
+		http.Error(w, "agent not found", http.StatusNotFound)
+		return
+	}
+	if _, err := a.queries.GetResource(r.Context(), resourceID); err != nil {
+		http.Error(w, "resource not found", http.StatusNotFound)
 		return
 	}
 	if err := a.queries.RevokeResource(r.Context(), db.RevokeResourceParams{
