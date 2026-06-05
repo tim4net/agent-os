@@ -65,6 +65,7 @@ func main() {
 	harness.Register("hermes", harness.NewHermesHarness)
 	harness.Register("openclaw", harness.NewOpenClawHarness)
 	harness.Register("litellm", harness.NewLiteLLMHarness)
+	harness.Register("agy", harness.NewAgyHarness)
 
 	// Start agent watcher
 	watcher := service.NewAgentWatcher(queries, harness.DefaultRegistry, bus, cfg.LiteLLMURL, cfg.HermesAPIKey)
@@ -230,6 +231,10 @@ var knownAgentsList = []knownAgent{
 	{Name: "roux", DisplayName: "Roux", Harness: "hermes", BaseURL: "http://roux:8080"},
 	{Name: "crawbot", DisplayName: "Crawbot", Harness: "openclaw", BaseURL: "http://crawbot:8080"},
 	{Name: "litellm", DisplayName: "LiteLLM on xps", Harness: "litellm", BaseURL: "http://xps:4000"},
+	// agy is a LOCAL coding agent (Antigravity CLI) — runs as a subprocess on the
+	// Agent OS host with ambient keyring auth, so it's reachable with no network
+	// backend. base_url is intentionally unused by the agy harness.
+	{Name: "agy", DisplayName: "Antigravity (agy)", Harness: "agy", BaseURL: "local://agy"},
 }
 
 // ensureKnownAgents inserts agents that don't yet exist in the database.

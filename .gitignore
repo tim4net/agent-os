@@ -35,6 +35,7 @@ agent-os
 agent-os-server
 gen-openapi
 orchestrator
+bin/
 
 # local autonomy control state (never commit)
 .autonomy-mode
