@@ -17,8 +17,10 @@ interface VerticalRailProps {
  * bar, which wrapped to a second row at tablet widths (~768-1024px). The rail
  * never runs out of horizontal room, so it scales as destinations are added.
  *
- * Settings is pinned to the bottom; all other destinations sit at the top under
- * the sidebar toggle. Keyboard: role="tablist" with arrow-key roving focus.
+ * Settings is pinned to the bottom (CSS margin-top:auto) while remaining inside
+ * the single role="tablist" so ARIA ownership and arrow-key roving focus cover
+ * every destination. Keyboard: arrow keys (+ Home/End) move selection AND DOM
+ * focus to the newly-active tab (true roving tabindex).
  */
 export function VerticalRail({
   tabs,
@@ -31,29 +33,41 @@ export function VerticalRail({
 }: VerticalRailProps) {
   const railRef = useRef<HTMLDivElement>(null)
 
-  // Settings pinned to bottom; everything else flows from the top.
-  const topTabs = tabs.filter((t) => t !== 'Settings')
-  const bottomTabs = tabs.filter((t) => t === 'Settings')
+  // Move selection and DOM focus together so the focused element is always the
+  // active tab (roving tabindex): the other tabs are tabIndex=-1, so without
+  // re-focusing, focus would be stranded on a now-unfocusable button.
+  function selectAndFocus(tab: string) {
+    onSelect(tab)
+    const idx = tabs.indexOf(tab)
+    // Focus after the click/keydown handler returns so the DOM has the new
+    // tabIndex applied; querying the tablist keeps this independent of layout.
+    requestAnimationFrame(() => {
+      const buttons = railRef.current?.querySelectorAll<HTMLButtonElement>('[role="tab"]')
+      buttons?.[idx]?.focus()
+    })
+  }
 
   function handleKeyDown(e: React.KeyboardEvent) {
     const idx = tabs.indexOf(activeTab)
     if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
       e.preventDefault()
-      onSelect(tabs[(idx + 1) % tabs.length])
+      selectAndFocus(tabs[(idx + 1) % tabs.length])
     } else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
       e.preventDefault()
-      onSelect(tabs[(idx - 1 + tabs.length) % tabs.length])
+      selectAndFocus(tabs[(idx - 1 + tabs.length) % tabs.length])
     } else if (e.key === 'Home') {
       e.preventDefault()
-      onSelect(tabs[0])
+      selectAndFocus(tabs[0])
     } else if (e.key === 'End') {
       e.preventDefault()
-      onSelect(tabs[tabs.length - 1])
+      selectAndFocus(tabs[tabs.length - 1])
     }
   }
 
   const renderItem = (tab: string) => {
     const isActive = activeTab === tab
+    // Settings is pinned to the bottom of the rail while staying in the tablist.
+    const isEnd = tab === 'Settings'
     return (
       <button
         key={tab}
@@ -62,7 +76,7 @@ export function VerticalRail({
         tabIndex={isActive ? 0 : -1}
         title={tab}
         onClick={() => onSelect(tab)}
-        className={`rail-item ${isActive ? 'rail-item--active' : ''}`}
+        className={`rail-item ${isActive ? 'rail-item--active' : ''} ${isEnd ? 'rail-item--end' : ''}`}
       >
         <Icon name={tabMeta[tab]} size={24} className="rail-item__icon" />
         <span className="rail-item__label">{tab}</span>
@@ -71,10 +85,7 @@ export function VerticalRail({
   }
 
   return (
-    <nav
-      className="vertical-rail"
-      aria-label="Primary navigation"
-    >
+    <nav className="vertical-rail" aria-label="Primary navigation">
       {/* Sidebar toggle — collapses agents sidebar (desktop) or opens it (mobile) */}
       <button
         onClick={onToggleSidebar}
@@ -105,11 +116,7 @@ export function VerticalRail({
         className="rail-items"
         onKeyDown={handleKeyDown}
       >
-        {topTabs.map(renderItem)}
-      </div>
-
-      <div className="rail-items rail-items--bottom">
-        {bottomTabs.map(renderItem)}
+        {tabs.map(renderItem)}
       </div>
     </nav>
   )

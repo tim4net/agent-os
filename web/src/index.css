@@ -555,7 +555,6 @@
     margin-right: 0.5rem;
   }
 
-  /* Tab bar uses flex-wrap — all tabs always visible */
 }
 
 /* --------------------------------------------------------------------------
@@ -592,13 +591,16 @@
 }
 
 .rail-items {
+  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 6px;
   width: 100%;
 }
-.rail-items--bottom {
+/* Settings (last item) pinned to the bottom of the rail while staying inside
+   the single role="tablist" for ARIA ownership + arrow-key roving focus. */
+.rail-item--end {
   margin-top: auto;
 }
 
@@ -623,8 +625,12 @@
 }
 .rail-item--active {
   color: var(--text-primary);
-  background: linear-gradient(135deg, rgba(91, 141, 239, 0.10) 0%, rgba(167, 139, 250, 0.10) 100%);
-  border-color: rgba(167, 139, 250, 0.12);
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--accent-blue) 10%, transparent) 0%,
+    color-mix(in srgb, var(--accent-purple) 10%, transparent) 100%
+  );
+  border-color: color-mix(in srgb, var(--accent-purple) 12%, transparent);
 }
 .rail-item--active::before {
   content: '';
@@ -636,7 +642,7 @@
   height: 32px;
   background: linear-gradient(to bottom, var(--accent-blue), var(--accent-purple));
   border-radius: 0 4px 4px 0;
-  box-shadow: 0 0 12px rgba(167, 139, 250, 0.4);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--accent-purple) 40%, transparent);
 }
 .rail-item__label {
   font-size: 11px;
