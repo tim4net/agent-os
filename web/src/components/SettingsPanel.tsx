@@ -64,7 +64,7 @@ export default function SettingsPanel() {
         </h3>
         <div className="glass-card p-4">
           <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-            <strong style={{ color: 'var(--text-primary)' }}>Agent OS</strong> — Multi-agent operating system
+            <strong style={{ color: 'var(--text-primary)' }}>AgentOS</strong> — Multi-agent operating system
           </p>
           <p className="text-xs mt-2" style={{ color: 'var(--text-muted)' }}>
             Stack: Go (Chi + sqlc + pgx) • React 19 + TypeScript 5 + Tailwind CSS v4 • PostgreSQL 17
