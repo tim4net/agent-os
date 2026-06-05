@@ -170,6 +170,7 @@ export function SkillsList() {
                 ? 'bg-gray-600 text-white'
                 : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
             }`}
+            aria-pressed={categoryFilter === 'all'}
           >
             All ({skills.length})
           </button>
@@ -184,6 +185,7 @@ export function SkillsList() {
                     ? 'bg-gray-600 text-white'
                     : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
                 }`}
+                aria-pressed={categoryFilter === cat}
               >
                 {cat} ({count})
               </button>
