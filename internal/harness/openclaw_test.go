@@ -315,6 +315,18 @@ func sha256Sum(b []byte) []byte {
 	return s[:]
 }
 
+func TestParseHelloOKPayloadVersion_UsesServerVersion(t *testing.T) {
+	payload := json.RawMessage(`{"type":"hello-ok","protocol":4,"server":{"version":"2026.6.1"}}`)
+
+	version, msg := parseHelloOKPayloadVersion(payload)
+	if msg != "" {
+		t.Fatalf("parseHelloOKPayloadVersion msg = %q, want empty", msg)
+	}
+	if version != "2026.6.1" {
+		t.Fatalf("version = %q, want 2026.6.1", version)
+	}
+}
+
 // --- 4. Streaming decode ----------------------------------------------------
 
 func TestChatStreamDecoder_DeltaThenFinal_EmitsPongThenDone(t *testing.T) {
@@ -400,5 +412,42 @@ func TestChatStreamDecoder_MultiPartFinalConcatenatesText(t *testing.T) {
 	}
 	if !done || len(chunks) != 2 || chunks[0].Content != "PONG" {
 		t.Fatalf("want concatenated PONG + done, got %+v", chunks)
+	}
+}
+
+// --- 5. AC7: Init errors must never echo secret material --------------------
+
+// TestInit_MalformedDeviceKey_ErrorLeaksNoSecret feeds a device blob whose
+// privateKeyPem is not a valid key. Init must return an error (no silent
+// downgrade) AND that error must not contain the token or any key bytes — the
+// handler logs this error on the probe path (agents.go), so a leak here would
+// put secrets in the logs.
+func TestInit_MalformedDeviceKey_ErrorLeaksNoSecret(t *testing.T) {
+	const secretToken = "SUPERSECRET-DEVICE-TOKEN-do-not-log"
+	// keySentinel stands in for private-key bytes. It is not a parseable key, so
+	// Init takes its "invalid device credential" branch; we then assert the
+	// sentinel (i.e. the key material) never appears in the surfaced error. It is
+	// placed directly as the privateKeyPem value so it genuinely enters the blob.
+	const keySentinel = "DEADBEEF-KEY-MATERIAL-do-not-log"
+	blob, err := json.Marshal(map[string]string{
+		"deviceId":      "abc123",
+		"privateKeyPem": keySentinel,
+		"deviceToken":   secretToken,
+	})
+	if err != nil {
+		t.Fatalf("marshal blob: %v", err)
+	}
+
+	o := NewOpenClawHarness()
+	initErr := o.Init(map[string]any{"base_url": "http://agent.test", "auth_token": string(blob)})
+	if initErr == nil {
+		t.Fatal("Init with a malformed device key should error (no silent downgrade)")
+	}
+	msg := initErr.Error()
+	if strings.Contains(msg, secretToken) {
+		t.Fatalf("Init error leaked the device token: %q", msg)
+	}
+	if strings.Contains(msg, keySentinel) {
+		t.Fatalf("Init error leaked key material: %q", msg)
 	}
 }

@@ -64,6 +64,17 @@ func (g *GenericHarness) Health(ctx context.Context) (*HealthStatus, error) {
 	return status, nil
 }
 
+func (g *GenericHarness) VersionInfo(ctx context.Context) (*VersionInfo, error) {
+	checkedAt := time.Now().UTC()
+	unknown := &VersionInfo{Current: "", Source: "unknown", CheckedAt: checkedAt}
+
+	health, err := g.Health(ctx)
+	if err != nil || health == nil || health.Version == "" {
+		return unknown, nil
+	}
+	return &VersionInfo{Current: health.Version, Source: "health", CheckedAt: checkedAt}, nil
+}
+
 func (g *GenericHarness) Chat(ctx context.Context, messages []ChatMessage, opts ChatOptions) (<-chan ChatChunk, error) {
 	return nil, ErrNotSupported
 }

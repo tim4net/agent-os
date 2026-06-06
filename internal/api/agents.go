@@ -1,9 +1,12 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -273,6 +276,63 @@ func modelDisplayName(id string) string {
 		return name
 	}
 	return id
+}
+
+// GetAgentVersion returns the upstream version reported by an agent's harness.
+func (a *API) GetAgentVersion(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+
+	var id pgtype.UUID
+	if err := id.Scan(idStr); err != nil {
+		http.Error(w, "invalid agent ID", http.StatusBadRequest)
+		return
+	}
+
+	agent, err := a.queries.GetAgent(r.Context(), id)
+	if err != nil {
+		http.Error(w, "agent not found", http.StatusNotFound)
+		return
+	}
+
+	h, err := a.registry.Get(agent.Harness)
+	if err != nil {
+		http.Error(w, "unknown harness: "+agent.Harness, http.StatusBadRequest)
+		return
+	}
+
+	respondUnknown := func() {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(&harness.VersionInfo{Current: "", Source: "unknown", CheckedAt: time.Now().UTC()})
+	}
+
+	config := a.buildHarnessConfig(r.Context(), agent)
+	if err := h.Init(config); err != nil {
+		slog.Warn("agent version harness init failed", "agent_id", idStr, "harness", agent.Harness, "error", err)
+		respondUnknown()
+		return
+	}
+	defer h.Close()
+
+	prober, ok := h.(harness.VersionProber)
+	if !ok {
+		respondUnknown()
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	info, err := prober.VersionInfo(ctx)
+	if err != nil || info == nil {
+		if err != nil {
+			slog.Warn("agent version probe failed", "agent_id", idStr, "harness", agent.Harness, "error", err)
+		}
+		respondUnknown()
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(info)
 }
 
 // GetAgentCommands returns the slash commands available for an agent's harness.
