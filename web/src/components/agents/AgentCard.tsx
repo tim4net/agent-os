@@ -1,7 +1,11 @@
 import type { Agent } from '../../api/client'
+import type { AgentVersion } from '../../api/agentVersion'
+import { VersionChip } from './VersionChip'
 
 interface AgentCardProps {
   agent: Agent
+  version?: AgentVersion | null
+  versionLoading?: boolean
 }
 
 function relativeTime(dateStr: string | null): string {
@@ -29,7 +33,7 @@ function dotColor(status: string): string {
   }
 }
 
-export function AgentCard({ agent }: AgentCardProps) {
+export function AgentCard({ agent, version, versionLoading }: AgentCardProps) {
   const isOnline = agent.status === 'online'
 
   return (
@@ -58,10 +62,13 @@ export function AgentCard({ agent }: AgentCardProps) {
         </p>
       )}
       <div className="flex items-center justify-between">
-        {/* Harness type as subtle monospace tag */}
-        <span className="text-[10px] font-mono text-[var(--color-text-muted)]/70 bg-[var(--bg-elevated)]/50 px-1.5 py-0.5 rounded">
-          {agent.harness}
-        </span>
+        {/* Harness type + version as subtle monospace tags */}
+        <div className="flex items-center gap-1.5 min-w-0">
+          <span className="text-[10px] font-mono text-[var(--color-text-muted)]/70 bg-[var(--bg-elevated)]/50 px-1.5 py-0.5 rounded">
+            {agent.harness}
+          </span>
+          <VersionChip version={version ?? null} loading={versionLoading} />
+        </div>
         {/* Last seen timestamp */}
         <span className="text-[10px] text-[var(--color-text-muted)]/50">
           {relativeTime(agent.last_seen)}

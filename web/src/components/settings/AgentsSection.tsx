@@ -3,12 +3,14 @@ import { listAgents, deleteAgent, updateAgentConfigFull, type Agent } from '../.
 import { showToast } from '../toast-bus'
 import { AgentCard } from '../agents/AgentCard'
 import { AddAgentModal } from './AddAgentModal'
+import { useAgentVersions } from '../../hooks/useAgentVersions'
 
 export function AgentsSection({ onOpenAccess }: { onOpenAccess?: (agent: Agent) => void }) {
   const [agents, setAgents] = useState<Agent[]>([])
   const [loading, setLoading] = useState(true)
   const [showAddModal, setShowAddModal] = useState(false)
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null)
+  const { versions } = useAgentVersions(agents.map((a) => a.id))
 
   const loadAgents = async () => {
     try {
@@ -64,7 +66,11 @@ export function AgentsSection({ onOpenAccess }: { onOpenAccess?: (agent: Agent) 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {agents.map(agent => (
             <div key={agent.id} className="relative group">
-              <AgentCard agent={agent} />
+              <AgentCard
+                agent={agent}
+                version={versions[agent.id]?.version ?? null}
+                versionLoading={versions[agent.id]?.loading ?? true}
+              />
               <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                 <button
                   onClick={() => onOpenAccess?.(agent)}
