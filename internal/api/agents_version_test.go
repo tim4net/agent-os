@@ -114,15 +114,7 @@ func newAgentVersionTestAPI(t *testing.T, hname string, factory func() harness.H
 
 func getAgentVersionForTest(t *testing.T, a *API, id string) harness.VersionInfo {
 	t.Helper()
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/agents/"+id+"/version", nil)
-	// Invoke the handler directly with a chi route context carrying {id}, so the
-	// test does not depend on the route mount in router.go (an integrator-owned
-	// file that feature branches must not edit — the mount is applied at merge).
-	rctx := chi.NewRouteContext()
-	rctx.URLParams.Add("id", id)
-	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
-	a.GetAgentVersion(rec, req)
+	rec := invokeAgentVersion(a, id, context.Background())
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET version status = %d, body=%s", rec.Code, rec.Body.String())
 	}
@@ -131,6 +123,20 @@ func getAgentVersionForTest(t *testing.T, a *API, id string) harness.VersionInfo
 		t.Fatalf("decode response: %v", err)
 	}
 	return info
+}
+
+// invokeAgentVersion calls the handler directly with a chi route context carrying
+// {id} and the given parent context, so tests do not depend on the route mount in
+// router.go (an integrator-owned file that feature branches must not edit — the
+// mount is applied at merge). Returns the recorder so callers can assert any status.
+func invokeAgentVersion(a *API, id string, parent context.Context) *httptest.ResponseRecorder {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/agents/"+id+"/version", nil)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", id)
+	ctx := context.WithValue(parent, chi.RouteCtxKey, rctx)
+	a.GetAgentVersion(rec, req.WithContext(ctx))
+	return rec
 }
 
 func TestGetAgentVersionProberReturnsVersion(t *testing.T) {
@@ -164,5 +170,81 @@ func TestGetAgentVersionProberErrorReturnsUnknown(t *testing.T) {
 	info := getAgentVersionForTest(t, a, id)
 	if info.Current != "" || info.Source != "unknown" || info.CheckedAt.IsZero() {
 		t.Fatalf("VersionInfo = %+v, want unknown with CheckedAt", info)
+	}
+}
+
+// --- AC4 error-status contract (these MUST NOT collapse to 200/500) ---
+
+func TestGetAgentVersionInvalidIDReturns400(t *testing.T) {
+	a := &API{queries: db.New(&agentVersionTestDB{}), registry: harness.NewRegistry()}
+	rec := invokeAgentVersion(a, "not-a-uuid", context.Background())
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for malformed id; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestGetAgentVersionUnknownAgentReturns404(t *testing.T) {
+	// DB Scan returns ErrNoRows → GetAgent fails → 404.
+	a := &API{queries: db.New(&agentVersionTestDB{err: pgx.ErrNoRows}), registry: harness.NewRegistry()}
+	rec := invokeAgentVersion(a, uuid.NewString(), context.Background())
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 for unknown agent; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestGetAgentVersionUnknownHarnessReturns400(t *testing.T) {
+	idStr := uuid.NewString()
+	var id pgtype.UUID
+	if err := id.Scan(idStr); err != nil {
+		t.Fatalf("scan uuid: %v", err)
+	}
+	// Agent resolves fine, but its harness is not registered → 400.
+	agent := db.Agent{
+		ID: id, Name: "ghost-agent", DisplayName: "Ghost", Harness: "ghost-harness",
+		BaseUrl: "http://agent.test", Status: "online",
+		Metadata: []byte(`{}`), Persona: []byte(`{}`), Visible: true,
+	}
+	a := &API{queries: db.New(&agentVersionTestDB{agent: agent}), registry: harness.NewRegistry()}
+	rec := invokeAgentVersion(a, idStr, context.Background())
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for unknown harness; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// ctxBlockingProberHarness blocks until the probe context is done, then reports
+// the context error — used to prove the handler's deadline propagates to the prober.
+type ctxBlockingProberHarness struct {
+	agentVersionBaseHarness
+}
+
+func (ctxBlockingProberHarness) VersionInfo(ctx context.Context) (*harness.VersionInfo, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// AC5: the handler must honor its deadline. A canceled request context makes the
+// handler's 10s child context immediately Done, so a ctx-respecting prober returns
+// at once with source:"unknown" — proving cancellation is wired through to the probe
+// (the 10s bound itself is enforced by context.WithTimeout in the handler).
+func TestGetAgentVersionHonorsContextCancellation(t *testing.T) {
+	a, id := newAgentVersionTestAPI(t, "blocking", func() harness.Harness {
+		return ctxBlockingProberHarness{}
+	})
+	parent, cancel := context.WithCancel(context.Background())
+	cancel()
+	start := time.Now()
+	rec := invokeAgentVersion(a, id, parent)
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("handler took %s; deadline/cancellation not honored by the probe", elapsed)
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var info harness.VersionInfo
+	if err := json.Unmarshal(rec.Body.Bytes(), &info); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if info.Source != "unknown" {
+		t.Fatalf("VersionInfo = %+v, want source unknown on canceled probe", info)
 	}
 }
