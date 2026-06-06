@@ -5,6 +5,7 @@ import { WorkUnitCard } from './WorkUnitCard'
 import { UncorrelatedBucket } from './UncorrelatedBucket'
 import { TrackersView } from './TrackersView'
 import { FleetRadar } from './FleetRadar'
+import { tenantLabel } from '../mission-control-helpers'
 
 type SubView = 'activity' | 'trackers' | 'radar'
 
@@ -59,7 +60,7 @@ export function ObserveView() {
               onChange={(e) => setTenant(e.target.value)}
               className="bg-transparent font-semibold text-[var(--color-text-primary)] outline-none cursor-pointer"
             >
-              {tenants.map((t) => <option key={t} value={t}>{t}</option>)}
+              {tenants.map((t) => <option key={t} value={t}>{tenantLabel(t)}</option>)}
             </select>
           </label>
           {/* sub-tabs */}
@@ -110,7 +111,7 @@ export function ObserveView() {
             {!loading && !error && correlated.length === 0 && uncorrelated.length === 0 && (
               <div className="glass-card p-8 text-center text-[var(--color-text-muted)]">
                 <Icon name="radar" size={28} />
-                <p className="mt-2 text-sm">No work events for tenant <span className="font-mono">{tenant}</span> yet.</p>
+                <p className="mt-2 text-sm">No work events for tenant <span className="font-mono">{tenantLabel(tenant)}</span> yet.</p>
                 <p className="text-[11px] mt-1">Point an emitter at this instance and activity will appear here live.</p>
               </div>
             )}

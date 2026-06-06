@@ -127,6 +127,24 @@ export function getTenantStyles(tenant: string) {
   };
 }
 
+// Map an internal tenant key to its user-facing display label. The internal
+// "dayjob" key is walled (ADR-002) and must NEVER leak raw into the UI — it is
+// always shown as "Work". "personal" → "Personal"; anything else is title-cased
+// as a sensible fallback. This is the single source of truth for tenant display
+// text so every surface (Mission Control, Observe, drawers) stays consistent.
+export function tenantLabel(tenant: string): string {
+  switch (tenant) {
+    case 'dayjob':
+      return 'Work';
+    case 'personal':
+      return 'Personal';
+    case '':
+      return 'System';
+    default:
+      return tenant.charAt(0).toUpperCase() + tenant.slice(1);
+  }
+}
+
 export function deriveTenant(key: string, agents: Agent[], sessions: SessionStatus[], incidents: Incident[]): string | undefined {
   const lowerKey = key.toLowerCase();
   
