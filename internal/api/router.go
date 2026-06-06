@@ -230,7 +230,6 @@ func (a *API) Router() http.Handler {
 	r.Route("/conversations", func(r chi.Router) {
 		r.Get("/", a.ListConversations)
 		r.Post("/", a.CreateConversation)
-		r.Post("/summarize", a.ConversationSummary)
 		r.Route("/{id}", func(r chi.Router) {
 			r.Get("/messages", a.GetConversationMessages)
 			r.Post("/export", a.ExportConversation)

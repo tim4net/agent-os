@@ -228,13 +228,6 @@ export function listConversations(): Promise<Conversation[]> {
   return request<Conversation[]>('/api/conversations')
 }
 
-export function summarizeConversations(conversationIds: string[]): Promise<Record<string, string>> {
-  return request<{ summaries: Record<string, string> }>('/api/conversations/summarize', {
-    method: 'POST',
-    body: JSON.stringify({ conversation_ids: conversationIds }),
-  }).then((r) => r.summaries)
-}
-
 export function getMessages(convId: string): Promise<Message[]> {
   return request<Message[]>(`/api/conversations/${convId}/messages`)
 }

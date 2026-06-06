@@ -11,23 +11,6 @@ import (
 	"time"
 )
 
-// ConversationSummary is a DEPRECATED, decommissioned endpoint.
-//
-// It previously batch-generated per-conversation `summary` values via the LLM.
-// That path was dead: its only frontend wrapper (`summarizeConversations` in
-// web/src/api/client.ts) had zero callers, and conversation titling is fully
-// handled server-side by the immediate first-message title + deferredLLMTitle +
-// the hourly title_worker, all writing the `title` column. Keeping a second LLM
-// label generator writing a parallel `summary` column was redundant.
-//
-// This stub remains ONLY so the (integrator-owned) route mount in router.go
-// still compiles for the branch build; the integrator note on this PR removes
-// the route mount, this stub, and the dead frontend wrapper at merge, leaving
-// main fully clean. It returns 410 Gone in the interim.
-func (a *API) ConversationSummary(w http.ResponseWriter, r *http.Request) {
-	http.Error(w, "conversation summarization endpoint has been removed", http.StatusGone)
-}
-
 // generateSummary produces a one-line summary using LiteLLM proxy.
 // Falls back to OpenRouter direct if LiteLLM is not configured.
 func (a *API) generateSummary(ctx context.Context, conversationText string) (string, error) {
