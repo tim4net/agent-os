@@ -8,7 +8,7 @@ import (
 // VersionInfo is the upstream version a harness reports for its backing service.
 type VersionInfo struct {
 	Current   string    `json:"current"` // upstream-reported version; "" if unknown
-	Source    string    `json:"source"`  // provenance: "hello-ok" | "health" | "cli" | "http" | "unknown"
+	Source    string    `json:"source"`  // provenance: "hello-ok" | "health" | "cli" | "http" | "openapi" | "unknown"
 	CheckedAt time.Time `json:"checked_at"`
 }
 

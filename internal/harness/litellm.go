@@ -54,34 +54,86 @@ func (l *LiteLLMHarness) Health(ctx context.Context) (*HealthStatus, error) {
 	}, nil
 }
 
+// VersionInfo reports the LiteLLM proxy version. LiteLLM exposes its version
+// inconsistently across builds, so we try sources in order of preference and
+// return the first that yields a non-empty version (each tagged with its
+// provenance), falling back to "unknown":
+//
+//  1. GET /version            -> {"version": "..."}          (some builds)
+//  2. GET /health/readiness   -> {"litellm_version": "..."}  (standard field)
+//  3. GET /openapi.json       -> info.version                (FastAPI builds)
+//
+// Every probe degrades silently to "" on any error / non-200 / missing field;
+// the whole chain is bounded by the caller's context deadline.
 func (l *LiteLLMHarness) VersionInfo(ctx context.Context) (*VersionInfo, error) {
 	checkedAt := time.Now().UTC()
-	unknown := &VersionInfo{Current: "", Source: "unknown", CheckedAt: checkedAt}
+	base := strings.TrimRight(l.baseURL, "/")
 
-	url := strings.TrimRight(l.baseURL, "/") + "/version"
+	if v := l.probeJSONStringField(ctx, base+"/version", "version"); v != "" {
+		return &VersionInfo{Current: v, Source: "http", CheckedAt: checkedAt}, nil
+	}
+	if v := l.probeJSONStringField(ctx, base+"/health/readiness", "litellm_version"); v != "" {
+		return &VersionInfo{Current: v, Source: "health", CheckedAt: checkedAt}, nil
+	}
+	if v := l.probeOpenAPIVersion(ctx, base+"/openapi.json"); v != "" {
+		return &VersionInfo{Current: v, Source: "openapi", CheckedAt: checkedAt}, nil
+	}
+
+	return &VersionInfo{Current: "", Source: "unknown", CheckedAt: checkedAt}, nil
+}
+
+// probeJSONStringField does GET url and returns the string value of the named
+// top-level JSON field. Returns "" on any error, non-200, decode failure, or if
+// the field is absent or not a string.
+func (l *LiteLLMHarness) probeJSONStringField(ctx context.Context, url, field string) string {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return unknown, nil
+		return ""
 	}
-
 	resp, err := l.httpClient.Do(req)
 	if err != nil {
-		return unknown, nil
+		return ""
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK {
-		return unknown, nil
+		return ""
 	}
+	var m map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&m); err != nil {
+		return ""
+	}
+	if v, ok := m[field].(string); ok {
+		return v
+	}
+	return ""
+}
 
-	var result struct {
-		Version string `json:"version"`
+// probeOpenAPIVersion does GET url (the FastAPI /openapi.json) and returns
+// info.version. The spec can be ~1MB; that is acceptable for an on-demand
+// version probe (not a hot path) and is bounded by the caller's context
+// deadline. Returns "" on any error / non-200 / decode failure.
+func (l *LiteLLMHarness) probeOpenAPIVersion(ctx context.Context, url string) string {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return ""
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil || result.Version == "" {
-		return unknown, nil
+	resp, err := l.httpClient.Do(req)
+	if err != nil {
+		return ""
 	}
-
-	return &VersionInfo{Current: result.Version, Source: "http", CheckedAt: checkedAt}, nil
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+	var spec struct {
+		Info struct {
+			Version string `json:"version"`
+		} `json:"info"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&spec); err != nil {
+		return ""
+	}
+	return spec.Info.Version
 }
 
 func (l *LiteLLMHarness) Chat(ctx context.Context, messages []ChatMessage, opts ChatOptions) (<-chan ChatChunk, error) {
