@@ -147,6 +147,7 @@ export function tenantLabel(tenant: string): string {
 
 export function deriveTenant(key: string, agents: Agent[], sessions: SessionStatus[], incidents: Incident[]): string | undefined {
   const lowerKey = key.toLowerCase();
+  
   // Search sessions
   const sessionMatch = sessions.find(s => 
     s.harness.toLowerCase() === lowerKey || 
