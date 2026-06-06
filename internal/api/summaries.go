@@ -6,163 +6,26 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
-
-	"github.com/jackc/pgx/v5/pgtype"
-
-	"github.com/tim4net/agent-os/internal/db"
 )
 
-// summaryRequest is the JSON body for POST /api/conversations/summarize
-type summaryRequest struct {
-	ConversationIDs []string `json:"conversation_ids"`
-}
-
-// summaryResponse maps conversation IDs to their summaries
-type summaryResponse struct {
-	Summaries map[string]string `json:"summaries"`
-}
-
-// ConversationSummary handles POST /api/conversations/summarize.
-// It takes a list of conversation IDs, fetches messages for each,
-// and uses a fast model to generate one-line summaries.
+// ConversationSummary is a DEPRECATED, decommissioned endpoint.
+//
+// It previously batch-generated per-conversation `summary` values via the LLM.
+// That path was dead: its only frontend wrapper (`summarizeConversations` in
+// web/src/api/client.ts) had zero callers, and conversation titling is fully
+// handled server-side by the immediate first-message title + deferredLLMTitle +
+// the hourly title_worker, all writing the `title` column. Keeping a second LLM
+// label generator writing a parallel `summary` column was redundant.
+//
+// This stub remains ONLY so the (integrator-owned) route mount in router.go
+// still compiles for the branch build; the integrator note on this PR removes
+// the route mount, this stub, and the dead frontend wrapper at merge, leaving
+// main fully clean. It returns 410 Gone in the interim.
 func (a *API) ConversationSummary(w http.ResponseWriter, r *http.Request) {
-	var req summaryRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	if len(req.ConversationIDs) == 0 {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(summaryResponse{Summaries: map[string]string{}})
-		return
-	}
-
-	if a.litellmURL == "" && a.openrouterAPIKey == "" {
-		http.Error(w, "no LLM provider configured for summaries", http.StatusServiceUnavailable)
-		return
-	}
-
-	ctx := r.Context()
-	summaries := make(map[string]string)
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-
-	// Use a semaphore to limit concurrent LLM calls
-	sem := make(chan struct{}, 3)
-
-	for _, idStr := range req.ConversationIDs {
-		wg.Add(1)
-		go func(idStr string) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-
-			var convID pgtype.UUID
-			if err := convID.Scan(idStr); err != nil {
-				slog.Warn("invalid conversation ID for summary", "id", idStr)
-				return
-			}
-
-			// Check if conversation already has a saved summary
-			conv, err := a.queries.GetConversation(ctx, convID)
-			if err != nil {
-				return
-			}
-			if conv.Summary.Valid && conv.Summary.String != "" {
-				mu.Lock()
-				summaries[idStr] = conv.Summary.String
-				mu.Unlock()
-				return
-			}
-
-			msgs, err := a.queries.ListMessages(ctx, convID)
-			if err != nil || len(msgs) == 0 {
-				return
-			}
-
-			// Build a compact text representation of the conversation
-			// Limit to first 6 messages to keep context small
-			limit := len(msgs)
-			if limit > 6 {
-				limit = 6
-			}
-
-			var sb strings.Builder
-			for i := 0; i < limit; i++ {
-				m := msgs[i]
-				role := m.Role
-				if role == "user" {
-					role = "User"
-				} else if role == "assistant" {
-					role = "Assistant"
-				} else {
-					continue // skip system
-				}
-				// Truncate long messages to 200 chars for the summary prompt
-				content := m.Content
-				if len(content) > 200 {
-					content = content[:200] + "..."
-				}
-				sb.WriteString(fmt.Sprintf("%s: %s\n", role, content))
-			}
-
-			prompt := sb.String()
-			summary, err := a.generateSummary(ctx, prompt)
-			if err != nil {
-				slog.Warn("failed to generate summary", "conversation_id", idStr, "error", err)
-				// Fallback: use first user message truncated
-				for _, m := range msgs {
-					if m.Role == "user" {
-						fallback := m.Content
-						if len(fallback) > 60 {
-							fallback = fallback[:60] + "…"
-						}
-						// Persist fallback summary to DB
-						var summaryText pgtype.Text
-						summaryText.String = fallback
-						summaryText.Valid = true
-						if _, saveErr := a.queries.UpdateConversationSummary(ctx, db.UpdateConversationSummaryParams{
-							ID:      convID,
-							Summary: summaryText,
-						}); saveErr != nil {
-							slog.Warn("failed to persist fallback summary", "conversation_id", idStr, "error", saveErr)
-						}
-						mu.Lock()
-						summaries[idStr] = fallback
-						mu.Unlock()
-						return
-					}
-				}
-				return
-			}
-
-			// Persist summary to DB
-			var summaryText pgtype.Text
-			summaryText.String = summary
-			summaryText.Valid = true
-			if _, saveErr := a.queries.UpdateConversationSummary(ctx, db.UpdateConversationSummaryParams{
-				ID:      convID,
-				Summary: summaryText,
-			}); saveErr != nil {
-				slog.Warn("failed to persist summary", "conversation_id", idStr, "error", saveErr)
-			}
-
-			mu.Lock()
-			summaries[idStr] = summary
-			mu.Unlock()
-		}(idStr)
-	}
-
-	wg.Wait()
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(summaryResponse{Summaries: summaries})
+	http.Error(w, "conversation summarization endpoint has been removed", http.StatusGone)
 }
 
 // generateSummary produces a one-line summary using LiteLLM proxy.
