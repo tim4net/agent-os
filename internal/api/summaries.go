@@ -254,8 +254,20 @@ func (a *API) generateSummary(ctx context.Context, conversationText string) (str
 	}
 
 	summary := strings.TrimSpace(result.Choices[0].Message.Content)
-	// Strip any surrounding quotes
-	summary = strings.Trim(summary, "\"'\u201c\u201d")
+	// Strip any surrounding quotes, then re-trim in case the quotes wrapped
+	// padding whitespace (e.g. `" hi "`).
+	summary = strings.TrimSpace(strings.Trim(summary, "\"'\u201c\u201d"))
+
+	// An LLM that returns empty/whitespace-only content must NOT be treated as a
+	// valid title. Returning ("", nil) here would let callers overwrite a good
+	// title (the immediate first-message title) with a blank — which then renders
+	// as "New conversation" in the sidebar. Signal an error so callers keep the
+	// existing title (deferredLLMTitle / title_worker skip the update) or fall
+	// back to a truncated first message (the /summarize endpoint).
+	if summary == "" {
+		return "", fmt.Errorf("summary response was empty")
+	}
+
 	if len(summary) > 50 {
 		summary = summary[:50] + "\u2026"
 	}
