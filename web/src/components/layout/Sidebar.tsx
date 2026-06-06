@@ -415,7 +415,12 @@ export function Sidebar({
                               <div className="space-y-0.5">
                                 {visible.map((conv) => {
                                   const isActive = activeConversationId === conv.id
-                                  const displayText = conv.summary || 'New conversation'
+                                  // Prefer the LLM/first-message title (always populated by the
+                                  // backend titling pipeline); fall back to the richer `summary`
+                                  // override when present. Only show the placeholder when neither
+                                  // exists — a freshly-created thread before its first message.
+                                  const convLabel = conv.summary || conv.title || ''
+                                  const displayText = convLabel || 'New conversation'
                                   return (
                                     <button
                                       key={conv.id}
@@ -429,7 +434,7 @@ export function Sidebar({
                                       {isActive && (
                                         <span className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-3 rounded-r-full bg-gradient-to-b from-[var(--accent-blue)] to-[var(--accent-cyan)]" />
                                       )}
-                                      <span className={`block truncate ${isActive ? 'text-[var(--text-primary)]' : conv.summary ? 'text-[var(--text-secondary)]' : 'text-[var(--text-muted)]'}`}>
+                                      <span className={`block truncate ${isActive ? 'text-[var(--text-primary)]' : convLabel ? 'text-[var(--text-secondary)]' : 'text-[var(--text-muted)]'}`}>
                                         {displayText}
                                       </span>
                                     </button>
