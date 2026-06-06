@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // HermesHarness implements the Harness interface for Hermes/Roux agents.
@@ -77,6 +78,17 @@ func (h *HermesHarness) Health(ctx context.Context) (*HealthStatus, error) {
 		Status:  "online",
 		Version: result.Version,
 	}, nil
+}
+
+func (h *HermesHarness) VersionInfo(ctx context.Context) (*VersionInfo, error) {
+	checkedAt := time.Now().UTC()
+	unknown := &VersionInfo{Current: "", Source: "unknown", CheckedAt: checkedAt}
+
+	health, err := h.Health(ctx)
+	if err != nil || health == nil || health.Version == "" {
+		return unknown, nil
+	}
+	return &VersionInfo{Current: health.Version, Source: "health", CheckedAt: checkedAt}, nil
 }
 
 func (h *HermesHarness) Chat(ctx context.Context, messages []ChatMessage, opts ChatOptions) (<-chan ChatChunk, error) {
@@ -487,8 +499,8 @@ func (h *HermesHarness) SessionChat(ctx context.Context, sessionID, message stri
 
 			case "tool.started", "tool.completed", "tool.progress":
 				var payload struct {
-					Name      string `json:"name"`
-					ToolName  string `json:"tool_name"`
+					Name       string `json:"name"`
+					ToolName   string `json:"tool_name"`
 					ToolCallID string `json:"tool_call_id"`
 				}
 				if err := json.Unmarshal([]byte(data), &payload); err != nil {

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // LiteLLMHarness implements the Harness interface for the LiteLLM model router.
@@ -51,6 +52,36 @@ func (l *LiteLLMHarness) Health(ctx context.Context) (*HealthStatus, error) {
 		Status: "online",
 		Models: names,
 	}, nil
+}
+
+func (l *LiteLLMHarness) VersionInfo(ctx context.Context) (*VersionInfo, error) {
+	checkedAt := time.Now().UTC()
+	unknown := &VersionInfo{Current: "", Source: "unknown", CheckedAt: checkedAt}
+
+	url := strings.TrimRight(l.baseURL, "/") + "/version"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return unknown, nil
+	}
+
+	resp, err := l.httpClient.Do(req)
+	if err != nil {
+		return unknown, nil
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return unknown, nil
+	}
+
+	var result struct {
+		Version string `json:"version"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil || result.Version == "" {
+		return unknown, nil
+	}
+
+	return &VersionInfo{Current: result.Version, Source: "http", CheckedAt: checkedAt}, nil
 }
 
 func (l *LiteLLMHarness) Chat(ctx context.Context, messages []ChatMessage, opts ChatOptions) (<-chan ChatChunk, error) {

@@ -43,6 +43,10 @@ type OpenClawHarness struct {
 	httpClient *http.Client
 }
 
+// clientProtocolVersion is the CLIENT protocol version AgentOS advertises to
+// the OpenClaw gateway; it is NOT the gateway/server version.
+const clientProtocolVersion = "0.6.0"
+
 func NewOpenClawHarness() Harness {
 	return &OpenClawHarness{
 		httpClient: &http.Client{Timeout: 10 * time.Second},
@@ -99,6 +103,15 @@ func (o *OpenClawHarness) Health(ctx context.Context) (*HealthStatus, error) {
 		return &HealthStatus{Status: "online"}, nil
 	}
 	return &HealthStatus{Status: "degraded"}, nil
+}
+
+func (o *OpenClawHarness) VersionInfo(ctx context.Context) (*VersionInfo, error) {
+	checkedAt := time.Now().UTC()
+	version, err := o.probeGatewayVersion(ctx)
+	if err != nil || version == "" {
+		return &VersionInfo{Current: "", Source: "unknown", CheckedAt: checkedAt}, nil
+	}
+	return &VersionInfo{Current: version, Source: "hello-ok", CheckedAt: checkedAt}, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -240,7 +253,7 @@ func (id *deviceIdentity) buildConnectParams(signedAtMs int64, nonce string) map
 		"maxProtocol": 4,
 		"client": map[string]any{
 			"id":       deviceClientID,
-			"version":  "0.6.0",
+			"version":  clientProtocolVersion,
 			"platform": devicePlatform,
 			"mode":     deviceClientMode,
 		},
@@ -379,6 +392,8 @@ func (c *ocConn) sendRPC(method string, params any) (wsMessage, error) {
 			return res, fmt.Errorf("%s: %s", method, res.Error.Message)
 		}
 		return res, nil
+	case <-c.ctx.Done():
+		return wsMessage{}, fmt.Errorf("%s: %w", method, c.ctx.Err())
 	case <-time.After(30 * time.Second):
 		return wsMessage{}, fmt.Errorf("%s: timeout", method)
 	}
@@ -554,20 +569,62 @@ func (o *OpenClawHarness) runChatDeviceAuth(ctx context.Context, wsURL, userMsg 
 
 // connectSucceeded reports whether a connect response is a successful hello-ok.
 func connectSucceeded(res wsMessage) (bool, string) {
+	_, ok, msg := parseConnectHelloOK(res)
+	return ok, msg
+}
+
+func parseConnectHelloOK(res wsMessage) (string, bool, string) {
 	if !res.Ok {
 		if res.Error != nil {
-			return false, res.Error.Message
+			return "", false, res.Error.Message
 		}
-		return false, "connect not ok"
+		return "", false, "connect not ok"
 	}
+	version, msg := parseHelloOKPayloadVersion(res.Payload)
+	if msg != "" {
+		return "", false, msg
+	}
+	return version, true, ""
+}
+
+func parseHelloOKPayloadVersion(payload json.RawMessage) (string, string) {
 	var p struct {
-		Type string `json:"type"`
+		Type   string `json:"type"`
+		Server struct {
+			Version string `json:"version"`
+		} `json:"server"`
 	}
-	_ = json.Unmarshal(res.Payload, &p)
+	_ = json.Unmarshal(payload, &p)
 	if p.Type != "hello-ok" {
-		return false, fmt.Sprintf("unexpected connect payload type %q", p.Type)
+		return "", fmt.Sprintf("unexpected connect payload type %q", p.Type)
 	}
-	return true, ""
+	return p.Server.Version, ""
+}
+
+func (o *OpenClawHarness) probeGatewayVersion(ctx context.Context) (string, error) {
+	c, err := o.dial(ctx, o.buildWSURL())
+	if err != nil {
+		return "", err
+	}
+	defer c.close()
+
+	nonce := c.waitChallenge(3 * time.Second)
+	var params any
+	if o.identity != nil {
+		params = o.identity.buildConnectParams(time.Now().UnixMilli(), nonce)
+	} else {
+		params = o.buildLegacyConnectParams()
+	}
+
+	res, err := c.sendRPC("connect", params)
+	if err != nil {
+		return "", err
+	}
+	version, ok, msg := parseConnectHelloOK(res)
+	if !ok {
+		return "", fmt.Errorf("connect rejected: %s", msg)
+	}
+	return version, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -812,7 +869,7 @@ func (o *OpenClawHarness) buildLegacyConnectParams() map[string]any {
 		"maxProtocol": 4,
 		"client": map[string]any{
 			"id":       "webchat",
-			"version":  "0.6.0",
+			"version":  clientProtocolVersion,
 			"platform": "linux",
 			"mode":     "webchat",
 		},

@@ -94,6 +94,17 @@ func (a *AgyHarness) Health(ctx context.Context) (*HealthStatus, error) {
 	return &HealthStatus{Status: "online", Version: version}, nil
 }
 
+func (a *AgyHarness) VersionInfo(ctx context.Context) (*VersionInfo, error) {
+	checkedAt := time.Now().UTC()
+	unknown := &VersionInfo{Current: "", Source: "unknown", CheckedAt: checkedAt}
+
+	health, err := a.Health(ctx)
+	if err != nil || health == nil || health.Version == "" {
+		return unknown, nil
+	}
+	return &VersionInfo{Current: health.Version, Source: "cli", CheckedAt: checkedAt}, nil
+}
+
 // Chat sends the conversation to `agy --print` as a single one-shot prompt.
 // agy buffers the entire response, so the harness emits one content chunk then
 // Done. The output is stripped of any wrapping markdown code fences.

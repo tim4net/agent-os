@@ -315,6 +315,18 @@ func sha256Sum(b []byte) []byte {
 	return s[:]
 }
 
+func TestParseHelloOKPayloadVersion_UsesServerVersion(t *testing.T) {
+	payload := json.RawMessage(`{"type":"hello-ok","protocol":4,"server":{"version":"2026.6.1"}}`)
+
+	version, msg := parseHelloOKPayloadVersion(payload)
+	if msg != "" {
+		t.Fatalf("parseHelloOKPayloadVersion msg = %q, want empty", msg)
+	}
+	if version != "2026.6.1" {
+		t.Fatalf("version = %q, want 2026.6.1", version)
+	}
+}
+
 // --- 4. Streaming decode ----------------------------------------------------
 
 func TestChatStreamDecoder_DeltaThenFinal_EmitsPongThenDone(t *testing.T) {
