@@ -236,7 +236,17 @@ func (l *LiteLLMHarness) Chat(ctx context.Context, messages []ChatMessage, opts 
 
 		if err := scanner.Err(); err != nil {
 			ch <- ChatChunk{Error: fmt.Errorf("read stream: %w", err)}
+			return
 		}
+
+		// The stream ended without an explicit [DONE] or finish_reason:"stop"
+		// terminal — e.g. finish_reason "length" (max_tokens reached),
+		// "content_filter", or a clean EOF / dropped upstream connection. Every
+		// in-loop terminal path returns, so reaching here means no Done was sent.
+		// Emit a synthetic Done so the consumer persists whatever content
+		// streamed instead of silently discarding it (and, for a brand-new
+		// conversation, rolling back / deleting the whole thread).
+		ch <- ChatChunk{Done: true}
 	}()
 
 	return ch, nil

@@ -199,7 +199,16 @@ func (h *HermesHarness) Chat(ctx context.Context, messages []ChatMessage, opts C
 
 		if err := scanner.Err(); err != nil {
 			ch <- ChatChunk{Error: fmt.Errorf("read stream: %w", err)}
+			return
 		}
+
+		// Stream ended without an explicit [DONE] or finish_reason:"stop" —
+		// e.g. finish_reason "length" (max_tokens), "content_filter", or a clean
+		// EOF / dropped connection. Every in-loop terminal path returns, so
+		// reaching here means no Done was sent. Emit a synthetic Done so the
+		// consumer persists the streamed content rather than discarding it (and
+		// rolling back a brand-new conversation).
+		ch <- ChatChunk{Done: true}
 	}()
 
 	return ch, nil
@@ -526,7 +535,15 @@ func (h *HermesHarness) SessionChat(ctx context.Context, sessionID, message stri
 
 		if err := scanner.Err(); err != nil {
 			ch <- ChatChunk{Error: fmt.Errorf("read session stream: %w", err)}
+			return
 		}
+
+		// Session stream ended without a terminal run.completed/done/error event
+		// — e.g. a clean EOF or a dropped gateway connection mid-run. Every
+		// in-loop terminal path returns, so reaching here means no Done was sent.
+		// Emit a synthetic Done so the consumer persists any streamed content
+		// instead of discarding it (and rolling back a brand-new conversation).
+		ch <- ChatChunk{Done: true}
 	}()
 
 	return ch, nil
