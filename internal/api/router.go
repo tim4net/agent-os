@@ -214,7 +214,6 @@ func (a *API) Router() http.Handler {
 			r.Get("/config", a.GetAgentConfig)
 			r.Get("/models", a.GetAgentModels)
 			r.Get("/commands", a.GetAgentCommands)
-			r.Get("/version", a.GetAgentVersion)
 			r.Post("/chat", a.ChatWithAgent)
 			// Per-agent capability grants (the Access drawer).
 			r.Get("/grants", a.ListAgentGrants)

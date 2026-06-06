@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -115,7 +116,13 @@ func getAgentVersionForTest(t *testing.T, a *API, id string) harness.VersionInfo
 	t.Helper()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/agents/"+id+"/version", nil)
-	a.Router().ServeHTTP(rec, req)
+	// Invoke the handler directly with a chi route context carrying {id}, so the
+	// test does not depend on the route mount in router.go (an integrator-owned
+	// file that feature branches must not edit — the mount is applied at merge).
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", id)
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	a.GetAgentVersion(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET version status = %d, body=%s", rec.Code, rec.Body.String())
 	}
