@@ -4,12 +4,15 @@ import { AgentsSection } from './settings/AgentsSection'
 import { AccessMatrix } from './settings/AccessMatrix'
 import { VaultManager } from './settings/VaultManager'
 import { AgentAccessDrawer } from './settings/AgentAccessDrawer'
+import { UpdatesPanel } from './settings/UpdatesPanel'
+import { useAgents } from '../hooks/useAgents'
 import { type Agent } from '../api/client'
 
 export default function SettingsPanel() {
   const { theme, setTheme } = useTheme()
-  const [activeTab, setActiveTab] = useState<'access' | 'vault' | 'agents' | 'general'>('access')
+  const [activeTab, setActiveTab] = useState<'access' | 'vault' | 'agents' | 'updates' | 'general'>('access')
   const [selectedAgentForAccess, setSelectedAgentForAccess] = useState<Agent | null>(null)
+  const { agents, loading: agentsLoading } = useAgents()
 
   return (
     <div className="fade-in max-w-5xl mx-auto p-6">
@@ -20,7 +23,7 @@ export default function SettingsPanel() {
         
         {/* Segmented Control */}
         <div className="flex p-1 rounded-lg" style={{ backgroundColor: 'var(--bg-surface)', border: '1px solid var(--border-subtle)' }}>
-          {(['access', 'vault', 'agents', 'general'] as const).map(tab => (
+          {(['access', 'vault', 'agents', 'updates', 'general'] as const).map(tab => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -69,6 +72,12 @@ export default function SettingsPanel() {
       {activeTab === 'agents' && (
         <div className="fade-in">
           <AgentsSection onOpenAccess={setSelectedAgentForAccess} />
+        </div>
+      )}
+
+      {activeTab === 'updates' && (
+        <div className="fade-in">
+          <UpdatesPanel agents={agents} loading={agentsLoading} />
         </div>
       )}
 
