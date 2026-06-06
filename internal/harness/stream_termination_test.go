@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -155,5 +156,78 @@ data: {"delta":"reply"}
 	}
 	if !sawDone {
 		t.Fatal("no Done chunk on session stream EOF without terminal event — reply would be lost and the conversation rolled back")
+	}
+}
+
+// oversizedLine builds a single SSE data line longer than the 1 MiB scanner
+// token cap (scanner.Buffer(..., 1024*1024)) so bufio.Scanner.Scan() fails with
+// bufio.ErrTooLong and scanner.Err() returns non-nil — the genuine read-error
+// path. (No trailing newline: the whole thing is one over-long token.)
+func oversizedLine() string {
+	return "data: " + strings.Repeat("x", 2*1024*1024)
+}
+
+// AC5 (LiteLLM): a genuine stream read error must surface as an Error chunk and
+// must NOT be masked by the synthetic Done — otherwise a broken stream would be
+// silently persisted as a successful (truncated) turn. Guards the error-path
+// `return` that precedes the synthetic Done.
+func TestLiteLLMChatReadErrorSurfacesNotMaskedByDone(t *testing.T) {
+	srv := sseServer(t, oversizedLine())
+	defer srv.Close()
+
+	l := &LiteLLMHarness{baseURL: srv.URL, httpClient: srv.Client()}
+	ch, err := l.Chat(context.Background(), []ChatMessage{{Role: "user", Content: "hi"}}, ChatOptions{Model: "x"})
+	if err != nil {
+		t.Fatalf("Chat error = %v", err)
+	}
+
+	_, sawDone, sawErr := drainChat(t, ch)
+	if !sawErr {
+		t.Fatal("read error (oversized line) was not surfaced as an Error chunk")
+	}
+	if sawDone {
+		t.Fatal("synthetic Done masked a read error — broken stream would be persisted as a successful turn")
+	}
+}
+
+// AC5 (Hermes raw chat): same guarantee.
+func TestHermesChatReadErrorSurfacesNotMaskedByDone(t *testing.T) {
+	srv := sseServer(t, oversizedLine())
+	defer srv.Close()
+
+	h := &HermesHarness{baseURL: srv.URL, httpClient: srv.Client()}
+	ch, err := h.Chat(context.Background(), []ChatMessage{{Role: "user", Content: "hi"}}, ChatOptions{Model: "x"})
+	if err != nil {
+		t.Fatalf("Chat error = %v", err)
+	}
+
+	_, sawDone, sawErr := drainChat(t, ch)
+	if !sawErr {
+		t.Fatal("read error was not surfaced as an Error chunk")
+	}
+	if sawDone {
+		t.Fatal("synthetic Done masked a read error")
+	}
+}
+
+// AC5 (Hermes session chat): same guarantee on the session SSE loop.
+func TestHermesSessionChatReadErrorSurfacesNotMaskedByDone(t *testing.T) {
+	// A valid event header followed by an oversized data line forces the
+	// scanner to fail mid-stream with bufio.ErrTooLong.
+	srv := sseServer(t, "event: assistant.delta\n"+oversizedLine())
+	defer srv.Close()
+
+	h := &HermesHarness{baseURL: srv.URL, httpClient: srv.Client()}
+	ch, err := h.SessionChat(context.Background(), "sess-123", "hi")
+	if err != nil {
+		t.Fatalf("SessionChat error = %v", err)
+	}
+
+	_, sawDone, sawErr := drainChat(t, ch)
+	if !sawErr {
+		t.Fatal("session read error was not surfaced as an Error chunk")
+	}
+	if sawDone {
+		t.Fatal("synthetic Done masked a session read error")
 	}
 }
