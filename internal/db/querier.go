@@ -81,6 +81,7 @@ type Querier interface {
 	CreateSkill(ctx context.Context, arg CreateSkillParams) (Skill, error)
 	CreateSubtask(ctx context.Context, arg CreateSubtaskParams) (Task, error)
 	CreateTask(ctx context.Context, arg CreateTaskParams) (Task, error)
+	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
 	CreateWorkflow(ctx context.Context, arg CreateWorkflowParams) (Workflow, error)
 	CreateWorkflowRun(ctx context.Context, arg CreateWorkflowRunParams) (WorkflowRun, error)
 	DeleteAgent(ctx context.Context, id pgtype.UUID) error
@@ -176,6 +177,8 @@ type Querier interface {
 	GetTrackerItem(ctx context.Context, arg GetTrackerItemParams) (TrackerItem, error)
 	// Returns all projects configured with a given tracker type, scoped to a tenant.
 	GetTrackerProjects(ctx context.Context, arg GetTrackerProjectsParams) ([]Project, error)
+	GetUserByID(ctx context.Context, id pgtype.UUID) (User, error)
+	GetUserByLogin(ctx context.Context, login string) (User, error)
 	GetWorkEventByEventID(ctx context.Context, eventID pgtype.UUID) (WorkEvent, error)
 	GetWorkEventsBySession(ctx context.Context, arg GetWorkEventsBySessionParams) ([]WorkEvent, error)
 	// All events in one group (drill-down). Matches the same 5-part key as ListWorkUnits,
@@ -235,6 +238,7 @@ type Querier interface {
 	ListTasks(ctx context.Context, arg ListTasksParams) ([]Task, error)
 	ListTrackerItemsByProject(ctx context.Context, arg ListTrackerItemsByProjectParams) ([]TrackerItem, error)
 	ListTrackerItemsByTenant(ctx context.Context, arg ListTrackerItemsByTenantParams) ([]TrackerItem, error)
+	ListUsers(ctx context.Context) ([]User, error)
 	ListVisibleAgents(ctx context.Context) ([]Agent, error)
 	// WP-B correlation engine. Groups work_events into work_units by the correlation key.
 	// Per contract §7 the key is (project_id, external_ref, branch, sha); we ALSO group by
