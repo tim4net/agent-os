@@ -338,6 +338,15 @@ type TrackerItem struct {
 	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
 }
 
+type User struct {
+	ID          pgtype.UUID        `json:"id"`
+	Login       string             `json:"login"`
+	DisplayName string             `json:"display_name"`
+	IsActive    bool               `json:"is_active"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
 type WorkEvent struct {
 	ID            pgtype.UUID        `json:"id"`
 	EventID       pgtype.UUID        `json:"event_id"`
