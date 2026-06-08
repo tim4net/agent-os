@@ -17,6 +17,31 @@ import (
 // WP-N: Worktrees API route tests (httptest with real temp git repos)
 // ---------------------------------------------------------------------------
 
+// cleanGitEnv returns a copy of os.Environ() with GIT_DIR, GIT_WORK_TREE, and
+// GIT_INDEX_FILE removed so that tests never inherit state from a parent
+// git process (e.g. a pre-push hook).  It also neutralises GIT_CONFIG_*
+// to prevent picking up user-level gitconfig.
+func cleanGitEnv() []string {
+	drop := map[string]bool{
+		"GIT_DIR": true, "GIT_WORK_TREE": true, "GIT_INDEX_FILE": true,
+	}
+	filtered := make([]string, 0, len(os.Environ())+2)
+	for _, kv := range os.Environ() {
+		for i := 0; i < len(kv); i++ {
+			if kv[i] == '=' {
+				if drop[kv[:i]] {
+					goto skip
+				}
+				break
+			}
+		}
+		filtered = append(filtered, kv)
+	skip:
+	}
+	filtered = append(filtered, "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+	return filtered
+}
+
 // TestHTTPWorktrees_ListReturns200 tests the happy path: a temp repo with
 // worktrees returns 200 and the expected JSON shape.
 func TestHTTPWorktrees_ListReturns200(t *testing.T) {
@@ -27,7 +52,7 @@ func TestHTTPWorktrees_ListReturns200(t *testing.T) {
 	run := func(dir string, args ...string) {
 		cmd := exec.Command(args[0], args[1:]...)
 		cmd.Dir = dir
-		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		cmd.Env = cleanGitEnv()
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("%s %v: %s (err=%v)", dir, args, string(out), err)
@@ -125,7 +150,7 @@ func TestHTTPWorktrees_ExternalRefSurfacesForSCBranch(t *testing.T) {
 	run := func(dir string, args ...string) {
 		cmd := exec.Command(args[0], args[1:]...)
 		cmd.Dir = dir
-		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		cmd.Env = cleanGitEnv()
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("%s %v: %s (err=%v)", dir, args, string(out), err)
