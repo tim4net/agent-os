@@ -3,11 +3,37 @@ package service
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"regexp"
 	"strings"
 	"sync"
 )
+
+// scrubbedGitEnv returns os.Environ() with GIT_DIR, GIT_WORK_TREE,
+// GIT_INDEX_FILE removed (so a parent git process — e.g. a pre-push hook —
+// does not poison child git commands) and GIT_CONFIG_GLOBAL / GIT_CONFIG_SYSTEM
+// neutralised to /dev/null for test isolation.
+func scrubbedGitEnv() []string {
+	drop := map[string]bool{
+		"GIT_DIR=": true, "GIT_WORK_TREE=": true, "GIT_INDEX_FILE=": true,
+	}
+	filtered := make([]string, 0, len(os.Environ())+2)
+	for _, kv := range os.Environ() {
+		for i := 0; i < len(kv); i++ {
+			if kv[i] == '=' {
+				if drop[kv[:i+1]] {
+					goto skip
+				}
+				break
+			}
+		}
+		filtered = append(filtered, kv)
+	skip:
+	}
+	filtered = append(filtered, "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+	return filtered
+}
 
 // Worktree represents a single git worktree with metadata.
 type Worktree struct {
@@ -50,6 +76,7 @@ func (s *WorktreeScanner) Scan(ctx context.Context) ([]WorktreeInfo, error) {
 	// Step 1: parse `git worktree list` output
 	// Format: <path> <commit-sha> [<branch-or-detached>]
 	listCmd := exec.CommandContext(ctx, "git", "-C", s.gitDir, "worktree", "list", "--porcelain")
+	listCmd.Env = scrubbedGitEnv()
 	out, err := listCmd.Output()
 	if err != nil {
 		s.lastErr = fmt.Errorf("git worktree list: %w", err)
@@ -77,6 +104,7 @@ func (s *WorktreeScanner) Scan(ctx context.Context) ([]WorktreeInfo, error) {
 
 		// Check if dirty
 		statusCmd := exec.CommandContext(ctx, "git", "-C", wt.Path, "status", "--porcelain")
+		statusCmd.Env = scrubbedGitEnv()
 		statusOut, statusErr := statusCmd.Output()
 		if statusErr != nil {
 			return nil, fmt.Errorf("git status for %s: %w", wt.Path, statusErr)
@@ -148,6 +176,7 @@ func parseWorktreeList(output string) ([]Worktree, error) {
 func detectDefaultBranch(ctx context.Context, gitDir string) string {
 	// Try origin/HEAD symbolic ref (yields "origin/main" → "main")
 	cmd := exec.CommandContext(ctx, "git", "-C", gitDir, "symbolic-ref", "refs/remotes/origin/HEAD")
+	cmd.Env = scrubbedGitEnv()
 	out, err := cmd.Output()
 	if err == nil {
 		ref := strings.TrimSpace(string(out))
@@ -157,6 +186,7 @@ func detectDefaultBranch(ctx context.Context, gitDir string) string {
 
 	// Fallback: current branch of the repo
 	cmd = exec.CommandContext(ctx, "git", "-C", gitDir, "branch", "--show-current")
+	cmd.Env = scrubbedGitEnv()
 	out, err = cmd.Output()
 	if err == nil {
 		return strings.TrimSpace(string(out))

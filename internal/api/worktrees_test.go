@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tim4net/agent-os/internal/service"
@@ -16,6 +17,31 @@ import (
 // ---------------------------------------------------------------------------
 // WP-N: Worktrees API route tests (httptest with real temp git repos)
 // ---------------------------------------------------------------------------
+
+// cleanGitEnv returns a copy of os.Environ() with GIT_DIR, GIT_WORK_TREE, and
+// GIT_INDEX_FILE removed so that tests never inherit state from a parent
+// git process (e.g. a pre-push hook).  It also neutralises GIT_CONFIG_*
+// to prevent picking up user-level gitconfig.
+func cleanGitEnv() []string {
+	drop := map[string]bool{
+		"GIT_DIR": true, "GIT_WORK_TREE": true, "GIT_INDEX_FILE": true,
+	}
+	filtered := make([]string, 0, len(os.Environ())+2)
+	for _, kv := range os.Environ() {
+		for i := 0; i < len(kv); i++ {
+			if kv[i] == '=' {
+				if drop[kv[:i]] {
+					goto skip
+				}
+				break
+			}
+		}
+		filtered = append(filtered, kv)
+	skip:
+	}
+	filtered = append(filtered, "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+	return filtered
+}
 
 // TestHTTPWorktrees_ListReturns200 tests the happy path: a temp repo with
 // worktrees returns 200 and the expected JSON shape.
@@ -27,7 +53,7 @@ func TestHTTPWorktrees_ListReturns200(t *testing.T) {
 	run := func(dir string, args ...string) {
 		cmd := exec.Command(args[0], args[1:]...)
 		cmd.Dir = dir
-		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		cmd.Env = cleanGitEnv()
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("%s %v: %s (err=%v)", dir, args, string(out), err)
@@ -125,7 +151,7 @@ func TestHTTPWorktrees_ExternalRefSurfacesForSCBranch(t *testing.T) {
 	run := func(dir string, args ...string) {
 		cmd := exec.Command(args[0], args[1:]...)
 		cmd.Dir = dir
-		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		cmd.Env = cleanGitEnv()
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("%s %v: %s (err=%v)", dir, args, string(out), err)
@@ -162,5 +188,130 @@ func TestHTTPWorktrees_ExternalRefSurfacesForSCBranch(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("worktree with branch wp-o1/SC-91130-pog not found")
+	}
+}
+
+// TestHTTPWorktrees_SurvivesPoisonedGitEnv is a regression guard for issue #71.
+// It creates TWO repos, then poisons GIT_DIR/GIT_WORK_TREE to point at the
+// SECOND repo while exercising the scanner against the FIRST.  Without the
+// env-scrub fix in scrubbedGitEnv, the poisoned env causes git subprocesses
+// to operate on the WRONG repository — the second repo instead of the first.
+// This manifests as scanner.Scan() returning worktrees from the second repo
+// (wrong count) and worktree paths outside the test tmpDir.
+//
+// Mutation check: reverting scrubbedGitEnv to plain append(os.Environ(), …)
+// turns this test RED because the scanner would list the second (poison) repo's
+// worktrees instead of the first (target) repo's.
+func TestHTTPWorktrees_SurvivesPoisonedGitEnv(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Repo 1 — the repo under test (has 1 worktree).
+	repoDir1 := filepath.Join(tmpDir, "repo1")
+	workDir1 := filepath.Join(tmpDir, "work1")
+	if err := os.MkdirAll(repoDir1, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(workDir1, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Repo 2 — the "poison" repo (has 2 worktrees, different branch names).
+	repoDir2 := filepath.Join(tmpDir, "repo2")
+	workDir2 := filepath.Join(tmpDir, "work2")
+	if err := os.MkdirAll(repoDir2, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(workDir2, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Helper that scrubs env for safe test setup.
+	run := func(dir string, args ...string) {
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = dir
+		cmd.Env = cleanGitEnv()
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%s %v: %s (err=%v)", dir, args, string(out), err)
+		}
+	}
+
+	// Set up repo 1 with 1 worktree.
+	run(repoDir1, "git", "init")
+	run(repoDir1, "git", "config", "user.email", "test@test.com")
+	run(repoDir1, "git", "config", "user.name", "test")
+	run(repoDir1, "git", "commit", "--allow-empty", "-m", "initial")
+	run(repoDir1, "git", "worktree", "add", filepath.Join(workDir1, "wt1"), "-b", "wp-reg/SC-71-regression")
+
+	// Set up repo 2 with 2 worktrees — this is the "poison" source.
+	run(repoDir2, "git", "init")
+	run(repoDir2, "git", "config", "user.email", "test@test.com")
+	run(repoDir2, "git", "config", "user.name", "test")
+	run(repoDir2, "git", "commit", "--allow-empty", "-m", "initial")
+	run(repoDir2, "git", "worktree", "add", filepath.Join(workDir2, "wt2a"), "-b", "poison/branch-a")
+	run(repoDir2, "git", "worktree", "add", filepath.Join(workDir2, "wt2b"), "-b", "poison/branch-b")
+
+	// POISON the process environment to point at repo 2.
+	// After this, any child process that reads os.Environ() without scrubbing
+	// will think we're operating on repo2 instead of repo1.
+	t.Setenv("GIT_DIR", filepath.Join(repoDir2, ".git"))
+	t.Setenv("GIT_WORK_TREE", repoDir2)
+
+	// Scan repo 1 — must return only repo 1's worktrees despite the poison.
+	scanner := service.NewWorktreeScanner(repoDir1)
+	trees, err := scanner.Scan(context.Background())
+	if err != nil {
+		t.Fatalf("Scan with poisoned env: %v", err)
+	}
+
+	// Exactly 2 worktrees from repo 1: the bare repo + wt1.
+	if len(trees) != 2 {
+		t.Fatalf("expected exactly 2 worktrees from repo1, got %d — env scrub is broken (listed repo2's worktrees)", len(trees))
+	}
+
+	found := false
+	for _, wt := range trees {
+		// Every worktree path must be under tmpDir/repo1 or tmpDir/work1,
+		// never under repo2.
+		if strings.HasPrefix(wt.Path, repoDir2) || strings.HasPrefix(wt.Path, workDir2) {
+			t.Fatalf("worktree path %q is from poison repo — env scrub is broken", wt.Path)
+		}
+		if wt.Branch == "wp-reg/SC-71-regression" {
+			found = true
+			if wt.ExternalRef == "" {
+				t.Fatalf("expected external_ref for %s, got empty", wt.Branch)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("worktree with branch wp-reg/SC-71-regression not found")
+	}
+
+	// HTTP endpoint must also return 200 with correct data.
+	a := &API{
+		queries: nil,
+		bus:     service.NewEventBus(),
+	}
+	srv := httptest.NewServer(a.WorktreeRoutes())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/?repo_path=" + repoDir1)
+	if err != nil {
+		t.Fatalf("GET worktrees with poisoned env: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 with poisoned env, got %d", resp.StatusCode)
+	}
+
+	var body WorktreeListResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.RepoPath != repoDir1 {
+		t.Fatalf("expected repo_path %q, got %q", repoDir1, body.RepoPath)
+	}
+	if len(body.Worktrees) != 2 {
+		t.Fatalf("expected 2 worktrees in HTTP response, got %d", len(body.Worktrees))
 	}
 }

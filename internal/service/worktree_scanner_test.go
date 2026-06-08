@@ -156,7 +156,7 @@ func TestWorktreeScanner_RealRepo(t *testing.T) {
 	run := func(name string, args ...string) {
 		cmd := exec.Command(args[0], args[1:]...)
 		cmd.Dir = name
-		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		cmd.Env = scrubbedGitEnv()
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("%s %v: %s (err=%v)", name, args, string(out), err)
@@ -214,7 +214,7 @@ func TestWorktreeScanner_DirtyWorktree(t *testing.T) {
 	run := func(name string, args ...string) {
 		cmd := exec.Command(args[0], args[1:]...)
 		cmd.Dir = name
-		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		cmd.Env = scrubbedGitEnv()
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("%s %v: %s (err=%v)", name, args, string(out), err)
@@ -267,7 +267,7 @@ func TestWorktreeScanner_CleanWorktree(t *testing.T) {
 	run := func(name string, args ...string) {
 		cmd := exec.Command(args[0], args[1:]...)
 		cmd.Dir = name
-		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		cmd.Env = scrubbedGitEnv()
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("%s %v: %s (err=%v)", name, args, string(out), err)
@@ -325,7 +325,7 @@ func TestWorktreeScanner_GitStatusErrorReturnsError(t *testing.T) {
 	run := func(name string, args ...string) {
 		cmd := exec.Command(args[0], args[1:]...)
 		cmd.Dir = name
-		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		cmd.Env = scrubbedGitEnv()
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("%s %v: %s (err=%v)", name, args, string(out), err)
