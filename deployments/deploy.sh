@@ -120,9 +120,29 @@ healthy() {
   return 1
 }
 
+# Verify the running container is actually using the :latest image.
+# Catches the case where podman reuses a stale container or image pull
+# didn't land before restart.
+verify_running_image() {
+  local svc="$1"  # container name (e.g. agent-os-api)
+  local running latest
+  running=$(podman inspect "$svc" --format '{{.Image}}' 2>/dev/null) \
+    || fail "$svc: cannot inspect running container"
+  latest=$(podman image inspect "localhost/$svc:latest" --format '{{.Id}}' 2>/dev/null) \
+    || fail "$svc: cannot inspect image localhost/$svc:latest"
+  if [ "$running" != "$latest" ]; then
+    fail "$svc running image ($running) != :latest ($latest) after restart"
+  fi
+  log "$svc: verified running image == :latest"
+}
+
 log "restarting stack"
 restart_stack
 if healthy 25; then
+  # --- post-health image verification ---
+  verify_running_image "$API_IMG"
+  verify_running_image "$WEB_IMG"
+
   log "HEALTHY at $DEPLOY_SHA (migrations +$applied) — deploy OK"
   # prune candidate tags (latest now points at the same image id)
   podman rmi "$API_IMG:candidate" "$WEB_IMG:candidate" 2>/dev/null || true
