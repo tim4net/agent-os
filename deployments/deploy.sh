@@ -126,6 +126,8 @@ if healthy 25; then
   log "HEALTHY at $DEPLOY_SHA (migrations +$applied) — deploy OK"
   # prune candidate tags (latest now points at the same image id)
   podman rmi "$API_IMG:candidate" "$WEB_IMG:candidate" 2>/dev/null || true
+  # prune dangling images (left behind by rebuilds) — preserves :latest and :rollback tags
+  podman image prune -f
   echo "DEPLOY_OK sha=$DEPLOY_SHA migrations=$applied"
   exit 0
 fi
