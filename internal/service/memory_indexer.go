@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -14,22 +15,50 @@ import (
 	"github.com/tim4net/agent-os/internal/db"
 )
 
+// ProjectPathMapping maps a vault-relative path prefix to a project slug.
+// When the indexer encounters a file whose relative path starts with one of
+// these prefixes, it tags the memory row with the corresponding project_id.
+type ProjectPathMapping struct {
+	PathPrefix string // e.g. "projects/riftwing" or "Riftwing"
+	Slug       string // e.g. "riftwing"
+}
+
+// DefaultProjectPathMappings provides the initial set of vault-folder → project
+// slug mappings. This can be overridden via WithProjectPathMappings.
+var DefaultProjectPathMappings = []ProjectPathMapping{
+	{PathPrefix: "projects/riftwing", Slug: "riftwing"},
+	{PathPrefix: "Riftwing", Slug: "riftwing"},
+	{PathPrefix: "projects/agent-os", Slug: "agent-os"},
+}
+
 // MemoryIndexer walks the Obsidian vault periodically and indexes .md files.
 type MemoryIndexer struct {
-	queries      *db.Queries
-	bus          *EventBus
-	obsidianPath string
-	stopCh       chan struct{}
+	queries             *db.Queries
+	bus                 *EventBus
+	obsidianPath        string
+	stopCh              chan struct{}
+	projectPathMappings []ProjectPathMapping
+
+	mu       sync.RWMutex
+	slugToID map[string]pgtype.UUID // slug → project UUID
 }
 
 // NewMemoryIndexer creates a new MemoryIndexer.
 func NewMemoryIndexer(queries *db.Queries, bus *EventBus, obsidianPath string) *MemoryIndexer {
 	return &MemoryIndexer{
-		queries:      queries,
-		bus:          bus,
-		obsidianPath: obsidianPath,
-		stopCh:       make(chan struct{}),
+		queries:             queries,
+		bus:                 bus,
+		obsidianPath:        obsidianPath,
+		stopCh:              make(chan struct{}),
+		projectPathMappings: DefaultProjectPathMappings,
+		slugToID:            make(map[string]pgtype.UUID),
 	}
+}
+
+// WithProjectPathMappings sets the path-prefix → slug mapping table.
+func (mi *MemoryIndexer) WithProjectPathMappings(mappings []ProjectPathMapping) *MemoryIndexer {
+	mi.projectPathMappings = mappings
+	return mi
 }
 
 // Start begins the periodic indexing loop.
@@ -61,7 +90,59 @@ func (mi *MemoryIndexer) Stop() {
 	close(mi.stopCh)
 }
 
+// RefreshProjectCache loads all projects from the database and builds the
+// slug → id lookup map. Public so integration tests can trigger a cache
+// refresh without running a full index cycle.
+func (mi *MemoryIndexer) RefreshProjectCache(ctx context.Context) {
+	mi.refreshProjectCache(ctx)
+}
+
+// refreshProjectCache loads all projects from the database and builds the
+// slug → id lookup map. Called at the start of each index cycle.
+func (mi *MemoryIndexer) refreshProjectCache(ctx context.Context) {
+	projects, err := mi.queries.ListProjects(ctx)
+	if err != nil {
+		slog.Warn("memory-indexer: failed to load projects", "error", err)
+		return
+	}
+
+	m := make(map[string]pgtype.UUID, len(projects))
+	for _, p := range projects {
+		m[p.Slug] = p.ID
+	}
+
+	mi.mu.Lock()
+	mi.slugToID = m
+	mi.mu.Unlock()
+}
+
+// DeriveProjectID maps a vault-relative file path to a project_id using the
+// configured path-prefix → slug mappings and the cached slug → id lookup.
+// Returns a zero-value pgtype.UUID (Valid=false) when no project matches.
+func (mi *MemoryIndexer) DeriveProjectID(relPath string) pgtype.UUID {
+	// Normalize separators to forward slashes for consistent matching.
+	// strings.ReplaceAll handles both OS-native paths (filepath.ToSlash)
+	// and literal backslashes that may appear in cross-platform data.
+	relPath = strings.ReplaceAll(filepath.ToSlash(relPath), "\\", "/")
+
+	mi.mu.RLock()
+	defer mi.mu.RUnlock()
+
+	for _, mapping := range mi.projectPathMappings {
+		prefix := filepath.ToSlash(mapping.PathPrefix)
+		if strings.HasPrefix(relPath, prefix+"/") || relPath == prefix {
+			if id, ok := mi.slugToID[mapping.Slug]; ok {
+				return id
+			}
+		}
+	}
+	return pgtype.UUID{}
+}
+
 func (mi *MemoryIndexer) index(ctx context.Context) {
+	// Refresh the project cache each cycle so new projects are picked up.
+	mi.refreshProjectCache(ctx)
+
 	count := 0
 
 	err := filepath.Walk(mi.obsidianPath, func(path string, info os.FileInfo, err error) error {
@@ -102,12 +183,16 @@ func (mi *MemoryIndexer) index(ctx context.Context) {
 		// Strip markdown for plain text content
 		plainText := stripMarkdown(content)
 
+		// Derive project_id from file path
+		projectID := mi.DeriveProjectID(relPath)
+
 		// Upsert into memory_index
 		_, err = mi.queries.UpsertMemory(ctx, db.UpsertMemoryParams{
-			FilePath: relPath,
-			Title:    pgtype.Text{String: title, Valid: title != ""},
-			Content:  pgtype.Text{String: plainText, Valid: plainText != ""},
-			Tags:     []string{},
+			FilePath:  relPath,
+			Title:     pgtype.Text{String: title, Valid: title != ""},
+			Content:   pgtype.Text{String: plainText, Valid: plainText != ""},
+			Tags:      []string{},
+			ProjectID: projectID,
 		})
 		if err != nil {
 			slog.Error("memory-indexer: failed to upsert", "path", relPath, "error", err)

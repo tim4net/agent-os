@@ -307,7 +307,7 @@ func (m *MemoryAPI) WriteFile(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
-// Search handles GET /api/memory/search?q=
+// Search handles GET /api/memory/search?q=&project_id=
 func (m *MemoryAPI) Search(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query().Get("q")
 	if query == "" {
@@ -323,9 +323,19 @@ func (m *MemoryAPI) Search(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Optional project_id filter — when provided, restrict results to that project.
+	var projectID pgtype.UUID
+	if pid := r.URL.Query().Get("project_id"); pid != "" {
+		if err := projectID.Scan(pid); err != nil {
+			http.Error(w, "invalid project_id parameter", http.StatusBadRequest)
+			return
+		}
+	}
+
 	results, err := m.queries.SearchMemory(r.Context(), db.SearchMemoryParams{
 		WebsearchToTsquery: query,
-		Limit:          limit,
+		Limit:              limit,
+		ProjectID:          projectID,
 	})
 	if err != nil {
 		http.Error(w, "search failed", http.StatusInternalServerError)
