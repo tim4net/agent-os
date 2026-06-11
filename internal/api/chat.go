@@ -587,7 +587,9 @@ func (a *API) makeUniqueTitle(ctx context.Context, agentID pgtype.UUID, convID p
 func (a *API) deferredLLMTitle(convID pgtype.UUID, agentID pgtype.UUID) {
 	time.Sleep(30 * time.Second)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// Thinking models (e.g. local-qwen/Qwen 3.6) take 60-90s for inference.
+	// The 300s matches title_worker.go and summaries.go timeouts.
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
 	defer cancel()
 
 	// Load conversation messages for context
