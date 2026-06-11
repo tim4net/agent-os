@@ -110,8 +110,10 @@ func (tw *TitleWorker) resummarizeActive(ctx context.Context) {
 
 	slog.Info("title worker: re-summarizing active conversations", "count", len(convs))
 
-	// Process with limited concurrency (3 at a time)
-	sem := make(chan struct{}, 3)
+	// Process sequentially — local-qwen (llama.cpp, single GPU) takes ~60-70s
+	// per inference. Concurrent requests queue on the GPU, causing the 3rd
+	// request to take ~200s and exceed the 180s HTTP timeout.
+	sem := make(chan struct{}, 1)
 	var wg sync.WaitGroup
 
 	for _, c := range convs {

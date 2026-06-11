@@ -57,7 +57,7 @@ func (a *API) generateSummary(ctx context.Context, conversationText string) (str
 		return "", fmt.Errorf("marshal summary request: %w", err)
 	}
 
-	reqCtx, cancel := context.WithTimeout(ctx, 180*time.Second)
+	reqCtx, cancel := context.WithTimeout(ctx, 300*time.Second)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, url, bytes.NewReader(jsonBody))
