@@ -67,7 +67,7 @@ func (aw *AgentWatcher) run(ctx context.Context) {
 }
 
 func (aw *AgentWatcher) checkAll(ctx context.Context) {
-	agents, err := aw.queries.ListAgents(ctx)
+	agents, err := aw.queries.ListAgents(ctx, pgtype.UUID{})
 	if err != nil {
 		slog.Error("agent watcher: list agents", "error", err)
 		return

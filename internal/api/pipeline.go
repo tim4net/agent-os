@@ -34,12 +34,19 @@ func (a *API) PipelineRoutes() http.Handler {
 
 // ListPipelineItems handles GET /api/pipeline?status=&type=
 func (a *API) ListPipelineItems(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	statusFilter := r.URL.Query().Get("status")
 	typeFilter := r.URL.Query().Get("type")
 
 	items, err := a.queries.ListPipelineItems(r.Context(), db.ListPipelineItemsParams{
-		Column1: statusFilter,
-		Column2: typeFilter,
+		OwnerID: ownerID,
+		Column2: statusFilter,
+		Column3: typeFilter,
 	})
 	if err != nil {
 		http.Error(w, "failed to list pipeline items: "+err.Error(), http.StatusInternalServerError)
@@ -56,6 +63,12 @@ func (a *API) ListPipelineItems(w http.ResponseWriter, r *http.Request) {
 
 // GetPipelineItem handles GET /api/pipeline/{id}
 func (a *API) GetPipelineItem(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	idStr := chi.URLParam(r, "id")
 
 	var id pgtype.UUID
@@ -64,7 +77,7 @@ func (a *API) GetPipelineItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	item, err := a.queries.GetPipelineItem(r.Context(), id)
+	item, err := a.queries.GetPipelineItem(r.Context(), db.GetPipelineItemParams{ID: id, OwnerID: ownerID})
 	if err != nil {
 		http.Error(w, "pipeline item not found", http.StatusNotFound)
 		return
@@ -83,6 +96,12 @@ type CreatePipelineItemRequest struct {
 
 // CreatePipelineItem handles POST /api/pipeline
 func (a *API) CreatePipelineItem(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	var req CreatePipelineItemRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -108,6 +127,7 @@ func (a *API) CreatePipelineItem(w http.ResponseWriter, r *http.Request) {
 	metadataJSON, _ := json.Marshal(metadata)
 
 	item, err := a.queries.CreatePipelineItem(r.Context(), db.CreatePipelineItemParams{
+		OwnerID:  ownerID,
 		Type:     req.Type,
 		Title:    req.Title,
 		Status:   "draft",
@@ -134,6 +154,12 @@ type UpdatePipelineItemRequest struct {
 
 // UpdatePipelineItem handles PUT /api/pipeline/{id}
 func (a *API) UpdatePipelineItem(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	idStr := chi.URLParam(r, "id")
 
 	var id pgtype.UUID
@@ -149,7 +175,7 @@ func (a *API) UpdatePipelineItem(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get existing item to preserve fields
-	existing, err := a.queries.GetPipelineItem(r.Context(), id)
+	existing, err := a.queries.GetPipelineItem(r.Context(), db.GetPipelineItemParams{ID: id, OwnerID: ownerID})
 	if err != nil {
 		http.Error(w, "pipeline item not found", http.StatusNotFound)
 		return
@@ -185,6 +211,7 @@ func (a *API) UpdatePipelineItem(w http.ResponseWriter, r *http.Request) {
 
 	item, err := a.queries.UpdatePipelineItem(r.Context(), db.UpdatePipelineItemParams{
 		ID:       id,
+		OwnerID:  ownerID,
 		Title:    title,
 		Status:   status,
 		Content:  content,
@@ -201,6 +228,12 @@ func (a *API) UpdatePipelineItem(w http.ResponseWriter, r *http.Request) {
 
 // DeletePipelineItem handles DELETE /api/pipeline/{id}
 func (a *API) DeletePipelineItem(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	idStr := chi.URLParam(r, "id")
 
 	var id pgtype.UUID
@@ -209,7 +242,7 @@ func (a *API) DeletePipelineItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := a.queries.DeletePipelineItem(r.Context(), id); err != nil {
+	if err := a.queries.DeletePipelineItem(r.Context(), db.DeletePipelineItemParams{ID: id, OwnerID: ownerID}); err != nil {
 		http.Error(w, "failed to delete pipeline item", http.StatusInternalServerError)
 		return
 	}
@@ -226,13 +259,19 @@ func (a *API) GeneratePipelineContent(w http.ResponseWriter, r *http.Request) {
 
 	idStr := chi.URLParam(r, "id")
 
+	ownerID, ok := OwnerIDFromContext(ctx)
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	var id pgtype.UUID
 	if err := id.Scan(idStr); err != nil {
 		http.Error(w, "invalid pipeline item ID", http.StatusBadRequest)
 		return
 	}
 
-	item, err := a.queries.GetPipelineItem(ctx, id)
+	item, err := a.queries.GetPipelineItem(ctx, db.GetPipelineItemParams{ID: id, OwnerID: ownerID})
 	if err != nil {
 		http.Error(w, "pipeline item not found", http.StatusNotFound)
 		return
@@ -325,6 +364,7 @@ func (a *API) GeneratePipelineContent(w http.ResponseWriter, r *http.Request) {
 	// Save content back to the pipeline item
 	_, err = a.queries.UpdatePipelineItem(ctx, db.UpdatePipelineItemParams{
 		ID:       id,
+		OwnerID:  ownerID,
 		Title:    item.Title,
 		Status:   item.Status,
 		Content:  pgtypeText(generatedContent),
@@ -342,6 +382,12 @@ func (a *API) GeneratePipelineContent(w http.ResponseWriter, r *http.Request) {
 
 // AdvancePipelineItem handles POST /api/pipeline/{id}/advance
 func (a *API) AdvancePipelineItem(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	idStr := chi.URLParam(r, "id")
 
 	var id pgtype.UUID
@@ -350,7 +396,7 @@ func (a *API) AdvancePipelineItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	item, err := a.queries.GetPipelineItem(r.Context(), id)
+	item, err := a.queries.GetPipelineItem(r.Context(), db.GetPipelineItemParams{ID: id, OwnerID: ownerID})
 	if err != nil {
 		http.Error(w, "pipeline item not found", http.StatusNotFound)
 		return
@@ -372,6 +418,7 @@ func (a *API) AdvancePipelineItem(w http.ResponseWriter, r *http.Request) {
 
 	updated, err := a.queries.UpdatePipelineItem(r.Context(), db.UpdatePipelineItemParams{
 		ID:       id,
+		OwnerID:  ownerID,
 		Title:    item.Title,
 		Status:   next,
 		Content:  item.Content,

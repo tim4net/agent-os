@@ -309,6 +309,12 @@ func (m *MemoryAPI) WriteFile(w http.ResponseWriter, r *http.Request) {
 
 // Search handles GET /api/memory/search?q=&project_id=
 func (m *MemoryAPI) Search(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	query := r.URL.Query().Get("q")
 	if query == "" {
 		http.Error(w, "q parameter required", http.StatusBadRequest)
@@ -333,6 +339,7 @@ func (m *MemoryAPI) Search(w http.ResponseWriter, r *http.Request) {
 	}
 
 	results, err := m.queries.SearchMemory(r.Context(), db.SearchMemoryParams{
+		OwnerID:            ownerID,
 		WebsearchToTsquery: query,
 		Limit:              limit,
 		ProjectID:          projectID,

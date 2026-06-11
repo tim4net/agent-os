@@ -84,7 +84,7 @@ func TestAgentAuthTokenEncryptedAtRestAndNeverLeaks(t *testing.T) {
 	}
 
 	// But buildHarnessConfig must decrypt it back for actual use.
-	ag, err := a.queries.GetAgentByName(context.Background(), "my-claw")
+	ag, err := a.queries.GetAgentByName(context.Background(), db.GetAgentByNameParams{Name: "my-claw", OwnerID: owner0UUID})
 	if err != nil {
 		t.Fatalf("GetAgentByName: %v", err)
 	}

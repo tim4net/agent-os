@@ -227,7 +227,7 @@ func TestHTTPWorkEvent_ValidEvent_Returns201AndDBRow(t *testing.T) {
 	ctx := context.Background()
 	var pgEID pgtype.UUID
 	_ = pgEID.Scan(eventID)
-	row, err := a.queries.GetWorkEventByEventID(ctx, pgEID)
+	row, err := a.queries.GetWorkEventByEventID(ctx, db.GetWorkEventByEventIDParams{EventID: pgEID, OwnerID: owner0UUID})
 	if err != nil {
 		t.Fatalf("failed to query work_event from DB: %v", err)
 	}
@@ -387,7 +387,7 @@ func TestHTTPWorkEvent_TenantOverriddenByKey(t *testing.T) {
 	ctx := context.Background()
 	var pgEID pgtype.UUID
 	_ = pgEID.Scan(eventID)
-	row, err := a.queries.GetWorkEventByEventID(ctx, pgEID)
+	row, err := a.queries.GetWorkEventByEventID(ctx, db.GetWorkEventByEventIDParams{EventID: pgEID, OwnerID: owner0UUID})
 	if err != nil {
 		t.Fatalf("failed to query event: %v", err)
 	}
@@ -485,7 +485,7 @@ func TestIngestKey_TenantBinding_AC1(t *testing.T) {
 	// Verify the persisted event has tenant="acme-corp" (from key), NOT "other-tenant" (from body).
 	var pgEID pgtype.UUID
 	_ = pgEID.Scan(eventID)
-	row, err := a.queries.GetWorkEventByEventID(ctx, pgEID)
+	row, err := a.queries.GetWorkEventByEventID(ctx, db.GetWorkEventByEventIDParams{EventID: pgEID, OwnerID: owner0UUID})
 	if err != nil {
 		t.Fatalf("failed to query event: %v", err)
 	}
@@ -606,6 +606,8 @@ func TestHTTPWorkEvent_DBFailure_Returns500(t *testing.T) {
 	req := httptest.NewRequest("POST", "/work", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-AgentOS-Ingest-Key", "some-key")
+	// Inject owner identity (normally done by identity middleware).
+	req = req.WithContext(withTestOwner(req.Context()))
 
 	rec := httptest.NewRecorder()
 	a.WorkEventRoutes().ServeHTTP(rec, req)

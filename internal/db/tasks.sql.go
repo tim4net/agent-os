@@ -12,23 +12,29 @@ import (
 )
 
 const countSubtasks = `-- name: CountSubtasks :one
-SELECT COUNT(*) FROM tasks WHERE parent_task_id = $1
+SELECT COUNT(*) FROM tasks WHERE parent_task_id = $1 AND owner_id = $2
 `
 
-func (q *Queries) CountSubtasks(ctx context.Context, parentTaskID pgtype.UUID) (int64, error) {
-	row := q.db.QueryRow(ctx, countSubtasks, parentTaskID)
+type CountSubtasksParams struct {
+	ParentTaskID pgtype.UUID `json:"parent_task_id"`
+	OwnerID      pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) CountSubtasks(ctx context.Context, arg CountSubtasksParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countSubtasks, arg.ParentTaskID, arg.OwnerID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
 }
 
 const createSubtask = `-- name: CreateSubtask :one
-INSERT INTO tasks (agent_id, title, description, status, priority, metadata, parent_task_id)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO tasks (owner_id, agent_id, title, description, status, priority, metadata, parent_task_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 RETURNING id, agent_id, title, description, status, priority, metadata, created_at, updated_at, parent_task_id, owner_id
 `
 
 type CreateSubtaskParams struct {
+	OwnerID      pgtype.UUID `json:"owner_id"`
 	AgentID      pgtype.UUID `json:"agent_id"`
 	Title        string      `json:"title"`
 	Description  pgtype.Text `json:"description"`
@@ -40,6 +46,7 @@ type CreateSubtaskParams struct {
 
 func (q *Queries) CreateSubtask(ctx context.Context, arg CreateSubtaskParams) (Task, error) {
 	row := q.db.QueryRow(ctx, createSubtask,
+		arg.OwnerID,
 		arg.AgentID,
 		arg.Title,
 		arg.Description,
@@ -66,12 +73,13 @@ func (q *Queries) CreateSubtask(ctx context.Context, arg CreateSubtaskParams) (T
 }
 
 const createTask = `-- name: CreateTask :one
-INSERT INTO tasks (agent_id, title, description, status, priority, metadata)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO tasks (owner_id, agent_id, title, description, status, priority, metadata)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 RETURNING id, agent_id, title, description, status, priority, metadata, created_at, updated_at, parent_task_id, owner_id
 `
 
 type CreateTaskParams struct {
+	OwnerID     pgtype.UUID `json:"owner_id"`
 	AgentID     pgtype.UUID `json:"agent_id"`
 	Title       string      `json:"title"`
 	Description pgtype.Text `json:"description"`
@@ -82,6 +90,7 @@ type CreateTaskParams struct {
 
 func (q *Queries) CreateTask(ctx context.Context, arg CreateTaskParams) (Task, error) {
 	row := q.db.QueryRow(ctx, createTask,
+		arg.OwnerID,
 		arg.AgentID,
 		arg.Title,
 		arg.Description,
@@ -107,20 +116,30 @@ func (q *Queries) CreateTask(ctx context.Context, arg CreateTaskParams) (Task, e
 }
 
 const deleteTask = `-- name: DeleteTask :exec
-DELETE FROM tasks WHERE id = $1
+DELETE FROM tasks WHERE id = $1 AND owner_id = $2
 `
 
-func (q *Queries) DeleteTask(ctx context.Context, id pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteTask, id)
+type DeleteTaskParams struct {
+	ID      pgtype.UUID `json:"id"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) DeleteTask(ctx context.Context, arg DeleteTaskParams) error {
+	_, err := q.db.Exec(ctx, deleteTask, arg.ID, arg.OwnerID)
 	return err
 }
 
 const getTask = `-- name: GetTask :one
-SELECT id, agent_id, title, description, status, priority, metadata, created_at, updated_at, parent_task_id, owner_id FROM tasks WHERE id = $1
+SELECT id, agent_id, title, description, status, priority, metadata, created_at, updated_at, parent_task_id, owner_id FROM tasks WHERE id = $1 AND owner_id = $2
 `
 
-func (q *Queries) GetTask(ctx context.Context, id pgtype.UUID) (Task, error) {
-	row := q.db.QueryRow(ctx, getTask, id)
+type GetTaskParams struct {
+	ID      pgtype.UUID `json:"id"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) GetTask(ctx context.Context, arg GetTaskParams) (Task, error) {
+	row := q.db.QueryRow(ctx, getTask, arg.ID, arg.OwnerID)
 	var i Task
 	err := row.Scan(
 		&i.ID,
@@ -139,12 +158,17 @@ func (q *Queries) GetTask(ctx context.Context, id pgtype.UUID) (Task, error) {
 }
 
 const listSubtasks = `-- name: ListSubtasks :many
-SELECT id, agent_id, title, description, status, priority, metadata, created_at, updated_at, parent_task_id, owner_id FROM tasks WHERE parent_task_id = $1
+SELECT id, agent_id, title, description, status, priority, metadata, created_at, updated_at, parent_task_id, owner_id FROM tasks WHERE parent_task_id = $1 AND owner_id = $2
 ORDER BY priority DESC, created_at ASC
 `
 
-func (q *Queries) ListSubtasks(ctx context.Context, parentTaskID pgtype.UUID) ([]Task, error) {
-	rows, err := q.db.Query(ctx, listSubtasks, parentTaskID)
+type ListSubtasksParams struct {
+	ParentTaskID pgtype.UUID `json:"parent_task_id"`
+	OwnerID      pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) ListSubtasks(ctx context.Context, arg ListSubtasksParams) ([]Task, error) {
+	rows, err := q.db.Query(ctx, listSubtasks, arg.ParentTaskID, arg.OwnerID)
 	if err != nil {
 		return nil, err
 	}
@@ -177,18 +201,20 @@ func (q *Queries) ListSubtasks(ctx context.Context, parentTaskID pgtype.UUID) ([
 
 const listTasks = `-- name: ListTasks :many
 SELECT id, agent_id, title, description, status, priority, metadata, created_at, updated_at, parent_task_id, owner_id FROM tasks
-WHERE ($1::text = '' OR status = $1)
-  AND ($2::uuid IS NULL OR agent_id = $2)
+WHERE owner_id = $1
+  AND ($2::text = '' OR status = $2)
+  AND ($3::uuid IS NULL OR agent_id = $3)
 ORDER BY priority DESC, created_at ASC
 `
 
 type ListTasksParams struct {
-	Column1 string      `json:"column_1"`
-	Column2 pgtype.UUID `json:"column_2"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+	Column2 string      `json:"column_2"`
+	Column3 pgtype.UUID `json:"column_3"`
 }
 
 func (q *Queries) ListTasks(ctx context.Context, arg ListTasksParams) ([]Task, error) {
-	rows, err := q.db.Query(ctx, listTasks, arg.Column1, arg.Column2)
+	rows, err := q.db.Query(ctx, listTasks, arg.OwnerID, arg.Column2, arg.Column3)
 	if err != nil {
 		return nil, err
 	}
@@ -221,7 +247,7 @@ func (q *Queries) ListTasks(ctx context.Context, arg ListTasksParams) ([]Task, e
 
 const updateTask = `-- name: UpdateTask :one
 UPDATE tasks SET title = $2, description = $3, status = $4, priority = $5, metadata = $6, updated_at = NOW()
-WHERE id = $1
+WHERE id = $1 AND owner_id = $7
 RETURNING id, agent_id, title, description, status, priority, metadata, created_at, updated_at, parent_task_id, owner_id
 `
 
@@ -232,6 +258,7 @@ type UpdateTaskParams struct {
 	Status      string      `json:"status"`
 	Priority    pgtype.Int4 `json:"priority"`
 	Metadata    []byte      `json:"metadata"`
+	OwnerID     pgtype.UUID `json:"owner_id"`
 }
 
 func (q *Queries) UpdateTask(ctx context.Context, arg UpdateTaskParams) (Task, error) {
@@ -242,6 +269,7 @@ func (q *Queries) UpdateTask(ctx context.Context, arg UpdateTaskParams) (Task, e
 		arg.Status,
 		arg.Priority,
 		arg.Metadata,
+		arg.OwnerID,
 	)
 	var i Task
 	err := row.Scan(

@@ -12,12 +12,13 @@ import (
 )
 
 const createWorkflow = `-- name: CreateWorkflow :one
-INSERT INTO workflows (name, description, steps, agent_id)
-VALUES ($1, $2, $3, $4)
+INSERT INTO workflows (owner_id, name, description, steps, agent_id)
+VALUES ($1, $2, $3, $4, $5)
 RETURNING id, name, description, steps, agent_id, created_at, updated_at, owner_id
 `
 
 type CreateWorkflowParams struct {
+	OwnerID     pgtype.UUID `json:"owner_id"`
 	Name        string      `json:"name"`
 	Description pgtype.Text `json:"description"`
 	Steps       []byte      `json:"steps"`
@@ -26,6 +27,7 @@ type CreateWorkflowParams struct {
 
 func (q *Queries) CreateWorkflow(ctx context.Context, arg CreateWorkflowParams) (Workflow, error) {
 	row := q.db.QueryRow(ctx, createWorkflow,
+		arg.OwnerID,
 		arg.Name,
 		arg.Description,
 		arg.Steps,
@@ -46,12 +48,13 @@ func (q *Queries) CreateWorkflow(ctx context.Context, arg CreateWorkflowParams) 
 }
 
 const createWorkflowRun = `-- name: CreateWorkflowRun :one
-INSERT INTO workflow_runs (workflow_id, status, current_step, result)
-VALUES ($1, $2, $3, $4)
+INSERT INTO workflow_runs (owner_id, workflow_id, status, current_step, result)
+VALUES ($1, $2, $3, $4, $5)
 RETURNING id, workflow_id, status, current_step, result, created_at, updated_at, owner_id
 `
 
 type CreateWorkflowRunParams struct {
+	OwnerID     pgtype.UUID `json:"owner_id"`
 	WorkflowID  pgtype.UUID `json:"workflow_id"`
 	Status      pgtype.Text `json:"status"`
 	CurrentStep pgtype.Int4 `json:"current_step"`
@@ -60,6 +63,7 @@ type CreateWorkflowRunParams struct {
 
 func (q *Queries) CreateWorkflowRun(ctx context.Context, arg CreateWorkflowRunParams) (WorkflowRun, error) {
 	row := q.db.QueryRow(ctx, createWorkflowRun,
+		arg.OwnerID,
 		arg.WorkflowID,
 		arg.Status,
 		arg.CurrentStep,
@@ -80,23 +84,33 @@ func (q *Queries) CreateWorkflowRun(ctx context.Context, arg CreateWorkflowRunPa
 }
 
 const deleteWorkflow = `-- name: DeleteWorkflow :exec
-DELETE FROM workflows WHERE id = $1
+DELETE FROM workflows WHERE id = $1 AND owner_id = $2
 `
 
-func (q *Queries) DeleteWorkflow(ctx context.Context, id pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteWorkflow, id)
+type DeleteWorkflowParams struct {
+	ID      pgtype.UUID `json:"id"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) DeleteWorkflow(ctx context.Context, arg DeleteWorkflowParams) error {
+	_, err := q.db.Exec(ctx, deleteWorkflow, arg.ID, arg.OwnerID)
 	return err
 }
 
 const getLatestWorkflowRun = `-- name: GetLatestWorkflowRun :one
 SELECT id, workflow_id, status, current_step, result, created_at, updated_at, owner_id FROM workflow_runs
-WHERE workflow_id = $1
+WHERE workflow_id = $1 AND owner_id = $2
 ORDER BY created_at DESC
 LIMIT 1
 `
 
-func (q *Queries) GetLatestWorkflowRun(ctx context.Context, workflowID pgtype.UUID) (WorkflowRun, error) {
-	row := q.db.QueryRow(ctx, getLatestWorkflowRun, workflowID)
+type GetLatestWorkflowRunParams struct {
+	WorkflowID pgtype.UUID `json:"workflow_id"`
+	OwnerID    pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) GetLatestWorkflowRun(ctx context.Context, arg GetLatestWorkflowRunParams) (WorkflowRun, error) {
+	row := q.db.QueryRow(ctx, getLatestWorkflowRun, arg.WorkflowID, arg.OwnerID)
 	var i WorkflowRun
 	err := row.Scan(
 		&i.ID,
@@ -112,11 +126,16 @@ func (q *Queries) GetLatestWorkflowRun(ctx context.Context, workflowID pgtype.UU
 }
 
 const getWorkflow = `-- name: GetWorkflow :one
-SELECT id, name, description, steps, agent_id, created_at, updated_at, owner_id FROM workflows WHERE id = $1
+SELECT id, name, description, steps, agent_id, created_at, updated_at, owner_id FROM workflows WHERE id = $1 AND owner_id = $2
 `
 
-func (q *Queries) GetWorkflow(ctx context.Context, id pgtype.UUID) (Workflow, error) {
-	row := q.db.QueryRow(ctx, getWorkflow, id)
+type GetWorkflowParams struct {
+	ID      pgtype.UUID `json:"id"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) GetWorkflow(ctx context.Context, arg GetWorkflowParams) (Workflow, error) {
+	row := q.db.QueryRow(ctx, getWorkflow, arg.ID, arg.OwnerID)
 	var i Workflow
 	err := row.Scan(
 		&i.ID,
@@ -132,11 +151,16 @@ func (q *Queries) GetWorkflow(ctx context.Context, id pgtype.UUID) (Workflow, er
 }
 
 const getWorkflowRun = `-- name: GetWorkflowRun :one
-SELECT id, workflow_id, status, current_step, result, created_at, updated_at, owner_id FROM workflow_runs WHERE id = $1
+SELECT id, workflow_id, status, current_step, result, created_at, updated_at, owner_id FROM workflow_runs WHERE id = $1 AND owner_id = $2
 `
 
-func (q *Queries) GetWorkflowRun(ctx context.Context, id pgtype.UUID) (WorkflowRun, error) {
-	row := q.db.QueryRow(ctx, getWorkflowRun, id)
+type GetWorkflowRunParams struct {
+	ID      pgtype.UUID `json:"id"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) GetWorkflowRun(ctx context.Context, arg GetWorkflowRunParams) (WorkflowRun, error) {
+	row := q.db.QueryRow(ctx, getWorkflowRun, arg.ID, arg.OwnerID)
 	var i WorkflowRun
 	err := row.Scan(
 		&i.ID,
@@ -153,12 +177,17 @@ func (q *Queries) GetWorkflowRun(ctx context.Context, id pgtype.UUID) (WorkflowR
 
 const listWorkflowRuns = `-- name: ListWorkflowRuns :many
 SELECT id, workflow_id, status, current_step, result, created_at, updated_at, owner_id FROM workflow_runs
-WHERE workflow_id = $1
+WHERE workflow_id = $1 AND owner_id = $2
 ORDER BY created_at DESC
 `
 
-func (q *Queries) ListWorkflowRuns(ctx context.Context, workflowID pgtype.UUID) ([]WorkflowRun, error) {
-	rows, err := q.db.Query(ctx, listWorkflowRuns, workflowID)
+type ListWorkflowRunsParams struct {
+	WorkflowID pgtype.UUID `json:"workflow_id"`
+	OwnerID    pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) ListWorkflowRuns(ctx context.Context, arg ListWorkflowRunsParams) ([]WorkflowRun, error) {
+	rows, err := q.db.Query(ctx, listWorkflowRuns, arg.WorkflowID, arg.OwnerID)
 	if err != nil {
 		return nil, err
 	}
@@ -188,11 +217,12 @@ func (q *Queries) ListWorkflowRuns(ctx context.Context, workflowID pgtype.UUID) 
 
 const listWorkflows = `-- name: ListWorkflows :many
 SELECT id, name, description, steps, agent_id, created_at, updated_at, owner_id FROM workflows
+WHERE owner_id = $1
 ORDER BY created_at DESC
 `
 
-func (q *Queries) ListWorkflows(ctx context.Context) ([]Workflow, error) {
-	rows, err := q.db.Query(ctx, listWorkflows)
+func (q *Queries) ListWorkflows(ctx context.Context, ownerID pgtype.UUID) ([]Workflow, error) {
+	rows, err := q.db.Query(ctx, listWorkflows, ownerID)
 	if err != nil {
 		return nil, err
 	}
@@ -222,7 +252,7 @@ func (q *Queries) ListWorkflows(ctx context.Context) ([]Workflow, error) {
 
 const updateWorkflow = `-- name: UpdateWorkflow :one
 UPDATE workflows SET name = $2, description = $3, steps = $4, agent_id = $5, updated_at = NOW()
-WHERE id = $1
+WHERE id = $1 AND owner_id = $6
 RETURNING id, name, description, steps, agent_id, created_at, updated_at, owner_id
 `
 
@@ -232,6 +262,7 @@ type UpdateWorkflowParams struct {
 	Description pgtype.Text `json:"description"`
 	Steps       []byte      `json:"steps"`
 	AgentID     pgtype.UUID `json:"agent_id"`
+	OwnerID     pgtype.UUID `json:"owner_id"`
 }
 
 func (q *Queries) UpdateWorkflow(ctx context.Context, arg UpdateWorkflowParams) (Workflow, error) {
@@ -241,6 +272,7 @@ func (q *Queries) UpdateWorkflow(ctx context.Context, arg UpdateWorkflowParams) 
 		arg.Description,
 		arg.Steps,
 		arg.AgentID,
+		arg.OwnerID,
 	)
 	var i Workflow
 	err := row.Scan(
@@ -258,7 +290,7 @@ func (q *Queries) UpdateWorkflow(ctx context.Context, arg UpdateWorkflowParams) 
 
 const updateWorkflowRun = `-- name: UpdateWorkflowRun :one
 UPDATE workflow_runs SET status = $2, current_step = $3, result = $4, updated_at = NOW()
-WHERE id = $1
+WHERE id = $1 AND owner_id = $5
 RETURNING id, workflow_id, status, current_step, result, created_at, updated_at, owner_id
 `
 
@@ -267,6 +299,7 @@ type UpdateWorkflowRunParams struct {
 	Status      pgtype.Text `json:"status"`
 	CurrentStep pgtype.Int4 `json:"current_step"`
 	Result      []byte      `json:"result"`
+	OwnerID     pgtype.UUID `json:"owner_id"`
 }
 
 func (q *Queries) UpdateWorkflowRun(ctx context.Context, arg UpdateWorkflowRunParams) (WorkflowRun, error) {
@@ -275,6 +308,7 @@ func (q *Queries) UpdateWorkflowRun(ctx context.Context, arg UpdateWorkflowRunPa
 		arg.Status,
 		arg.CurrentStep,
 		arg.Result,
+		arg.OwnerID,
 	)
 	var i WorkflowRun
 	err := row.Scan(

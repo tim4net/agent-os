@@ -36,38 +36,55 @@ type resourceView struct {
 	UpdatedAt any             `json:"updated_at"`
 }
 
-func toResourceView(r db.Resource) resourceView {
-	cfg := json.RawMessage(r.Config)
+func toResourceView(r any) resourceView {
+	var id any
+	var slug, kind, label, provider, last4, status string
+	var isSecret bool
+	var config, encValue []byte
+	var createdAt, updatedAt any
+
+	switch v := r.(type) {
+	case db.Resource:
+		id, slug, kind, label, provider, isSecret, config, last4, status, createdAt, updatedAt, encValue = v.ID, v.Slug, v.Kind, v.Label, v.Provider, v.IsSecret, v.Config, v.Last4, v.Status, v.CreatedAt, v.UpdatedAt, v.EncValue
+	case db.ListResourcesRow:
+		id, slug, kind, label, provider, isSecret, config, last4, status, createdAt, updatedAt, encValue = v.ID, v.Slug, v.Kind, v.Label, v.Provider, v.IsSecret, v.Config, v.Last4, v.Status, v.CreatedAt, v.UpdatedAt, v.EncValue
+	case db.ListResourcesByKindRow:
+		id, slug, kind, label, provider, isSecret, config, last4, status, createdAt, updatedAt, encValue = v.ID, v.Slug, v.Kind, v.Label, v.Provider, v.IsSecret, v.Config, v.Last4, v.Status, v.CreatedAt, v.UpdatedAt, v.EncValue
+	case db.CreateResourceRow:
+		id, slug, kind, label, provider, isSecret, config, last4, status, createdAt, updatedAt, encValue = v.ID, v.Slug, v.Kind, v.Label, v.Provider, v.IsSecret, v.Config, v.Last4, v.Status, v.CreatedAt, v.UpdatedAt, v.EncValue
+	case db.UpdateResourceRow:
+		id, slug, kind, label, provider, isSecret, config, last4, status, createdAt, updatedAt, encValue = v.ID, v.Slug, v.Kind, v.Label, v.Provider, v.IsSecret, v.Config, v.Last4, v.Status, v.CreatedAt, v.UpdatedAt, v.EncValue
+	case db.ListResourcesForAgentRow:
+		id, slug, kind, label, provider, isSecret, config, last4, status, createdAt, updatedAt, encValue = v.ID, v.Slug, v.Kind, v.Label, v.Provider, v.IsSecret, v.Config, v.Last4, v.Status, v.CreatedAt, v.UpdatedAt, v.EncValue
+	}
+
+	cfg := json.RawMessage(config)
 	if len(cfg) == 0 {
 		cfg = json.RawMessage("{}")
 	}
+	
+	isSet := true
+	if isSecret {
+		isSet = len(encValue) > 0
+	}
+
 	return resourceView{
-		ID:        r.ID,
-		Slug:      r.Slug,
-		Kind:      r.Kind,
-		Label:     r.Label,
-		Provider:  r.Provider,
-		IsSecret:  r.IsSecret,
-		IsSet:     resourceIsSet(r),
-		Last4:     r.Last4,
+		ID:        id,
+		Slug:      slug,
+		Kind:      kind,
+		Label:     label,
+		Provider:  provider,
+		IsSecret:  isSecret,
+		IsSet:     isSet,
+		Last4:     last4,
 		Config:    cfg,
-		Status:    r.Status,
-		CreatedAt: r.CreatedAt,
-		UpdatedAt: r.UpdatedAt,
+		Status:    status,
+		CreatedAt: createdAt,
+		UpdatedAt: updatedAt,
 	}
 }
 
-// resourceIsSet reports whether a resource is "configured". A SECRET resource is
-// set only when it actually holds ciphertext; a non-secret resource (e.g. an
-// MCP server defined purely by config) is always considered set.
-func resourceIsSet(r db.Resource) bool {
-	if r.IsSecret {
-		return len(r.EncValue) > 0
-	}
-	return true
-}
-
-func toResourceViews(in []db.Resource) []resourceView {
+func toResourceViews[T any](in []T) []resourceView {
 	out := make([]resourceView, 0, len(in))
 	for _, r := range in {
 		out = append(out, toResourceView(r))
@@ -75,17 +92,22 @@ func toResourceViews(in []db.Resource) []resourceView {
 	return out
 }
 
-// ListResources handles GET /api/resources?kind= — masked vault list.
 func (a *API) ListResources(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	kind := r.URL.Query().Get("kind")
 	var (
 		rows []db.Resource
 		err  error
 	)
 	if kind != "" {
-		rows, err = a.queries.ListResourcesByKind(r.Context(), kind)
+		rows, err = a.queries.ListResourcesByKind(r.Context(), db.ListResourcesByKindParams{Kind: kind, OwnerID: ownerID})
 	} else {
-		rows, err = a.queries.ListResources(r.Context())
+		rows, err = a.queries.ListResources(r.Context(), ownerID)
 	}
 	if err != nil {
 		http.Error(w, "failed to list resources", http.StatusInternalServerError)
@@ -93,7 +115,7 @@ func (a *API) ListResources(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"resources":       toResourceViews(rows),
-		"secrets_enabled": a.envelope.Enabled(),
+		"secrets_enabled": a.cipher.Enabled(),
 	})
 }
 
@@ -110,6 +132,12 @@ type CreateResourceRequest struct {
 // CreateResource handles POST /api/resources. Secret material is encrypted at
 // rest; if a secret is supplied without an active cipher the request is refused.
 func (a *API) CreateResource(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	var req CreateResourceRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -156,6 +184,7 @@ func (a *API) CreateResource(w http.ResponseWriter, r *http.Request) {
 	}
 
 	res, err := a.queries.CreateResource(r.Context(), db.CreateResourceParams{
+		OwnerID:  ownerID,
 		Slug:     req.Slug,
 		Kind:     req.Kind,
 		Label:    req.Label,
@@ -189,11 +218,17 @@ type UpdateResourceRequest struct {
 
 // UpdateResource handles PUT /api/resources/{id}.
 func (a *API) UpdateResource(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	id, ok := parseUUIDParam(w, r, "id")
 	if !ok {
 		return
 	}
-	cur, err := a.queries.GetResource(r.Context(), id)
+	cur, err := a.queries.GetResource(r.Context(), db.GetResourceParams{ID: id, OwnerID: ownerID})
 	if err != nil {
 		http.Error(w, "resource not found", http.StatusNotFound)
 		return
@@ -247,6 +282,7 @@ func (a *API) UpdateResource(w http.ResponseWriter, r *http.Request) {
 
 	res, err := a.queries.UpdateResource(r.Context(), db.UpdateResourceParams{
 		ID:        id,
+		OwnerID:   ownerID,
 		Label:     label,
 		Provider:  provider,
 		IsSecret:  isSecret,
@@ -266,15 +302,21 @@ func (a *API) UpdateResource(w http.ResponseWriter, r *http.Request) {
 
 // DeleteResource handles DELETE /api/resources/{id}. Grants cascade-delete.
 func (a *API) DeleteResource(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	id, ok := parseUUIDParam(w, r, "id")
 	if !ok {
 		return
 	}
-	if _, err := a.queries.GetResource(r.Context(), id); err != nil {
+	if _, err := a.queries.GetResource(r.Context(), db.GetResourceParams{ID: id, OwnerID: ownerID}); err != nil {
 		http.Error(w, "resource not found", http.StatusNotFound)
 		return
 	}
-	if err := a.queries.DeleteResource(r.Context(), id); err != nil {
+	if err := a.queries.DeleteResource(r.Context(), db.DeleteResourceParams{ID: id, OwnerID: ownerID}); err != nil {
 		http.Error(w, "failed to delete resource: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -283,14 +325,27 @@ func (a *API) DeleteResource(w http.ResponseWriter, r *http.Request) {
 
 // resolveResourceSecret returns the decrypted secret string for a resource, or
 // "" if unset / undecryptable. Internal use only (never serialized).
-func (a *API) resolveResourceSecret(ctx context.Context, res db.Resource) string {
-	if len(res.EncValue) == 0 || !a.envelope.Enabled() {
+func (a *API) resolveResourceSecret(res any) string {
+	var encValue []byte
+	switch v := res.(type) {
+	case db.Resource:
+		encValue = v.EncValue
+	case db.ListResourcesRow:
+		encValue = v.EncValue
+	case db.ListResourcesByKindRow:
+		encValue = v.EncValue
+	case db.CreateResourceRow:
+		encValue = v.EncValue
+	case db.UpdateResourceRow:
+		encValue = v.EncValue
+	case db.ListResourcesForAgentRow:
+		encValue = v.EncValue
+	}
+
+	if len(encValue) == 0 || !a.cipher.Enabled() {
 		return ""
 	}
-	if !res.OwnerID.Valid {
-		return ""
-	}
-	pt, err := a.envelope.DecryptForOwner(ctx, res.OwnerID.Bytes, res.EncValue)
+	pt, err := a.cipher.Decrypt(encValue)
 	if err != nil {
 		return ""
 	}
@@ -306,14 +361,28 @@ type grantView struct {
 	GrantedAt  any    `json:"granted_at"`
 }
 
-func toGrantView(g db.AgentGrant) grantView {
-	return grantView{AgentID: g.AgentID, ResourceID: g.ResourceID, Scope: g.Scope, GrantedAt: g.GrantedAt}
+func toGrantView(g any) grantView {
+	switch v := g.(type) {
+	case db.AgentGrant:
+		return grantView{AgentID: v.AgentID, ResourceID: v.ResourceID, Scope: v.Scope, GrantedAt: v.GrantedAt}
+	case db.ListAllGrantsRow:
+		return grantView{AgentID: v.AgentID, ResourceID: v.ResourceID, Scope: v.Scope, GrantedAt: v.GrantedAt}
+	case db.GrantResourceRow:
+		return grantView{AgentID: v.AgentID, ResourceID: v.ResourceID, Scope: v.Scope, GrantedAt: v.GrantedAt}
+	}
+	return grantView{}
 }
 
 // ListAllGrants handles GET /api/grants — every (agent,resource) edge, for the
 // permission matrix. Returns flat grant edges; the UI joins against agents+resources.
 func (a *API) ListAllGrants(w http.ResponseWriter, r *http.Request) {
-	rows, err := a.queries.ListAllGrants(r.Context())
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
+	rows, err := a.queries.ListAllGrants(r.Context(), ownerID)
 	if err != nil {
 		http.Error(w, "failed to list grants", http.StatusInternalServerError)
 		return
@@ -328,6 +397,12 @@ func (a *API) ListAllGrants(w http.ResponseWriter, r *http.Request) {
 // ListAgentGrants handles GET /api/agents/{id}/grants — resources granted to one
 // agent (masked resource views), for the per-agent access drawer.
 func (a *API) ListAgentGrants(w http.ResponseWriter, r *http.Request) {
+	_, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	id, ok := parseUUIDParam(w, r, "id")
 	if !ok {
 		return
@@ -347,6 +422,12 @@ type GrantRequest struct {
 
 // GrantAgentResource handles PUT /api/agents/{id}/grants/{resourceId} (idempotent).
 func (a *API) GrantAgentResource(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	agentID, ok := parseUUIDParam(w, r, "id")
 	if !ok {
 		return
@@ -361,16 +442,16 @@ func (a *API) GrantAgentResource(w http.ResponseWriter, r *http.Request) {
 		scope = req.Scope
 	}
 	// Validate both ends exist so we never create a dangling grant.
-	if _, err := a.queries.GetAgent(r.Context(), agentID); err != nil {
+	if _, err := a.queries.GetAgent(r.Context(), db.GetAgentParams{ID: agentID, OwnerID: ownerID}); err != nil {
 		http.Error(w, "agent not found", http.StatusNotFound)
 		return
 	}
-	if _, err := a.queries.GetResource(r.Context(), resourceID); err != nil {
+	if _, err := a.queries.GetResource(r.Context(), db.GetResourceParams{ID: resourceID, OwnerID: ownerID}); err != nil {
 		http.Error(w, "resource not found", http.StatusNotFound)
 		return
 	}
 	g, err := a.queries.GrantResource(r.Context(), db.GrantResourceParams{
-		AgentID: agentID, ResourceID: resourceID, Scope: scope,
+		OwnerID: ownerID, AgentID: agentID, ResourceID: resourceID, Scope: scope,
 	})
 	if err != nil {
 		http.Error(w, "failed to grant: "+err.Error(), http.StatusInternalServerError)
@@ -381,6 +462,12 @@ func (a *API) GrantAgentResource(w http.ResponseWriter, r *http.Request) {
 
 // RevokeAgentResource handles DELETE /api/agents/{id}/grants/{resourceId}.
 func (a *API) RevokeAgentResource(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	agentID, ok := parseUUIDParam(w, r, "id")
 	if !ok {
 		return
@@ -390,16 +477,16 @@ func (a *API) RevokeAgentResource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Validate both ends exist so a bad id returns 404 (consistent with grant).
-	if _, err := a.queries.GetAgent(r.Context(), agentID); err != nil {
+	if _, err := a.queries.GetAgent(r.Context(), db.GetAgentParams{ID: agentID, OwnerID: ownerID}); err != nil {
 		http.Error(w, "agent not found", http.StatusNotFound)
 		return
 	}
-	if _, err := a.queries.GetResource(r.Context(), resourceID); err != nil {
+	if _, err := a.queries.GetResource(r.Context(), db.GetResourceParams{ID: resourceID, OwnerID: ownerID}); err != nil {
 		http.Error(w, "resource not found", http.StatusNotFound)
 		return
 	}
 	if err := a.queries.RevokeResource(r.Context(), db.RevokeResourceParams{
-		AgentID: agentID, ResourceID: resourceID,
+		OwnerID: ownerID, AgentID: agentID, ResourceID: resourceID,
 	}); err != nil {
 		http.Error(w, "failed to revoke: "+err.Error(), http.StatusInternalServerError)
 		return

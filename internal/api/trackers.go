@@ -43,6 +43,12 @@ func clampLimit(n int) int {
 // ListTrackerItems handles GET /api/trackers/items?project_id=...&tenant=...&limit=50&offset=0
 // Returns paginated tracker items, tenant-scoped (ADR-002).
 func (a *API) ListTrackerItems(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	limit := 50
 	offset := 0
 
@@ -82,6 +88,7 @@ func (a *API) ListTrackerItems(w http.ResponseWriter, r *http.Request) {
 		total, err := a.queries.CountTrackerItemsByProject(r.Context(), db.CountTrackerItemsByProjectParams{
 			ProjectID: projectID,
 			Tenant:    tenant,
+			OwnerID:   ownerID,
 		})
 		if err != nil {
 			log.Printf("trackers: count by project failed: %v", err)
@@ -111,7 +118,7 @@ func (a *API) ListTrackerItems(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	total, err := a.queries.CountTrackerItemsByTenant(r.Context(), tenant)
+	total, err := a.queries.CountTrackerItemsByTenant(r.Context(), db.CountTrackerItemsByTenantParams{Tenant: tenant, OwnerID: ownerID})
 	if err != nil {
 		log.Printf("trackers: count failed: %v", err)
 		http.Error(w, "failed to count tracker items", http.StatusInternalServerError)
@@ -119,9 +126,10 @@ func (a *API) ListTrackerItems(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := a.queries.ListTrackerItemsByTenant(r.Context(), db.ListTrackerItemsByTenantParams{
-		Tenant: tenant,
-		Limit:  int32(limit),
-		Offset: int32(offset),
+		Tenant:  tenant,
+		OwnerID: ownerID,
+		Limit:   int32(limit),
+		Offset:  int32(offset),
 	})
 	if err != nil {
 		log.Printf("trackers: list by tenant failed: %v", err)
@@ -147,6 +155,12 @@ func (a *API) ListTrackerItems(w http.ResponseWriter, r *http.Request) {
 // tracker column (shortcut, github_issues). Returns SyncResult with
 // synced/failed counts.
 func (a *API) SyncTrackerItems(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	projectIDStr := chi.URLParam(r, "projectID")
 	tenant := r.URL.Query().Get("tenant")
 	if tenant == "" {
@@ -161,7 +175,7 @@ func (a *API) SyncTrackerItems(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Look up the project to determine which tracker source to dispatch to.
-	proj, err := a.queries.GetProject(r.Context(), projectID)
+	proj, err := a.queries.GetProject(r.Context(), db.GetProjectParams{ID: projectID, OwnerID: ownerID})
 	if err != nil {
 		log.Printf("trackers: get project failed: %v", err)
 		http.Error(w, "project not found", http.StatusNotFound)

@@ -16,6 +16,12 @@ import (
 	"github.com/tim4net/agent-os/internal/db"
 )
 
+// owner0UUID is the seed owner-0 UUID from migration 024.
+var owner0UUID = pgtype.UUID{
+	Bytes: [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+	Valid: true,
+}
+
 // AOS_TEST_DATABASE_URL must point to a real PG instance with the schema applied.
 // Example: postgres://aos_test@localhost:15432/aos_test?sslmode=disable
 //
@@ -74,7 +80,7 @@ func TestIntegrationIngestNewEvent(t *testing.T) {
 	sub := bus.Subscribe()
 	defer bus.Unsubscribe(sub)
 
-	row, httpStatus, err := svc.Ingest(context.Background(), req)
+	row, httpStatus, err := svc.Ingest(context.Background(), req, owner0UUID)
 	if err != nil {
 		t.Fatalf("Ingest returned error: %v", err)
 	}
@@ -95,7 +101,7 @@ func TestIntegrationIngestNewEvent(t *testing.T) {
 	}
 
 	// Verify row is actually in DB
-	fetched, err := queries.GetWorkEventByEventID(context.Background(), row.EventID)
+	fetched, err := queries.GetWorkEventByEventID(context.Background(), db.GetWorkEventByEventIDParams{EventID: row.EventID, OwnerID: owner0UUID})
 	if err != nil {
 		t.Fatalf("failed to fetch persisted row: %v", err)
 	}
@@ -129,7 +135,7 @@ func TestIntegrationIngestIdempotency(t *testing.T) {
 	req := validIngestRequest(eventID)
 
 	// First insert → 201
-	row1, status1, err := svc.Ingest(context.Background(), req)
+	row1, status1, err := svc.Ingest(context.Background(), req, owner0UUID)
 	if err != nil {
 		t.Fatalf("first Ingest error: %v", err)
 	}
@@ -139,7 +145,7 @@ func TestIntegrationIngestIdempotency(t *testing.T) {
 	originalID := row1.ID.String()
 
 	// Second insert with same event_id → 202
-	row2, status2, err := svc.Ingest(context.Background(), req)
+	row2, status2, err := svc.Ingest(context.Background(), req, owner0UUID)
 	if err != nil {
 		t.Fatalf("second Ingest error: %v", err)
 	}
@@ -154,6 +160,7 @@ func TestIntegrationIngestIdempotency(t *testing.T) {
 	rows, err := queries.GetWorkEventsBySession(context.Background(), db.GetWorkEventsBySessionParams{
 		Harness:   "hermes",
 		SessionID: req.SessionID,
+		OwnerID:   owner0UUID,
 		Limit:     100,
 	})
 	if err != nil {
@@ -182,7 +189,7 @@ func TestIntegrationIngestUncorrelatable(t *testing.T) {
 	req.LivenessMode = ""
 	req.Pid = nil
 
-	row, httpStatus, err := svc.Ingest(context.Background(), req)
+	row, httpStatus, err := svc.Ingest(context.Background(), req, owner0UUID)
 	if err != nil {
 		t.Fatalf("Ingest error: %v", err)
 	}
@@ -194,7 +201,7 @@ func TestIntegrationIngestUncorrelatable(t *testing.T) {
 	}
 
 	// Verify persisted
-	fetched, err := queries.GetWorkEventByEventID(context.Background(), row.EventID)
+	fetched, err := queries.GetWorkEventByEventID(context.Background(), db.GetWorkEventByEventIDParams{EventID: row.EventID, OwnerID: owner0UUID})
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
@@ -229,7 +236,7 @@ func TestIntegrationProjectResolution(t *testing.T) {
 	req := validIngestRequest(eventID)
 	req.ProjectHint = "agent-os"
 
-	row, httpStatus, err := svc.Ingest(context.Background(), req)
+	row, httpStatus, err := svc.Ingest(context.Background(), req, owner0UUID)
 	if err != nil {
 		t.Fatalf("Ingest error: %v", err)
 	}
@@ -270,7 +277,7 @@ func TestIntegrationProjectResolutionCreatesNew(t *testing.T) {
 	req := validIngestRequest(eventID)
 	req.ProjectHint = "create-test-project"
 
-	row, httpStatus, err := svc.Ingest(context.Background(), req)
+	row, httpStatus, err := svc.Ingest(context.Background(), req, owner0UUID)
 	if err != nil {
 		t.Fatalf("Ingest error: %v", err)
 	}
@@ -324,7 +331,7 @@ func TestIntegrationProjectResolutionFromCwd(t *testing.T) {
 	req := validIngestRequest(eventID)
 	req.Cwd = "/home/user/projects/my-cool-project"
 
-	row, httpStatus, err := svc.Ingest(context.Background(), req)
+	row, httpStatus, err := svc.Ingest(context.Background(), req, owner0UUID)
 	if err != nil {
 		t.Fatalf("Ingest error: %v", err)
 	}
@@ -351,13 +358,13 @@ func TestIntegrationUpsertIsAtomic(t *testing.T) {
 	req := validIngestRequest(eventID)
 
 	// Insert
-	row1, s1, err := svc.Ingest(context.Background(), req)
+	row1, s1, err := svc.Ingest(context.Background(), req, owner0UUID)
 	if err != nil || s1 != 201 {
 		t.Fatalf("first insert failed: status=%d err=%v", s1, err)
 	}
 
 	// Upsert (same event_id) → should get the original row back, status 202
-	row2, s2, err := svc.Ingest(context.Background(), req)
+	row2, s2, err := svc.Ingest(context.Background(), req, owner0UUID)
 	if err != nil {
 		t.Fatalf("upsert returned unexpected error: %v", err)
 	}
@@ -370,7 +377,7 @@ func TestIntegrationUpsertIsAtomic(t *testing.T) {
 
 	// Verify no duplicate rows
 	allRows, _ := queries.GetWorkEventsBySession(context.Background(), db.GetWorkEventsBySessionParams{
-		Harness: "hermes", SessionID: req.SessionID, Limit: 100,
+		Harness: "hermes", SessionID: req.SessionID, OwnerID: owner0UUID, Limit: 100,
 	})
 	if len(allRows) != 1 {
 		t.Fatalf("expected 1 row after upsert, got %d", len(allRows))
@@ -427,7 +434,7 @@ func TestIntegrationValidationRejectsBadEvents(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			req := validIngestRequest(uuid.NewString())
 			tt.mutate(&req)
-			_, httpStatus, err := svc.Ingest(context.Background(), req)
+			_, httpStatus, err := svc.Ingest(context.Background(), req, owner0UUID)
 			if err == nil {
 				t.Fatal("expected validation error, got nil")
 			}
@@ -593,7 +600,7 @@ func TestIntegrationDelegationShimProducesWorkEvent(t *testing.T) {
 		Payload:      []byte(fmt.Sprintf(`{"delegation_id": "%s"}`, uuid.New())),
 	}
 
-	row, httpStatus, err := svc.Ingest(context.Background(), req)
+	row, httpStatus, err := svc.Ingest(context.Background(), req, owner0UUID)
 	if err != nil {
 		t.Fatalf("shim ingest error: %v", err)
 	}
@@ -605,7 +612,7 @@ func TestIntegrationDelegationShimProducesWorkEvent(t *testing.T) {
 	}
 
 	// Verify the row exists
-	fetched, err := queries.GetWorkEventByEventID(context.Background(), row.EventID)
+	fetched, err := queries.GetWorkEventByEventID(context.Background(), db.GetWorkEventByEventIDParams{EventID: row.EventID, OwnerID: owner0UUID})
 	if err != nil {
 		t.Fatalf("fetch synthesized event: %v", err)
 	}
@@ -636,7 +643,7 @@ func TestIntegrationArtifactPathRoot(t *testing.T) {
 	req.Pid = nil
 	req.Artifacts = []ArtifactDescriptor{{Type: "image", Path: "/data/artifacts/x.png"}}
 
-	row, httpStatus, err := svc.Ingest(context.Background(), req)
+	row, httpStatus, err := svc.Ingest(context.Background(), req, owner0UUID)
 	if err != nil {
 		t.Fatalf("expected no error for in-root absolute path, got: %v", err)
 	}
@@ -644,7 +651,7 @@ func TestIntegrationArtifactPathRoot(t *testing.T) {
 		t.Fatalf("expected 201, got %d", httpStatus)
 	}
 
-	fetched, err := queries.GetWorkEventByEventID(context.Background(), row.EventID)
+	fetched, err := queries.GetWorkEventByEventID(context.Background(), db.GetWorkEventByEventIDParams{EventID: row.EventID, OwnerID: owner0UUID})
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
@@ -660,7 +667,7 @@ func TestIntegrationArtifactPathRoot(t *testing.T) {
 	badReq.Pid = nil
 	badReq.Artifacts = []ArtifactDescriptor{{Type: "image", Path: "/etc/passwd"}}
 
-	_, httpStatus, err = svc.Ingest(context.Background(), badReq)
+	_, httpStatus, err = svc.Ingest(context.Background(), badReq, owner0UUID)
 	if err == nil {
 		t.Fatal("expected error for out-of-root path, got nil")
 	}

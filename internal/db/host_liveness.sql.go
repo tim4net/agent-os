@@ -7,16 +7,24 @@ package db
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const countHostLiveness = `-- name: CountHostLiveness :one
 SELECT COUNT(*)::bigint FROM host_liveness
 WHERE ($1::text = '' OR tenant = $1::text)
+AND owner_id = $2
 `
 
+type CountHostLivenessParams struct {
+	Tenant  string      `json:"tenant"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+}
+
 // Counts liveness records matching the tenant filter.
-func (q *Queries) CountHostLiveness(ctx context.Context, tenant string) (int64, error) {
-	row := q.db.QueryRow(ctx, countHostLiveness, tenant)
+func (q *Queries) CountHostLiveness(ctx context.Context, arg CountHostLivenessParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countHostLiveness, arg.Tenant, arg.OwnerID)
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err
@@ -36,12 +44,14 @@ FROM (
 ) sess
 LEFT JOIN host_liveness hl
     ON hl.host = sess.host AND hl.pid = sess.pid AND hl.tenant = $3
+    AND hl.owner_id = $4
 `
 
 type GetBoundedSessionHostLivenessParams struct {
-	Harness   string `json:"harness"`
-	SessionID string `json:"session_id"`
-	Tenant    string `json:"tenant"`
+	Harness   string      `json:"harness"`
+	SessionID string      `json:"session_id"`
+	Tenant    string      `json:"tenant"`
+	OwnerID   pgtype.UUID `json:"owner_id"`
 }
 
 // Returns the latest host-liveness alive status for a bounded session.
@@ -60,7 +70,12 @@ type GetBoundedSessionHostLivenessParams struct {
 // derivation must account for this (see session_liveness.go BoundedMaxAge
 // backstop and the proposed seen_at TTL in the PR-body wiring diff).
 func (q *Queries) GetBoundedSessionHostLiveness(ctx context.Context, arg GetBoundedSessionHostLivenessParams) (bool, error) {
-	row := q.db.QueryRow(ctx, getBoundedSessionHostLiveness, arg.Harness, arg.SessionID, arg.Tenant)
+	row := q.db.QueryRow(ctx, getBoundedSessionHostLiveness,
+		arg.Harness,
+		arg.SessionID,
+		arg.Tenant,
+		arg.OwnerID,
+	)
 	var alive bool
 	err := row.Scan(&alive)
 	return alive, err
@@ -70,18 +85,25 @@ const getHostLiveness = `-- name: GetHostLiveness :one
 SELECT id, host, pid, session_id, harness, cwd, tenant, alive, seen_at, owner_id FROM host_liveness
 WHERE host = $1 AND pid = $2
 AND ($3::text = '' OR tenant = $3::text)
+AND owner_id = $4
 `
 
 type GetHostLivenessParams struct {
-	Host   string `json:"host"`
-	Pid    int32  `json:"pid"`
-	Tenant string `json:"tenant"`
+	Host    string      `json:"host"`
+	Pid     int32       `json:"pid"`
+	Tenant  string      `json:"tenant"`
+	OwnerID pgtype.UUID `json:"owner_id"`
 }
 
 // Fetches a single host-liveness row by (host, pid).
 // Optional tenant filter: returns rows only for matching tenant (or all if empty).
 func (q *Queries) GetHostLiveness(ctx context.Context, arg GetHostLivenessParams) (HostLiveness, error) {
-	row := q.db.QueryRow(ctx, getHostLiveness, arg.Host, arg.Pid, arg.Tenant)
+	row := q.db.QueryRow(ctx, getHostLiveness,
+		arg.Host,
+		arg.Pid,
+		arg.Tenant,
+		arg.OwnerID,
+	)
 	var i HostLiveness
 	err := row.Scan(
 		&i.ID,
@@ -101,21 +123,28 @@ func (q *Queries) GetHostLiveness(ctx context.Context, arg GetHostLivenessParams
 const listHostLiveness = `-- name: ListHostLiveness :many
 SELECT id, host, pid, session_id, harness, cwd, tenant, alive, seen_at, owner_id FROM host_liveness
 WHERE ($1::text = '' OR tenant = $1::text)
+AND owner_id = $2
 ORDER BY seen_at DESC
-LIMIT $3::int
-OFFSET $2::int
+LIMIT $4::int
+OFFSET $3::int
 `
 
 type ListHostLivenessParams struct {
-	Tenant string `json:"tenant"`
-	Off    int32  `json:"off"`
-	Lim    int32  `json:"lim"`
+	Tenant  string      `json:"tenant"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+	Off     int32       `json:"off"`
+	Lim     int32       `json:"lim"`
 }
 
 // Lists all liveness records for a tenant, ordered by seen_at DESC.
 // Returns all if tenant is empty.
 func (q *Queries) ListHostLiveness(ctx context.Context, arg ListHostLivenessParams) ([]HostLiveness, error) {
-	rows, err := q.db.Query(ctx, listHostLiveness, arg.Tenant, arg.Off, arg.Lim)
+	rows, err := q.db.Query(ctx, listHostLiveness,
+		arg.Tenant,
+		arg.OwnerID,
+		arg.Off,
+		arg.Lim,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -146,7 +175,7 @@ func (q *Queries) ListHostLiveness(ctx context.Context, arg ListHostLivenessPara
 }
 
 const upsertHostLiveness = `-- name: UpsertHostLiveness :one
-INSERT INTO host_liveness (host, pid, session_id, harness, cwd, tenant, alive)
+INSERT INTO host_liveness (owner_id, host, pid, session_id, harness, cwd, tenant, alive)
 VALUES (
     $1,
     $2,
@@ -154,7 +183,8 @@ VALUES (
     $4,
     $5,
     $6,
-    $7
+    $7,
+    $8
 )
 ON CONFLICT (host, pid)
 DO UPDATE SET
@@ -168,13 +198,14 @@ RETURNING id, host, pid, session_id, harness, cwd, tenant, alive, seen_at, owner
 `
 
 type UpsertHostLivenessParams struct {
-	Host      string `json:"host"`
-	Pid       int32  `json:"pid"`
-	SessionID string `json:"session_id"`
-	Harness   string `json:"harness"`
-	Cwd       string `json:"cwd"`
-	Tenant    string `json:"tenant"`
-	Alive     bool   `json:"alive"`
+	OwnerID   pgtype.UUID `json:"owner_id"`
+	Host      string      `json:"host"`
+	Pid       int32       `json:"pid"`
+	SessionID string      `json:"session_id"`
+	Harness   string      `json:"harness"`
+	Cwd       string      `json:"cwd"`
+	Tenant    string      `json:"tenant"`
+	Alive     bool        `json:"alive"`
 }
 
 // Upserts a host-liveness report keyed on (host, pid).
@@ -182,6 +213,7 @@ type UpsertHostLivenessParams struct {
 // separate consumer concern (WP-J / follow-on WPs).
 func (q *Queries) UpsertHostLiveness(ctx context.Context, arg UpsertHostLivenessParams) (HostLiveness, error) {
 	row := q.db.QueryRow(ctx, upsertHostLiveness,
+		arg.OwnerID,
 		arg.Host,
 		arg.Pid,
 		arg.SessionID,

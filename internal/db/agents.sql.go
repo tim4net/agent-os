@@ -12,21 +12,23 @@ import (
 )
 
 const createAgent = `-- name: CreateAgent :one
-INSERT INTO agents (name, display_name, harness, base_url, metadata)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO agents (owner_id, name, display_name, harness, base_url, metadata)
+VALUES ($1, $2, $3, $4, $5, $6)
 RETURNING id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id
 `
 
 type CreateAgentParams struct {
-	Name        string `json:"name"`
-	DisplayName string `json:"display_name"`
-	Harness     string `json:"harness"`
-	BaseUrl     string `json:"base_url"`
-	Metadata    []byte `json:"metadata"`
+	OwnerID     pgtype.UUID `json:"owner_id"`
+	Name        string      `json:"name"`
+	DisplayName string      `json:"display_name"`
+	Harness     string      `json:"harness"`
+	BaseUrl     string      `json:"base_url"`
+	Metadata    []byte      `json:"metadata"`
 }
 
 func (q *Queries) CreateAgent(ctx context.Context, arg CreateAgentParams) (Agent, error) {
 	row := q.db.QueryRow(ctx, createAgent,
+		arg.OwnerID,
 		arg.Name,
 		arg.DisplayName,
 		arg.Harness,
@@ -55,31 +57,38 @@ func (q *Queries) CreateAgent(ctx context.Context, arg CreateAgentParams) (Agent
 }
 
 const deleteAgent = `-- name: DeleteAgent :exec
-DELETE FROM agents WHERE id = $1
+DELETE FROM agents WHERE id = $1 AND owner_id = $2
 `
 
-func (q *Queries) DeleteAgent(ctx context.Context, id pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteAgent, id)
+type DeleteAgentParams struct {
+	ID      pgtype.UUID `json:"id"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) DeleteAgent(ctx context.Context, arg DeleteAgentParams) error {
+	_, err := q.db.Exec(ctx, deleteAgent, arg.ID, arg.OwnerID)
 	return err
 }
 
 const ensureAgent = `-- name: EnsureAgent :one
-INSERT INTO agents (name, display_name, harness, base_url, metadata)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO agents (owner_id, name, display_name, harness, base_url, metadata)
+VALUES ($1, $2, $3, $4, $5, $6)
 ON CONFLICT (name) DO NOTHING
 RETURNING id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id
 `
 
 type EnsureAgentParams struct {
-	Name        string `json:"name"`
-	DisplayName string `json:"display_name"`
-	Harness     string `json:"harness"`
-	BaseUrl     string `json:"base_url"`
-	Metadata    []byte `json:"metadata"`
+	OwnerID     pgtype.UUID `json:"owner_id"`
+	Name        string      `json:"name"`
+	DisplayName string      `json:"display_name"`
+	Harness     string      `json:"harness"`
+	BaseUrl     string      `json:"base_url"`
+	Metadata    []byte      `json:"metadata"`
 }
 
 func (q *Queries) EnsureAgent(ctx context.Context, arg EnsureAgentParams) (Agent, error) {
 	row := q.db.QueryRow(ctx, ensureAgent,
+		arg.OwnerID,
 		arg.Name,
 		arg.DisplayName,
 		arg.Harness,
@@ -108,11 +117,16 @@ func (q *Queries) EnsureAgent(ctx context.Context, arg EnsureAgentParams) (Agent
 }
 
 const getAgent = `-- name: GetAgent :one
-SELECT id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id FROM agents WHERE id = $1
+SELECT id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id FROM agents WHERE id = $1 AND owner_id = $2
 `
 
-func (q *Queries) GetAgent(ctx context.Context, id pgtype.UUID) (Agent, error) {
-	row := q.db.QueryRow(ctx, getAgent, id)
+type GetAgentParams struct {
+	ID      pgtype.UUID `json:"id"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) GetAgent(ctx context.Context, arg GetAgentParams) (Agent, error) {
+	row := q.db.QueryRow(ctx, getAgent, arg.ID, arg.OwnerID)
 	var i Agent
 	err := row.Scan(
 		&i.ID,
@@ -135,11 +149,16 @@ func (q *Queries) GetAgent(ctx context.Context, id pgtype.UUID) (Agent, error) {
 }
 
 const getAgentByName = `-- name: GetAgentByName :one
-SELECT id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id FROM agents WHERE name = $1
+SELECT id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id FROM agents WHERE name = $1 AND owner_id = $2
 `
 
-func (q *Queries) GetAgentByName(ctx context.Context, name string) (Agent, error) {
-	row := q.db.QueryRow(ctx, getAgentByName, name)
+type GetAgentByNameParams struct {
+	Name    string      `json:"name"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) GetAgentByName(ctx context.Context, arg GetAgentByNameParams) (Agent, error) {
+	row := q.db.QueryRow(ctx, getAgentByName, arg.Name, arg.OwnerID)
 	var i Agent
 	err := row.Scan(
 		&i.ID,
@@ -194,11 +213,11 @@ func (q *Queries) GetAgentByNameAndOwner(ctx context.Context, arg GetAgentByName
 }
 
 const listAgents = `-- name: ListAgents :many
-SELECT id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id FROM agents ORDER BY created_at
+SELECT id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id FROM agents WHERE owner_id = $1 ORDER BY created_at
 `
 
-func (q *Queries) ListAgents(ctx context.Context) ([]Agent, error) {
-	rows, err := q.db.Query(ctx, listAgents)
+func (q *Queries) ListAgents(ctx context.Context, ownerID pgtype.UUID) ([]Agent, error) {
+	rows, err := q.db.Query(ctx, listAgents, ownerID)
 	if err != nil {
 		return nil, err
 	}
@@ -234,11 +253,11 @@ func (q *Queries) ListAgents(ctx context.Context) ([]Agent, error) {
 }
 
 const listVisibleAgents = `-- name: ListVisibleAgents :many
-SELECT id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id FROM agents WHERE visible = true ORDER BY created_at
+SELECT id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id FROM agents WHERE owner_id = $1 AND visible = true ORDER BY created_at
 `
 
-func (q *Queries) ListVisibleAgents(ctx context.Context) ([]Agent, error) {
-	rows, err := q.db.Query(ctx, listVisibleAgents)
+func (q *Queries) ListVisibleAgents(ctx context.Context, ownerID pgtype.UUID) ([]Agent, error) {
+	rows, err := q.db.Query(ctx, listVisibleAgents, ownerID)
 	if err != nil {
 		return nil, err
 	}
@@ -316,7 +335,7 @@ func (q *Queries) RenameAgent(ctx context.Context, arg RenameAgentParams) (Agent
 
 const updateAgent = `-- name: UpdateAgent :one
 UPDATE agents SET display_name = $2, harness = $3, base_url = $4, metadata = $5, updated_at = NOW()
-WHERE id = $1
+WHERE id = $1 AND owner_id = $6
 RETURNING id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id
 `
 
@@ -326,6 +345,7 @@ type UpdateAgentParams struct {
 	Harness     string      `json:"harness"`
 	BaseUrl     string      `json:"base_url"`
 	Metadata    []byte      `json:"metadata"`
+	OwnerID     pgtype.UUID `json:"owner_id"`
 }
 
 func (q *Queries) UpdateAgent(ctx context.Context, arg UpdateAgentParams) (Agent, error) {
@@ -335,6 +355,7 @@ func (q *Queries) UpdateAgent(ctx context.Context, arg UpdateAgentParams) (Agent
 		arg.Harness,
 		arg.BaseUrl,
 		arg.Metadata,
+		arg.OwnerID,
 	)
 	var i Agent
 	err := row.Scan(
@@ -359,7 +380,7 @@ func (q *Queries) UpdateAgent(ctx context.Context, arg UpdateAgentParams) (Agent
 
 const updateAgentConfig = `-- name: UpdateAgentConfig :one
 UPDATE agents SET role = $2, system_prompt = $3, persona = $4, updated_at = NOW()
-WHERE id = $1
+WHERE id = $1 AND owner_id = $5
 RETURNING id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id
 `
 
@@ -368,6 +389,7 @@ type UpdateAgentConfigParams struct {
 	Role         pgtype.Text `json:"role"`
 	SystemPrompt pgtype.Text `json:"system_prompt"`
 	Persona      []byte      `json:"persona"`
+	OwnerID      pgtype.UUID `json:"owner_id"`
 }
 
 func (q *Queries) UpdateAgentConfig(ctx context.Context, arg UpdateAgentConfigParams) (Agent, error) {
@@ -376,6 +398,7 @@ func (q *Queries) UpdateAgentConfig(ctx context.Context, arg UpdateAgentConfigPa
 		arg.Role,
 		arg.SystemPrompt,
 		arg.Persona,
+		arg.OwnerID,
 	)
 	var i Agent
 	err := row.Scan(
@@ -400,17 +423,18 @@ func (q *Queries) UpdateAgentConfig(ctx context.Context, arg UpdateAgentConfigPa
 
 const updateAgentStatus = `-- name: UpdateAgentStatus :one
 UPDATE agents SET status = $2, last_seen = NOW(), updated_at = NOW()
-WHERE id = $1
+WHERE id = $1 AND owner_id = $3
 RETURNING id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id
 `
 
 type UpdateAgentStatusParams struct {
-	ID     pgtype.UUID `json:"id"`
-	Status string      `json:"status"`
+	ID      pgtype.UUID `json:"id"`
+	Status  string      `json:"status"`
+	OwnerID pgtype.UUID `json:"owner_id"`
 }
 
 func (q *Queries) UpdateAgentStatus(ctx context.Context, arg UpdateAgentStatusParams) (Agent, error) {
-	row := q.db.QueryRow(ctx, updateAgentStatus, arg.ID, arg.Status)
+	row := q.db.QueryRow(ctx, updateAgentStatus, arg.ID, arg.Status, arg.OwnerID)
 	var i Agent
 	err := row.Scan(
 		&i.ID,

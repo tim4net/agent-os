@@ -19,6 +19,9 @@ import (
 // errFakeDB is a sentinel error for simulating database failures in tests.
 var errFakeDB = errors.New("fake db error")
 
+// fakeOwnerID is the owner-0 UUID used in workevent ingest tests.
+var fakeOwnerID = pgtype.UUID{Bytes: [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}, Valid: true}
+
 // ---------------------------------------------------------------------------
 // fakeQuerier — minimal in-memory implementation of db.Querier for testing
 // Ingest() without a real PostgreSQL instance. Embeds the interface so
@@ -87,7 +90,7 @@ func (fq *fakeQuerier) InsertWorkEvent(_ context.Context, arg db.InsertWorkEvent
 	return row, nil
 }
 
-func (fq *fakeQuerier) GetWorkEventByEventID(_ context.Context, eventID pgtype.UUID) (db.WorkEvent, error) {
+func (fq *fakeQuerier) GetWorkEventByEventID(_ context.Context, arg db.GetWorkEventByEventIDParams) (db.WorkEvent, error) {
 	fq.mu.Lock()
 	defer fq.mu.Unlock()
 
@@ -95,7 +98,7 @@ func (fq *fakeQuerier) GetWorkEventByEventID(_ context.Context, eventID pgtype.U
 		return db.WorkEvent{}, fq.getErr
 	}
 
-	if row, ok := fq.events[eventID.String()]; ok {
+	if row, ok := fq.events[arg.EventID.String()]; ok {
 		return row, nil
 	}
 	return db.WorkEvent{}, pgx.ErrNoRows
@@ -148,7 +151,7 @@ func TestFakeIngestNewEvent(t *testing.T) {
 	sub := bus.Subscribe()
 	defer bus.Unsubscribe(sub)
 
-	row, status, err := svc.Ingest(context.Background(), req)
+	row, status, err := svc.Ingest(context.Background(), req, fakeOwnerID)
 	if err != nil {
 		t.Fatalf("Ingest error: %v", err)
 	}
@@ -189,7 +192,7 @@ func TestFakeIngestIdempotency(t *testing.T) {
 	req := validFakeRequest(eventID)
 
 	// First insert → 201
-	row1, s1, err := svc.Ingest(context.Background(), req)
+	row1, s1, err := svc.Ingest(context.Background(), req, fakeOwnerID)
 	if err != nil || s1 != 201 {
 		t.Fatalf("first insert: status=%d err=%v", s1, err)
 	}
@@ -201,7 +204,7 @@ func TestFakeIngestIdempotency(t *testing.T) {
 	sub2 := bus2.Subscribe()
 	defer bus2.Unsubscribe(sub2)
 
-	row2, s2, err := svc2.Ingest(context.Background(), req)
+	row2, s2, err := svc2.Ingest(context.Background(), req, fakeOwnerID)
 	if err != nil {
 		t.Fatalf("second insert error: %v", err)
 	}
@@ -240,7 +243,7 @@ func TestFakeIngestUncorrelatable(t *testing.T) {
 	req.LivenessMode = ""
 	req.Pid = nil
 
-	row, status, err := svc.Ingest(context.Background(), req)
+	row, status, err := svc.Ingest(context.Background(), req, fakeOwnerID)
 	if err != nil {
 		t.Fatalf("Ingest error: %v", err)
 	}
@@ -265,7 +268,7 @@ func TestFakeIngestProjectResolution(t *testing.T) {
 	req := validFakeRequest(eventID)
 	req.ProjectHint = "agent-os"
 
-	row, status, err := svc.Ingest(context.Background(), req)
+	row, status, err := svc.Ingest(context.Background(), req, fakeOwnerID)
 	if err != nil {
 		t.Fatalf("Ingest error: %v", err)
 	}
@@ -289,7 +292,7 @@ func TestFakeIngestInsertError(t *testing.T) {
 	eventID := uuid.NewString()
 	req := validFakeRequest(eventID)
 
-	_, status, err := svc.Ingest(context.Background(), req)
+	_, status, err := svc.Ingest(context.Background(), req, fakeOwnerID)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -311,7 +314,7 @@ func TestFakeIngestConflictFetchError(t *testing.T) {
 	req := validFakeRequest(eventID)
 
 	// First insert succeeds
-	_, s1, err := svc.Ingest(context.Background(), req)
+	_, s1, err := svc.Ingest(context.Background(), req, fakeOwnerID)
 	if err != nil || s1 != 201 {
 		t.Fatalf("first insert: status=%d err=%v", s1, err)
 	}
@@ -319,7 +322,7 @@ func TestFakeIngestConflictFetchError(t *testing.T) {
 	// Now make the fetch on conflict fail
 	fq.getErr = errFakeDB
 
-	_, s2, err := svc.Ingest(context.Background(), req)
+	_, s2, err := svc.Ingest(context.Background(), req, fakeOwnerID)
 	if err == nil {
 		t.Fatal("expected error on conflict fetch, got nil")
 	}
@@ -344,7 +347,7 @@ func TestFakeIngestProjectResolutionError(t *testing.T) {
 	req := validFakeRequest(eventID)
 	req.ProjectHint = "agent-os"
 
-	_, status, err := svc.Ingest(context.Background(), req)
+	_, status, err := svc.Ingest(context.Background(), req, fakeOwnerID)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -394,7 +397,7 @@ func TestFakeIngestValidationRejectsBadEvents(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			req := validFakeRequest(uuid.NewString())
 			tt.mutate(&req)
-			_, httpStatus, err := svc.Ingest(context.Background(), req)
+			_, httpStatus, err := svc.Ingest(context.Background(), req, fakeOwnerID)
 			if err == nil {
 				t.Fatal("expected validation error, got nil")
 			}
@@ -526,7 +529,7 @@ func TestBridgeRetryIdempotency(t *testing.T) {
 	req := BuildBridgeWorkEventRequest(deg, "session.end")
 
 	// First Ingest → 201
-	row1, s1, err := svc.Ingest(context.Background(), req)
+	row1, s1, err := svc.Ingest(context.Background(), req, fakeOwnerID)
 	if err != nil || s1 != 201 {
 		t.Fatalf("first bridge ingest: status=%d err=%v", s1, err)
 	}
@@ -543,7 +546,7 @@ func TestBridgeRetryIdempotency(t *testing.T) {
 	sub2 := bus2.Subscribe()
 	defer bus2.Unsubscribe(sub2)
 
-	row2, s2, err := svc2.Ingest(context.Background(), req)
+	row2, s2, err := svc2.Ingest(context.Background(), req, fakeOwnerID)
 	if err != nil {
 		t.Fatalf("second bridge ingest error: %v", err)
 	}
@@ -580,7 +583,7 @@ func TestBridgePOSTAndPATCHProduceCorrectEvents(t *testing.T) {
 	// Simulate POST: CreateDelegation with status "pending" → session.start
 	degPending := makeFakeDelegation(degID, parentID, "delegate task", "pending")
 	reqStart := BuildBridgeWorkEventRequest(degPending, "")
-	row1, s1, err := svc.Ingest(context.Background(), reqStart)
+	row1, s1, err := svc.Ingest(context.Background(), reqStart, fakeOwnerID)
 	if err != nil || s1 != 201 {
 		t.Fatalf("POST session.start: status=%d err=%v", s1, err)
 	}
@@ -601,7 +604,7 @@ func TestBridgePOSTAndPATCHProduceCorrectEvents(t *testing.T) {
 	bus2 := NewEventBus()
 	svc2 := NewIngestService(fq, bus2, slog.Default(), "/tmp/test")
 
-	row2, s2, err := svc2.Ingest(context.Background(), reqEnd)
+	row2, s2, err := svc2.Ingest(context.Background(), reqEnd, fakeOwnerID)
 	if err != nil || s2 != 201 {
 		t.Fatalf("PATCH session.end: status=%d err=%v", s2, err)
 	}
@@ -636,7 +639,7 @@ func TestBridgePATCHRetryIdempotency(t *testing.T) {
 	// First PATCH terminal → 201
 	deg := makeFakeDelegation(degID, parentID, "task", "completed")
 	req := BuildBridgeWorkEventRequest(deg, "session.end")
-	row1, s1, err := svc.Ingest(context.Background(), req)
+	row1, s1, err := svc.Ingest(context.Background(), req, fakeOwnerID)
 	if err != nil || s1 != 201 {
 		t.Fatalf("first PATCH: status=%d err=%v", s1, err)
 	}
@@ -645,7 +648,7 @@ func TestBridgePATCHRetryIdempotency(t *testing.T) {
 	bus2 := NewEventBus()
 	svc2 := NewIngestService(fq, bus2, slog.Default(), "/tmp/test")
 
-	row2, s2, err := svc2.Ingest(context.Background(), req)
+	row2, s2, err := svc2.Ingest(context.Background(), req, fakeOwnerID)
 	if err != nil {
 		t.Fatalf("retry PATCH error: %v", err)
 	}

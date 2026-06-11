@@ -339,7 +339,7 @@ func TestValidateArtifactPathInRootViaIngest(t *testing.T) {
 	// Contract §3 example: absolute path under the configured root
 	req.Artifacts = []ArtifactDescriptor{{Type: "image", Path: "/data/artifacts/x.png", Name: "before.png"}}
 
-	_, status, err := svc.Ingest(context.Background(), req)
+	_, status, err := svc.Ingest(context.Background(), req, owner0UUID)
 	if err != nil {
 		t.Fatalf("expected no error for in-root absolute path, got: %v", err)
 	}

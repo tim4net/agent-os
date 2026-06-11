@@ -24,138 +24,138 @@
 -- agents
 --------------------------------------------------------------------------------
 ALTER TABLE agents ADD COLUMN owner_id UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001'
-    REFERENCES users(id);
+    REFERENCES users(id) ON DELETE RESTRICT;
 CREATE INDEX idx_agents_owner_id ON agents(owner_id);
 
 --------------------------------------------------------------------------------
 -- projects
 --------------------------------------------------------------------------------
 ALTER TABLE projects ADD COLUMN owner_id UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001'
-    REFERENCES users(id);
+    REFERENCES users(id) ON DELETE RESTRICT;
 CREATE INDEX idx_projects_owner_id ON projects(owner_id);
 
 --------------------------------------------------------------------------------
 -- work_events
 --------------------------------------------------------------------------------
 ALTER TABLE work_events ADD COLUMN owner_id UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001'
-    REFERENCES users(id);
+    REFERENCES users(id) ON DELETE RESTRICT;
 CREATE INDEX idx_work_events_owner_id ON work_events(owner_id);
 
 --------------------------------------------------------------------------------
 -- tasks
 --------------------------------------------------------------------------------
 ALTER TABLE tasks ADD COLUMN owner_id UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001'
-    REFERENCES users(id);
+    REFERENCES users(id) ON DELETE RESTRICT;
 CREATE INDEX idx_tasks_owner_id ON tasks(owner_id);
 
 --------------------------------------------------------------------------------
 -- goals
 --------------------------------------------------------------------------------
 ALTER TABLE goals ADD COLUMN owner_id UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001'
-    REFERENCES users(id);
+    REFERENCES users(id) ON DELETE RESTRICT;
 CREATE INDEX idx_goals_owner_id ON goals(owner_id);
 
 --------------------------------------------------------------------------------
 -- skills
 --------------------------------------------------------------------------------
 ALTER TABLE skills ADD COLUMN owner_id UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001'
-    REFERENCES users(id);
+    REFERENCES users(id) ON DELETE RESTRICT;
 CREATE INDEX idx_skills_owner_id ON skills(owner_id);
 
 --------------------------------------------------------------------------------
 -- conversations
 --------------------------------------------------------------------------------
 ALTER TABLE conversations ADD COLUMN owner_id UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001'
-    REFERENCES users(id);
+    REFERENCES users(id) ON DELETE RESTRICT;
 CREATE INDEX idx_conversations_owner_id ON conversations(owner_id);
 
 --------------------------------------------------------------------------------
 -- artifacts
 --------------------------------------------------------------------------------
 ALTER TABLE artifacts ADD COLUMN owner_id UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001'
-    REFERENCES users(id);
+    REFERENCES users(id) ON DELETE RESTRICT;
 CREATE INDEX idx_artifacts_owner_id ON artifacts(owner_id);
 
 --------------------------------------------------------------------------------
 -- delegations
 --------------------------------------------------------------------------------
 ALTER TABLE delegations ADD COLUMN owner_id UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001'
-    REFERENCES users(id);
+    REFERENCES users(id) ON DELETE RESTRICT;
 CREATE INDEX idx_delegations_owner_id ON delegations(owner_id);
 
 --------------------------------------------------------------------------------
 -- pipeline_items
 --------------------------------------------------------------------------------
 ALTER TABLE pipeline_items ADD COLUMN owner_id UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001'
-    REFERENCES users(id);
+    REFERENCES users(id) ON DELETE RESTRICT;
 CREATE INDEX idx_pipeline_items_owner_id ON pipeline_items(owner_id);
 
 --------------------------------------------------------------------------------
 -- workflows
 --------------------------------------------------------------------------------
 ALTER TABLE workflows ADD COLUMN owner_id UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001'
-    REFERENCES users(id);
+    REFERENCES users(id) ON DELETE RESTRICT;
 CREATE INDEX idx_workflows_owner_id ON workflows(owner_id);
 
 --------------------------------------------------------------------------------
 -- resources
 --------------------------------------------------------------------------------
 ALTER TABLE resources ADD COLUMN owner_id UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001'
-    REFERENCES users(id);
+    REFERENCES users(id) ON DELETE RESTRICT;
 CREATE INDEX idx_resources_owner_id ON resources(owner_id);
 
 --------------------------------------------------------------------------------
 -- tracker_items
 --------------------------------------------------------------------------------
 ALTER TABLE tracker_items ADD COLUMN owner_id UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001'
-    REFERENCES users(id);
+    REFERENCES users(id) ON DELETE RESTRICT;
 CREATE INDEX idx_tracker_items_owner_id ON tracker_items(owner_id);
 
 --------------------------------------------------------------------------------
 -- app_instances
 --------------------------------------------------------------------------------
 ALTER TABLE app_instances ADD COLUMN owner_id UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001'
-    REFERENCES users(id);
+    REFERENCES users(id) ON DELETE RESTRICT;
 CREATE INDEX idx_app_instances_owner_id ON app_instances(owner_id);
 
 --------------------------------------------------------------------------------
 -- host_liveness
 --------------------------------------------------------------------------------
 ALTER TABLE host_liveness ADD COLUMN owner_id UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001'
-    REFERENCES users(id);
+    REFERENCES users(id) ON DELETE RESTRICT;
 CREATE INDEX idx_host_liveness_owner_id ON host_liveness(owner_id);
 
 --------------------------------------------------------------------------------
 -- ingest_keys
 --------------------------------------------------------------------------------
 ALTER TABLE ingest_keys ADD COLUMN owner_id UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001'
-    REFERENCES users(id);
+    REFERENCES users(id) ON DELETE RESTRICT;
 CREATE INDEX idx_ingest_keys_owner_id ON ingest_keys(owner_id);
 
 --------------------------------------------------------------------------------
 -- messages (via conversation → owner)
 --------------------------------------------------------------------------------
 ALTER TABLE messages ADD COLUMN owner_id UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001'
-    REFERENCES users(id);
+    REFERENCES users(id) ON DELETE RESTRICT;
 CREATE INDEX idx_messages_owner_id ON messages(owner_id);
 
 --------------------------------------------------------------------------------
 -- agent_grants
 --------------------------------------------------------------------------------
 ALTER TABLE agent_grants ADD COLUMN owner_id UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001'
-    REFERENCES users(id);
+    REFERENCES users(id) ON DELETE RESTRICT;
 CREATE INDEX idx_agent_grants_owner_id ON agent_grants(owner_id);
 
 --------------------------------------------------------------------------------
 -- workflow_runs
 --------------------------------------------------------------------------------
 ALTER TABLE workflow_runs ADD COLUMN owner_id UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001'
-    REFERENCES users(id);
+    REFERENCES users(id) ON DELETE RESTRICT;
 CREATE INDEX idx_workflow_runs_owner_id ON workflow_runs(owner_id);
 
 --------------------------------------------------------------------------------
 -- memory_index
 --------------------------------------------------------------------------------
 ALTER TABLE memory_index ADD COLUMN owner_id UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001'
-    REFERENCES users(id);
+    REFERENCES users(id) ON DELETE RESTRICT;
 CREATE INDEX idx_memory_index_owner_id ON memory_index(owner_id);

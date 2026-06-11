@@ -67,7 +67,7 @@ func TestHTTPDelegation_POSTSynthesizesWorkEvent(t *testing.T) {
 	var bridgeEID pgtype.UUID
 	_ = bridgeEID.Scan(bridgeReq.EventID)
 
-	row, err := a.queries.GetWorkEventByEventID(ctx, bridgeEID)
+	row, err := a.queries.GetWorkEventByEventID(ctx, db.GetWorkEventByEventIDParams{EventID: bridgeEID, OwnerID: owner0UUID})
 	if err != nil {
 		t.Fatalf("bridge work_event not found in DB (expected session.start from shim): %v", err)
 	}
@@ -135,7 +135,7 @@ func TestHTTPDelegation_PATCHTerminalSynthesizesSessionEnd(t *testing.T) {
 	var endEID pgtype.UUID
 	_ = endEID.Scan(endBridgeReq.EventID)
 
-	row, err := a.queries.GetWorkEventByEventID(ctx, endEID)
+	row, err := a.queries.GetWorkEventByEventID(ctx, db.GetWorkEventByEventIDParams{EventID: endEID, OwnerID: owner0UUID})
 	if err != nil {
 		t.Fatalf("session.end bridge work_event not found in DB after PATCH: %v", err)
 	}
@@ -194,7 +194,7 @@ func TestHTTPDelegation_PATCHNonTerminalNoSynthesis(t *testing.T) {
 	var endEID pgtype.UUID
 	_ = endEID.Scan(endBridgeReq.EventID)
 
-	_, err := a.queries.GetWorkEventByEventID(ctx, endEID)
+	_, err := a.queries.GetWorkEventByEventID(ctx, db.GetWorkEventByEventIDParams{EventID: endEID, OwnerID: owner0UUID})
 	if err == nil {
 		t.Fatal("expected NO session.end bridge event for non-terminal PATCH, but found one")
 	}

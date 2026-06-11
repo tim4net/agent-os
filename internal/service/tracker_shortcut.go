@@ -136,7 +136,7 @@ type TrackerQuerier interface {
 	ListTrackerItemsByProject(ctx context.Context, arg db.ListTrackerItemsByProjectParams) ([]db.TrackerItem, error)
 	ListTrackerItemsByTenant(ctx context.Context, arg db.ListTrackerItemsByTenantParams) ([]db.TrackerItem, error)
 	CountTrackerItemsByProject(ctx context.Context, arg db.CountTrackerItemsByProjectParams) (int64, error)
-	CountTrackerItemsByTenant(ctx context.Context, tenant string) (int64, error)
+	CountTrackerItemsByTenant(ctx context.Context, arg db.CountTrackerItemsByTenantParams) (int64, error)
 	GetTrackerProjects(ctx context.Context, arg db.GetTrackerProjectsParams) ([]db.Project, error)
 }
 

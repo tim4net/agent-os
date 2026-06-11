@@ -129,12 +129,12 @@ func (f *fakeTrackerQuerier) CountTrackerItemsByProject(_ context.Context, arg d
 	return int64(len(f.byProject[pk])), nil
 }
 
-func (f *fakeTrackerQuerier) CountTrackerItemsByTenant(_ context.Context, tenant string) (int64, error) {
+func (f *fakeTrackerQuerier) CountTrackerItemsByTenant(_ context.Context, arg db.CountTrackerItemsByTenantParams) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var count int64
 	for _, v := range f.items {
-		if v.Tenant == tenant {
+		if v.Tenant == arg.Tenant {
 			count++
 		}
 	}

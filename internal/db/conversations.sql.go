@@ -12,19 +12,25 @@ import (
 )
 
 const createConversation = `-- name: CreateConversation :one
-INSERT INTO conversations (agent_id, title, metadata)
-VALUES ($1, $2, $3)
+INSERT INTO conversations (owner_id, agent_id, title, metadata)
+VALUES ($1, $2, $3, $4)
 RETURNING id, agent_id, title, metadata, created_at, updated_at, summary, owner_id
 `
 
 type CreateConversationParams struct {
+	OwnerID  pgtype.UUID `json:"owner_id"`
 	AgentID  pgtype.UUID `json:"agent_id"`
 	Title    pgtype.Text `json:"title"`
 	Metadata []byte      `json:"metadata"`
 }
 
 func (q *Queries) CreateConversation(ctx context.Context, arg CreateConversationParams) (Conversation, error) {
-	row := q.db.QueryRow(ctx, createConversation, arg.AgentID, arg.Title, arg.Metadata)
+	row := q.db.QueryRow(ctx, createConversation,
+		arg.OwnerID,
+		arg.AgentID,
+		arg.Title,
+		arg.Metadata,
+	)
 	var i Conversation
 	err := row.Scan(
 		&i.ID,
@@ -40,12 +46,13 @@ func (q *Queries) CreateConversation(ctx context.Context, arg CreateConversation
 }
 
 const createMessage = `-- name: CreateMessage :one
-INSERT INTO messages (conversation_id, role, content, metadata)
-VALUES ($1, $2, $3, $4)
+INSERT INTO messages (owner_id, conversation_id, role, content, metadata)
+VALUES ($1, $2, $3, $4, $5)
 RETURNING id, conversation_id, role, content, metadata, created_at, owner_id
 `
 
 type CreateMessageParams struct {
+	OwnerID        pgtype.UUID `json:"owner_id"`
 	ConversationID pgtype.UUID `json:"conversation_id"`
 	Role           string      `json:"role"`
 	Content        string      `json:"content"`
@@ -54,6 +61,7 @@ type CreateMessageParams struct {
 
 func (q *Queries) CreateMessage(ctx context.Context, arg CreateMessageParams) (Message, error) {
 	row := q.db.QueryRow(ctx, createMessage,
+		arg.OwnerID,
 		arg.ConversationID,
 		arg.Role,
 		arg.Content,
@@ -73,33 +81,40 @@ func (q *Queries) CreateMessage(ctx context.Context, arg CreateMessageParams) (M
 }
 
 const deleteConversation = `-- name: DeleteConversation :exec
-DELETE FROM conversations WHERE id = $1
+DELETE FROM conversations WHERE id = $1 AND owner_id = $2
 `
 
-// Deletes a conversation and (via ON DELETE CASCADE) its messages. Used to roll
-// back a freshly-created conversation when the very first chat turn fails before
-// streaming, so a failed send never leaves an orphan conversation behind.
-func (q *Queries) DeleteConversation(ctx context.Context, id pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteConversation, id)
+type DeleteConversationParams struct {
+	ID      pgtype.UUID `json:"id"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) DeleteConversation(ctx context.Context, arg DeleteConversationParams) error {
+	_, err := q.db.Exec(ctx, deleteConversation, arg.ID, arg.OwnerID)
 	return err
 }
 
 const deleteLastExchange = `-- name: DeleteLastExchange :execrows
 WITH last_user AS (
     SELECT id FROM messages
-    WHERE messages.conversation_id = $1 AND messages.role = 'user'
+    WHERE messages.conversation_id = $1 AND messages.owner_id = $2 AND messages.role = 'user'
     ORDER BY messages.created_at DESC LIMIT 1
 ),
 last_assistant AS (
     SELECT id FROM messages
-    WHERE messages.conversation_id = $1 AND messages.role = 'assistant'
+    WHERE messages.conversation_id = $1 AND messages.owner_id = $2 AND messages.role = 'assistant'
     ORDER BY messages.created_at DESC LIMIT 1
 )
 DELETE FROM messages WHERE id IN (SELECT id FROM last_user) OR id IN (SELECT id FROM last_assistant)
 `
 
-func (q *Queries) DeleteLastExchange(ctx context.Context, conversationID pgtype.UUID) (int64, error) {
-	result, err := q.db.Exec(ctx, deleteLastExchange, conversationID)
+type DeleteLastExchangeParams struct {
+	ConversationID pgtype.UUID `json:"conversation_id"`
+	OwnerID        pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) DeleteLastExchange(ctx context.Context, arg DeleteLastExchangeParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteLastExchange, arg.ConversationID, arg.OwnerID)
 	if err != nil {
 		return 0, err
 	}
@@ -107,20 +122,30 @@ func (q *Queries) DeleteLastExchange(ctx context.Context, conversationID pgtype.
 }
 
 const deleteMessage = `-- name: DeleteMessage :exec
-DELETE FROM messages WHERE id = $1
+DELETE FROM messages WHERE id = $1 AND owner_id = $2
 `
 
-func (q *Queries) DeleteMessage(ctx context.Context, id pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteMessage, id)
+type DeleteMessageParams struct {
+	ID      pgtype.UUID `json:"id"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) DeleteMessage(ctx context.Context, arg DeleteMessageParams) error {
+	_, err := q.db.Exec(ctx, deleteMessage, arg.ID, arg.OwnerID)
 	return err
 }
 
 const deleteMessagesByConversation = `-- name: DeleteMessagesByConversation :execrows
-DELETE FROM messages WHERE conversation_id = $1
+DELETE FROM messages WHERE conversation_id = $1 AND owner_id = $2
 `
 
-func (q *Queries) DeleteMessagesByConversation(ctx context.Context, conversationID pgtype.UUID) (int64, error) {
-	result, err := q.db.Exec(ctx, deleteMessagesByConversation, conversationID)
+type DeleteMessagesByConversationParams struct {
+	ConversationID pgtype.UUID `json:"conversation_id"`
+	OwnerID        pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) DeleteMessagesByConversation(ctx context.Context, arg DeleteMessagesByConversationParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteMessagesByConversation, arg.ConversationID, arg.OwnerID)
 	if err != nil {
 		return 0, err
 	}
@@ -128,11 +153,16 @@ func (q *Queries) DeleteMessagesByConversation(ctx context.Context, conversation
 }
 
 const getConversation = `-- name: GetConversation :one
-SELECT id, agent_id, title, metadata, created_at, updated_at, summary, owner_id FROM conversations WHERE id = $1
+SELECT id, agent_id, title, metadata, created_at, updated_at, summary, owner_id FROM conversations WHERE id = $1 AND owner_id = $2
 `
 
-func (q *Queries) GetConversation(ctx context.Context, id pgtype.UUID) (Conversation, error) {
-	row := q.db.QueryRow(ctx, getConversation, id)
+type GetConversationParams struct {
+	ID      pgtype.UUID `json:"id"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) GetConversation(ctx context.Context, arg GetConversationParams) (Conversation, error) {
+	row := q.db.QueryRow(ctx, getConversation, arg.ID, arg.OwnerID)
 	var i Conversation
 	err := row.Scan(
 		&i.ID,
@@ -148,13 +178,19 @@ func (q *Queries) GetConversation(ctx context.Context, id pgtype.UUID) (Conversa
 }
 
 const getLastUserMessage = `-- name: GetLastUserMessage :one
-SELECT id, conversation_id, role, content, metadata, created_at, owner_id FROM messages
-WHERE conversation_id = $1 AND role = 'user'
-ORDER BY created_at DESC LIMIT 1
+SELECT m.id, m.conversation_id, m.role, m.content, m.metadata, m.created_at, m.owner_id FROM messages m
+JOIN conversations c ON m.conversation_id = c.id
+WHERE m.conversation_id = $1 AND c.owner_id = $2 AND m.role = 'user'
+ORDER BY m.created_at DESC LIMIT 1
 `
 
-func (q *Queries) GetLastUserMessage(ctx context.Context, conversationID pgtype.UUID) (Message, error) {
-	row := q.db.QueryRow(ctx, getLastUserMessage, conversationID)
+type GetLastUserMessageParams struct {
+	ConversationID pgtype.UUID `json:"conversation_id"`
+	OwnerID        pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) GetLastUserMessage(ctx context.Context, arg GetLastUserMessageParams) (Message, error) {
+	row := q.db.QueryRow(ctx, getLastUserMessage, arg.ConversationID, arg.OwnerID)
 	var i Message
 	err := row.Scan(
 		&i.ID,
@@ -172,12 +208,18 @@ const listConversations = `-- name: ListConversations :many
 SELECT c.id, c.agent_id, c.title, c.metadata, c.created_at, c.updated_at, c.summary, c.owner_id FROM conversations c
 JOIN agents a ON c.agent_id = a.id
 WHERE a.visible = true
-AND ($1::uuid IS NULL OR c.agent_id = $1)
+AND c.owner_id = $1
+AND ($2::uuid IS NULL OR c.agent_id = $2)
 ORDER BY c.updated_at DESC
 `
 
-func (q *Queries) ListConversations(ctx context.Context, dollar_1 pgtype.UUID) ([]Conversation, error) {
-	rows, err := q.db.Query(ctx, listConversations, dollar_1)
+type ListConversationsParams struct {
+	OwnerID pgtype.UUID `json:"owner_id"`
+	Column2 pgtype.UUID `json:"column_2"`
+}
+
+func (q *Queries) ListConversations(ctx context.Context, arg ListConversationsParams) ([]Conversation, error) {
+	rows, err := q.db.Query(ctx, listConversations, arg.OwnerID, arg.Column2)
 	if err != nil {
 		return nil, err
 	}
@@ -206,13 +248,19 @@ func (q *Queries) ListConversations(ctx context.Context, dollar_1 pgtype.UUID) (
 }
 
 const listMessages = `-- name: ListMessages :many
-SELECT id, conversation_id, role, content, metadata, created_at, owner_id FROM messages
-WHERE conversation_id = $1
-ORDER BY created_at ASC
+SELECT m.id, m.conversation_id, m.role, m.content, m.metadata, m.created_at, m.owner_id FROM messages m
+JOIN conversations c ON m.conversation_id = c.id
+WHERE m.conversation_id = $1 AND c.owner_id = $2
+ORDER BY m.created_at ASC
 `
 
-func (q *Queries) ListMessages(ctx context.Context, conversationID pgtype.UUID) ([]Message, error) {
-	rows, err := q.db.Query(ctx, listMessages, conversationID)
+type ListMessagesParams struct {
+	ConversationID pgtype.UUID `json:"conversation_id"`
+	OwnerID        pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) ListMessages(ctx context.Context, arg ListMessagesParams) ([]Message, error) {
+	rows, err := q.db.Query(ctx, listMessages, arg.ConversationID, arg.OwnerID)
 	if err != nil {
 		return nil, err
 	}
@@ -241,17 +289,18 @@ func (q *Queries) ListMessages(ctx context.Context, conversationID pgtype.UUID) 
 
 const updateConversation = `-- name: UpdateConversation :one
 UPDATE conversations SET title = $2, updated_at = NOW()
-WHERE id = $1
+WHERE id = $1 AND owner_id = $3
 RETURNING id, agent_id, title, metadata, created_at, updated_at, summary, owner_id
 `
 
 type UpdateConversationParams struct {
-	ID    pgtype.UUID `json:"id"`
-	Title pgtype.Text `json:"title"`
+	ID      pgtype.UUID `json:"id"`
+	Title   pgtype.Text `json:"title"`
+	OwnerID pgtype.UUID `json:"owner_id"`
 }
 
 func (q *Queries) UpdateConversation(ctx context.Context, arg UpdateConversationParams) (Conversation, error) {
-	row := q.db.QueryRow(ctx, updateConversation, arg.ID, arg.Title)
+	row := q.db.QueryRow(ctx, updateConversation, arg.ID, arg.Title, arg.OwnerID)
 	var i Conversation
 	err := row.Scan(
 		&i.ID,
@@ -268,17 +317,18 @@ func (q *Queries) UpdateConversation(ctx context.Context, arg UpdateConversation
 
 const updateConversationMetadata = `-- name: UpdateConversationMetadata :one
 UPDATE conversations SET metadata = $2, updated_at = NOW()
-WHERE id = $1
+WHERE id = $1 AND owner_id = $3
 RETURNING id, agent_id, title, metadata, created_at, updated_at, summary, owner_id
 `
 
 type UpdateConversationMetadataParams struct {
 	ID       pgtype.UUID `json:"id"`
 	Metadata []byte      `json:"metadata"`
+	OwnerID  pgtype.UUID `json:"owner_id"`
 }
 
 func (q *Queries) UpdateConversationMetadata(ctx context.Context, arg UpdateConversationMetadataParams) (Conversation, error) {
-	row := q.db.QueryRow(ctx, updateConversationMetadata, arg.ID, arg.Metadata)
+	row := q.db.QueryRow(ctx, updateConversationMetadata, arg.ID, arg.Metadata, arg.OwnerID)
 	var i Conversation
 	err := row.Scan(
 		&i.ID,
@@ -295,17 +345,18 @@ func (q *Queries) UpdateConversationMetadata(ctx context.Context, arg UpdateConv
 
 const updateConversationSummary = `-- name: UpdateConversationSummary :one
 UPDATE conversations SET summary = $2, updated_at = NOW()
-WHERE id = $1
+WHERE id = $1 AND owner_id = $3
 RETURNING id, agent_id, title, metadata, created_at, updated_at, summary, owner_id
 `
 
 type UpdateConversationSummaryParams struct {
 	ID      pgtype.UUID `json:"id"`
 	Summary pgtype.Text `json:"summary"`
+	OwnerID pgtype.UUID `json:"owner_id"`
 }
 
 func (q *Queries) UpdateConversationSummary(ctx context.Context, arg UpdateConversationSummaryParams) (Conversation, error) {
-	row := q.db.QueryRow(ctx, updateConversationSummary, arg.ID, arg.Summary)
+	row := q.db.QueryRow(ctx, updateConversationSummary, arg.ID, arg.Summary, arg.OwnerID)
 	var i Conversation
 	err := row.Scan(
 		&i.ID,

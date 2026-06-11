@@ -889,7 +889,7 @@ func TestMarkInstanceDownByServerStopped_SetsDown(t *testing.T) {
 	if err := id.Scan(idStr); err != nil {
 		t.Fatalf("invalid UUID %q: %v", idStr, err)
 	}
-	inst, err := queries.GetAppInstance(context.Background(), id)
+	inst, err := queries.GetAppInstance(context.Background(), db.GetAppInstanceParams{ID: id, OwnerID: owner0UUID})
 	if err != nil {
 		t.Fatalf("GetAppInstance: %v", err)
 	}
@@ -929,7 +929,7 @@ func TestMarkInstanceDownByServerStopped_TenantScoped(t *testing.T) {
 	if err := idB.Scan(idBStr); err != nil {
 		t.Fatalf("invalid UUID %q: %v", idBStr, err)
 	}
-	instB, _ := queries.GetAppInstance(context.Background(), idB)
+	instB, _ := queries.GetAppInstance(context.Background(), db.GetAppInstanceParams{ID: idB, OwnerID: owner0UUID})
 	if instB.Status != "up" {
 		t.Fatalf("tenantB instance should remain up, got status %q", instB.Status)
 	}

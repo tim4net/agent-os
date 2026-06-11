@@ -354,7 +354,7 @@ func isValidUUID(s string) bool {
 }
 
 // resolveProject resolves a project from project_hint or cwd.
-func (s *IngestService) resolveProject(ctx context.Context, tenant string, req WorkEventRequest) (pgtype.UUID, error) {
+func (s *IngestService) resolveProject(ctx context.Context, tenant string, req WorkEventRequest, ownerID pgtype.UUID) (pgtype.UUID, error) {
 	slug := ""
 	if req.ProjectHint != "" {
 		slug = req.ProjectHint
@@ -367,9 +367,10 @@ func (s *IngestService) resolveProject(ctx context.Context, tenant string, req W
 
 	// FIX (minor #8): distinguish "no hint" from "EnsureProjectBySlug failed"
 	project, err := s.queries.EnsureProjectBySlug(ctx, db.EnsureProjectBySlugParams{
-		Slug:   slug,
-		Name:   slug,
-		Tenant: tenant,
+		OwnerID: ownerID,
+		Slug:    slug,
+		Name:    slug,
+		Tenant:  tenant,
 	})
 	if err != nil {
 		return pgtype.UUID{}, fmt.Errorf("failed to resolve/create project %q for tenant %q: %w", slug, tenant, err)
@@ -378,7 +379,7 @@ func (s *IngestService) resolveProject(ctx context.Context, tenant string, req W
 }
 
 // Ingest validates, resolves the project, persists (upsert), and publishes.
-func (s *IngestService) Ingest(ctx context.Context, req WorkEventRequest) (db.WorkEvent, int, error) {
+func (s *IngestService) Ingest(ctx context.Context, req WorkEventRequest, ownerID pgtype.UUID) (db.WorkEvent, int, error) {
 	// Validate
 	if err := ValidateWorkEvent(s.artifactsPath, req); err != nil {
 		if ve, ok := err.(*ValidationError); ok {
@@ -399,7 +400,7 @@ func (s *IngestService) Ingest(ctx context.Context, req WorkEventRequest) (db.Wo
 		tenant = "personal"
 	}
 	var projectID pgtype.UUID
-	projectID, err := s.resolveProject(ctx, tenant, req)
+	projectID, err := s.resolveProject(ctx, tenant, req, ownerID)
 	if err != nil {
 		s.log.Error("project resolution failed", "error", err)
 		return db.WorkEvent{}, http.StatusInternalServerError, fmt.Errorf("project resolution: %w", err)
@@ -482,6 +483,7 @@ func (s *IngestService) Ingest(ctx context.Context, req WorkEventRequest) (db.Wo
 	// FIX (finding #1): Atomic upsert — single INSERT ON CONFLICT DO NOTHING.
 	// On conflict, PostgreSQL returns no rows (pgx.ErrNoRows) → we SELECT the existing row.
 	params := db.InsertWorkEventParams{
+		OwnerID:       ownerID,
 		EventID:       eventUUID,
 		SchemaVersion: req.Schema,
 		Harness:       req.Harness,
@@ -506,7 +508,7 @@ func (s *IngestService) Ingest(ctx context.Context, req WorkEventRequest) (db.Wo
 	row, err := s.queries.InsertWorkEvent(ctx, params)
 	if err == pgx.ErrNoRows {
 		// Conflict — event_id already exists. Fetch the original row.
-		existing, err := s.queries.GetWorkEventByEventID(ctx, eventUUID)
+		existing, err := s.queries.GetWorkEventByEventID(ctx, db.GetWorkEventByEventIDParams{EventID: eventUUID, OwnerID: ownerID})
 		if err != nil {
 			s.log.Error("failed to fetch existing event on conflict", "event_id", req.EventID, "error", err)
 			return db.WorkEvent{}, http.StatusInternalServerError, fmt.Errorf("fetch existing event: %w", err)

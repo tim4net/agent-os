@@ -16,7 +16,13 @@ import (
 
 // ListAgents returns all visible agents (filtered by backend visibility).
 func (a *API) ListAgents(w http.ResponseWriter, r *http.Request) {
-	agents, err := a.queries.ListVisibleAgents(r.Context())
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
+	agents, err := a.queries.ListVisibleAgents(r.Context(), ownerID)
 	if err != nil {
 		http.Error(w, "failed to list agents", http.StatusInternalServerError)
 		return
@@ -28,6 +34,12 @@ func (a *API) ListAgents(w http.ResponseWriter, r *http.Request) {
 
 // GetAgent returns a single agent by ID.
 func (a *API) GetAgent(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	idStr := chi.URLParam(r, "id")
 
 	var id pgtype.UUID
@@ -36,7 +48,10 @@ func (a *API) GetAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	agent, err := a.queries.GetAgent(r.Context(), id)
+	agent, err := a.queries.GetAgent(r.Context(), db.GetAgentParams{
+		ID:      id,
+		OwnerID: ownerID,
+	})
 	if err != nil {
 		http.Error(w, "agent not found", http.StatusNotFound)
 		return
@@ -57,6 +72,12 @@ type CreateAgentRequest struct {
 
 // CreateAgent creates a new agent.
 func (a *API) CreateAgent(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	var req CreateAgentRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -85,6 +106,7 @@ func (a *API) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	agent, err := a.queries.CreateAgent(r.Context(), db.CreateAgentParams{
+		OwnerID:     ownerID,
 		Name:        req.Name,
 		DisplayName: req.DisplayName,
 		Harness:     req.Harness,
@@ -103,6 +125,12 @@ func (a *API) CreateAgent(w http.ResponseWriter, r *http.Request) {
 
 // DeleteAgent handles DELETE /api/agents/{id}.
 func (a *API) DeleteAgent(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	idStr := chi.URLParam(r, "id")
 
 	var id pgtype.UUID
@@ -112,12 +140,12 @@ func (a *API) DeleteAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Confirm it exists first so a bad id returns 404, not a silent 204.
-	if _, err := a.queries.GetAgent(r.Context(), id); err != nil {
+	if _, err := a.queries.GetAgent(r.Context(), db.GetAgentParams{ID: id, OwnerID: ownerID}); err != nil {
 		http.Error(w, "agent not found", http.StatusNotFound)
 		return
 	}
 
-	if err := a.queries.DeleteAgent(r.Context(), id); err != nil {
+	if err := a.queries.DeleteAgent(r.Context(), db.DeleteAgentParams{ID: id, OwnerID: ownerID}); err != nil {
 		http.Error(w, "failed to delete agent: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -164,6 +192,12 @@ type UpdateAgentConfigRequest struct {
 // The handler delegates rename logic to handleAgentRename and config logic to
 // updateAgentFields, keeping each responsibility in a focused function.
 func (a *API) UpdateAgentConfig(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	idStr := chi.URLParam(r, "id")
 
 	var id pgtype.UUID
@@ -205,6 +239,7 @@ func (a *API) UpdateAgentConfig(w http.ResponseWriter, r *http.Request) {
 
 	agent, err := a.queries.UpdateAgentConfig(r.Context(), db.UpdateAgentConfigParams{
 		ID:           id,
+		OwnerID:      ownerID,
 		Role:         pgtype.Text{String: req.Role, Valid: true},
 		SystemPrompt: pgtype.Text{String: req.SystemPrompt, Valid: true},
 		Persona:      persona,
@@ -271,6 +306,12 @@ func (a *API) handleAgentRename(w http.ResponseWriter, r *http.Request, idStr st
 
 // GetAgentConfig handles GET /api/agents/{id}/config and returns role, system_prompt, persona.
 func (a *API) GetAgentConfig(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	idStr := chi.URLParam(r, "id")
 
 	var id pgtype.UUID
@@ -279,7 +320,7 @@ func (a *API) GetAgentConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	agent, err := a.queries.GetAgent(r.Context(), id)
+	agent, err := a.queries.GetAgent(r.Context(), db.GetAgentParams{ID: id, OwnerID: ownerID})
 	if err != nil {
 		http.Error(w, "agent not found", http.StatusNotFound)
 		return
@@ -297,6 +338,12 @@ func (a *API) GetAgentConfig(w http.ResponseWriter, r *http.Request) {
 // GetAgentModels proxies the model list request to the agent's harness.
 // It enriches model info with display names from a server-side mapping.
 func (a *API) GetAgentModels(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	idStr := chi.URLParam(r, "id")
 
 	var id pgtype.UUID
@@ -305,7 +352,7 @@ func (a *API) GetAgentModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	agent, err := a.queries.GetAgent(r.Context(), id)
+	agent, err := a.queries.GetAgent(r.Context(), db.GetAgentParams{ID: id, OwnerID: ownerID})
 	if err != nil {
 		http.Error(w, "agent not found", http.StatusNotFound)
 		return
@@ -381,6 +428,12 @@ func modelDisplayName(id string) string {
 
 // GetAgentVersion returns the upstream version reported by an agent's harness.
 func (a *API) GetAgentVersion(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	idStr := chi.URLParam(r, "id")
 
 	var id pgtype.UUID
@@ -389,7 +442,7 @@ func (a *API) GetAgentVersion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	agent, err := a.queries.GetAgent(r.Context(), id)
+	agent, err := a.queries.GetAgent(r.Context(), db.GetAgentParams{ID: id, OwnerID: ownerID})
 	if err != nil {
 		http.Error(w, "agent not found", http.StatusNotFound)
 		return
@@ -438,6 +491,12 @@ func (a *API) GetAgentVersion(w http.ResponseWriter, r *http.Request) {
 
 // GetAgentCommands returns the slash commands available for an agent's harness.
 func (a *API) GetAgentCommands(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	idStr := chi.URLParam(r, "id")
 
 	var id pgtype.UUID
@@ -446,7 +505,7 @@ func (a *API) GetAgentCommands(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	agent, err := a.queries.GetAgent(r.Context(), id)
+	agent, err := a.queries.GetAgent(r.Context(), db.GetAgentParams{ID: id, OwnerID: ownerID})
 	if err != nil {
 		http.Error(w, "agent not found", http.StatusNotFound)
 		return

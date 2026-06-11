@@ -12,12 +12,13 @@ import (
 )
 
 const createSkill = `-- name: CreateSkill :one
-INSERT INTO skills (name, description, category, content, triggers, agent_id)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO skills (owner_id, name, description, category, content, triggers, agent_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 RETURNING id, name, description, category, content, triggers, agent_id, created_at, updated_at, owner_id
 `
 
 type CreateSkillParams struct {
+	OwnerID     pgtype.UUID `json:"owner_id"`
 	Name        string      `json:"name"`
 	Description string      `json:"description"`
 	Category    string      `json:"category"`
@@ -28,6 +29,7 @@ type CreateSkillParams struct {
 
 func (q *Queries) CreateSkill(ctx context.Context, arg CreateSkillParams) (Skill, error) {
 	row := q.db.QueryRow(ctx, createSkill,
+		arg.OwnerID,
 		arg.Name,
 		arg.Description,
 		arg.Category,
@@ -52,20 +54,30 @@ func (q *Queries) CreateSkill(ctx context.Context, arg CreateSkillParams) (Skill
 }
 
 const deleteSkill = `-- name: DeleteSkill :exec
-DELETE FROM skills WHERE id = $1
+DELETE FROM skills WHERE id = $1 AND owner_id = $2
 `
 
-func (q *Queries) DeleteSkill(ctx context.Context, id pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteSkill, id)
+type DeleteSkillParams struct {
+	ID      pgtype.UUID `json:"id"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) DeleteSkill(ctx context.Context, arg DeleteSkillParams) error {
+	_, err := q.db.Exec(ctx, deleteSkill, arg.ID, arg.OwnerID)
 	return err
 }
 
 const getSkill = `-- name: GetSkill :one
-SELECT id, name, description, category, content, triggers, agent_id, created_at, updated_at, owner_id FROM skills WHERE id = $1
+SELECT id, name, description, category, content, triggers, agent_id, created_at, updated_at, owner_id FROM skills WHERE id = $1 AND owner_id = $2
 `
 
-func (q *Queries) GetSkill(ctx context.Context, id pgtype.UUID) (Skill, error) {
-	row := q.db.QueryRow(ctx, getSkill, id)
+type GetSkillParams struct {
+	ID      pgtype.UUID `json:"id"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) GetSkill(ctx context.Context, arg GetSkillParams) (Skill, error) {
+	row := q.db.QueryRow(ctx, getSkill, arg.ID, arg.OwnerID)
 	var i Skill
 	err := row.Scan(
 		&i.ID,
@@ -85,6 +97,7 @@ func (q *Queries) GetSkill(ctx context.Context, id pgtype.UUID) (Skill, error) {
 const listSkillSummaries = `-- name: ListSkillSummaries :many
 SELECT id, name, description, category, triggers, agent_id, created_at, updated_at
 FROM skills
+WHERE owner_id = $1
 ORDER BY created_at DESC
 `
 
@@ -99,8 +112,8 @@ type ListSkillSummariesRow struct {
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
 
-func (q *Queries) ListSkillSummaries(ctx context.Context) ([]ListSkillSummariesRow, error) {
-	rows, err := q.db.Query(ctx, listSkillSummaries)
+func (q *Queries) ListSkillSummaries(ctx context.Context, ownerID pgtype.UUID) ([]ListSkillSummariesRow, error) {
+	rows, err := q.db.Query(ctx, listSkillSummaries, ownerID)
 	if err != nil {
 		return nil, err
 	}
@@ -130,11 +143,12 @@ func (q *Queries) ListSkillSummaries(ctx context.Context) ([]ListSkillSummariesR
 
 const listSkills = `-- name: ListSkills :many
 SELECT id, name, description, category, content, triggers, agent_id, created_at, updated_at, owner_id FROM skills
+WHERE owner_id = $1
 ORDER BY created_at DESC
 `
 
-func (q *Queries) ListSkills(ctx context.Context) ([]Skill, error) {
-	rows, err := q.db.Query(ctx, listSkills)
+func (q *Queries) ListSkills(ctx context.Context, ownerID pgtype.UUID) ([]Skill, error) {
+	rows, err := q.db.Query(ctx, listSkills, ownerID)
 	if err != nil {
 		return nil, err
 	}
@@ -166,12 +180,17 @@ func (q *Queries) ListSkills(ctx context.Context) ([]Skill, error) {
 
 const listSkillsByAgent = `-- name: ListSkillsByAgent :many
 SELECT id, name, description, category, content, triggers, agent_id, created_at, updated_at, owner_id FROM skills
-WHERE agent_id = $1
+WHERE agent_id = $1 AND owner_id = $2
 ORDER BY created_at DESC
 `
 
-func (q *Queries) ListSkillsByAgent(ctx context.Context, agentID pgtype.UUID) ([]Skill, error) {
-	rows, err := q.db.Query(ctx, listSkillsByAgent, agentID)
+type ListSkillsByAgentParams struct {
+	AgentID pgtype.UUID `json:"agent_id"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) ListSkillsByAgent(ctx context.Context, arg ListSkillsByAgentParams) ([]Skill, error) {
+	rows, err := q.db.Query(ctx, listSkillsByAgent, arg.AgentID, arg.OwnerID)
 	if err != nil {
 		return nil, err
 	}
@@ -203,7 +222,7 @@ func (q *Queries) ListSkillsByAgent(ctx context.Context, agentID pgtype.UUID) ([
 
 const updateSkill = `-- name: UpdateSkill :one
 UPDATE skills SET name = $2, description = $3, category = $4, content = $5, triggers = $6, agent_id = $7, updated_at = NOW()
-WHERE id = $1
+WHERE id = $1 AND owner_id = $8
 RETURNING id, name, description, category, content, triggers, agent_id, created_at, updated_at, owner_id
 `
 
@@ -215,6 +234,7 @@ type UpdateSkillParams struct {
 	Content     string      `json:"content"`
 	Triggers    []string    `json:"triggers"`
 	AgentID     pgtype.UUID `json:"agent_id"`
+	OwnerID     pgtype.UUID `json:"owner_id"`
 }
 
 func (q *Queries) UpdateSkill(ctx context.Context, arg UpdateSkillParams) (Skill, error) {
@@ -226,6 +246,7 @@ func (q *Queries) UpdateSkill(ctx context.Context, arg UpdateSkillParams) (Skill
 		arg.Content,
 		arg.Triggers,
 		arg.AgentID,
+		arg.OwnerID,
 	)
 	var i Skill
 	err := row.Scan(
@@ -244,8 +265,8 @@ func (q *Queries) UpdateSkill(ctx context.Context, arg UpdateSkillParams) (Skill
 }
 
 const upsertSkill = `-- name: UpsertSkill :one
-INSERT INTO skills (name, description, category, content, triggers, agent_id)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO skills (owner_id, name, description, category, content, triggers, agent_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 ON CONFLICT (name) DO UPDATE SET
     description = EXCLUDED.description,
     category = EXCLUDED.category,
@@ -256,6 +277,7 @@ RETURNING id, name, description, category, content, triggers, agent_id, created_
 `
 
 type UpsertSkillParams struct {
+	OwnerID     pgtype.UUID `json:"owner_id"`
 	Name        string      `json:"name"`
 	Description string      `json:"description"`
 	Category    string      `json:"category"`
@@ -266,6 +288,7 @@ type UpsertSkillParams struct {
 
 func (q *Queries) UpsertSkill(ctx context.Context, arg UpsertSkillParams) (Skill, error) {
 	row := q.db.QueryRow(ctx, upsertSkill,
+		arg.OwnerID,
 		arg.Name,
 		arg.Description,
 		arg.Category,

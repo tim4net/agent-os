@@ -60,6 +60,12 @@ func delegationToResponse(d db.Delegation) DelegationResponse {
 
 // CreateDelegation handles POST /api/delegations — Hermes fires this when delegate_task starts/completes.
 func (a *API) CreateDelegation(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	var req DelegationRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
@@ -90,6 +96,7 @@ func (a *API) CreateDelegation(w http.ResponseWriter, r *http.Request) {
 	}
 
 	deg, err := a.queries.CreateDelegation(r.Context(), db.CreateDelegationParams{
+		OwnerID:        ownerID,
 		ParentAgentID:  parentID,
 		ChildAgentName: req.ChildAgentName,
 		TaskGoal:       req.TaskGoal,
@@ -145,12 +152,18 @@ func (a *API) synthesizeWorkEvent(ctx context.Context, deg db.Delegation, kindOv
 	}
 	svc := service.NewIngestService(a.queries, a.bus, slog.Default(), artifactsPath)
 
-	_, _, err := svc.Ingest(ctx, req)
+	_, _, err := svc.Ingest(ctx, req, deg.OwnerID)
 	return err
 }
 
 // UpdateDelegationStatus handles PATCH /api/delegations/{id} — Hermes fires this on completion/failure.
 func (a *API) UpdateDelegationStatus(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	id := chi.URLParam(r, "id")
 	var uid pgtype.UUID
 	if err := uid.Scan(id); err != nil {
@@ -178,6 +191,7 @@ func (a *API) UpdateDelegationStatus(w http.ResponseWriter, r *http.Request) {
 
 	deg, err := a.queries.UpdateDelegation(r.Context(), db.UpdateDelegationParams{
 		ID:            uid,
+		OwnerID:       ownerID,
 		Status:        req.Status,
 		ResultSummary: summary,
 	})
@@ -219,6 +233,12 @@ func (a *API) UpdateDelegationStatus(w http.ResponseWriter, r *http.Request) {
 
 // ListDelegationsHandler handles GET /api/delegations — for the UI.
 func (a *API) ListDelegationsHandler(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	agentID := r.URL.Query().Get("agent_id")
 	status := r.URL.Query().Get("status")
 	limit, _ := strconv.ParseInt(r.URL.Query().Get("limit"), 10, 32)
@@ -236,8 +256,9 @@ func (a *API) ListDelegationsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	degs, err := a.queries.ListDelegations(r.Context(), db.ListDelegationsParams{
-		Column1: pgAgentID,
-		Column2: status,
+		OwnerID: ownerID,
+		Column2: pgAgentID,
+		Column3: status,
 		Limit:   int32(limit),
 		Offset:  int32(offset),
 	})

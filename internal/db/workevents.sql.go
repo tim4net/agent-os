@@ -12,11 +12,16 @@ import (
 )
 
 const getWorkEventByEventID = `-- name: GetWorkEventByEventID :one
-SELECT id, event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, project_id, tenant, external_ref, branch, sha, cwd, title, cost_usd, payload, ts, received_at, owner_id FROM work_events WHERE event_id = $1
+SELECT id, event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, project_id, tenant, external_ref, branch, sha, cwd, title, cost_usd, payload, ts, received_at, owner_id FROM work_events WHERE event_id = $1 AND owner_id = $2
 `
 
-func (q *Queries) GetWorkEventByEventID(ctx context.Context, eventID pgtype.UUID) (WorkEvent, error) {
-	row := q.db.QueryRow(ctx, getWorkEventByEventID, eventID)
+type GetWorkEventByEventIDParams struct {
+	EventID pgtype.UUID `json:"event_id"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) GetWorkEventByEventID(ctx context.Context, arg GetWorkEventByEventIDParams) (WorkEvent, error) {
+	row := q.db.QueryRow(ctx, getWorkEventByEventID, arg.EventID, arg.OwnerID)
 	var i WorkEvent
 	err := row.Scan(
 		&i.ID,
@@ -47,19 +52,25 @@ func (q *Queries) GetWorkEventByEventID(ctx context.Context, eventID pgtype.UUID
 
 const getWorkEventsBySession = `-- name: GetWorkEventsBySession :many
 SELECT id, event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, project_id, tenant, external_ref, branch, sha, cwd, title, cost_usd, payload, ts, received_at, owner_id FROM work_events
-WHERE harness = $1 AND session_id = $2
+WHERE harness = $1 AND session_id = $2 AND owner_id = $3
 ORDER BY received_at DESC
-LIMIT $3
+LIMIT $4
 `
 
 type GetWorkEventsBySessionParams struct {
-	Harness   string `json:"harness"`
-	SessionID string `json:"session_id"`
-	Limit     int32  `json:"limit"`
+	Harness   string      `json:"harness"`
+	SessionID string      `json:"session_id"`
+	OwnerID   pgtype.UUID `json:"owner_id"`
+	Limit     int32       `json:"limit"`
 }
 
 func (q *Queries) GetWorkEventsBySession(ctx context.Context, arg GetWorkEventsBySessionParams) ([]WorkEvent, error) {
-	rows, err := q.db.Query(ctx, getWorkEventsBySession, arg.Harness, arg.SessionID, arg.Limit)
+	rows, err := q.db.Query(ctx, getWorkEventsBySession,
+		arg.Harness,
+		arg.SessionID,
+		arg.OwnerID,
+		arg.Limit,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -103,18 +114,19 @@ func (q *Queries) GetWorkEventsBySession(ctx context.Context, arg GetWorkEventsB
 
 const insertWorkEvent = `-- name: InsertWorkEvent :one
 INSERT INTO work_events (
-    event_id, schema_version, harness, session_id, host, pid,
+    owner_id, event_id, schema_version, harness, session_id, host, pid,
     kind, status, liveness_mode, project_id, tenant,
     external_ref, branch, sha, cwd, title, cost_usd, payload, ts
 ) VALUES (
     $1, $2, $3, $4, $5, $6,
-    $7, $8, $9, $10, $11,
-    $12, $13, $14, $15, $16, $17, $18, $19
+    $7, $8, $9, $10, $11, $12,
+    $13, $14, $15, $16, $17, $18, $19, $20
 ) ON CONFLICT (event_id) DO NOTHING
 RETURNING id, event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, project_id, tenant, external_ref, branch, sha, cwd, title, cost_usd, payload, ts, received_at, owner_id
 `
 
 type InsertWorkEventParams struct {
+	OwnerID       pgtype.UUID        `json:"owner_id"`
 	EventID       pgtype.UUID        `json:"event_id"`
 	SchemaVersion string             `json:"schema_version"`
 	Harness       string             `json:"harness"`
@@ -139,6 +151,7 @@ type InsertWorkEventParams struct {
 // Upsert by event_id: inserts new row, on conflict does nothing and returns nothing (pgx.ErrNoRows).
 func (q *Queries) InsertWorkEvent(ctx context.Context, arg InsertWorkEventParams) (WorkEvent, error) {
 	row := q.db.QueryRow(ctx, insertWorkEvent,
+		arg.OwnerID,
 		arg.EventID,
 		arg.SchemaVersion,
 		arg.Harness,

@@ -9,8 +9,12 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/tim4net/agent-os/internal/db"
 )
+
+// testOwnerID is the owner-0 UUID used in tests (matches migration 024 seed).
+var testOwnerID = pgtype.UUID{Bytes: [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}, Valid: true}
 
 // ---------------------------------------------------------------------------
 // HashIngestKey unit tests
@@ -45,13 +49,13 @@ func TestHashIngestKey(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 type mockKeyQuerier struct {
-	getKeyFn    func(ctx context.Context, keyHash string) (db.IngestKey, error)
+	getKeyFn    func(ctx context.Context, arg db.GetIngestKeyByHashParams) (db.IngestKey, error)
 	createKeyFn func(ctx context.Context, arg db.CreateIngestKeyParams) (db.IngestKey, error)
 }
 
-func (m *mockKeyQuerier) GetIngestKeyByHash(ctx context.Context, keyHash string) (db.IngestKey, error) {
+func (m *mockKeyQuerier) GetIngestKeyByHash(ctx context.Context, arg db.GetIngestKeyByHashParams) (db.IngestKey, error) {
 	if m.getKeyFn != nil {
-		return m.getKeyFn(ctx, keyHash)
+		return m.getKeyFn(ctx, arg)
 	}
 	return db.IngestKey{}, pgx.ErrNoRows
 }
@@ -69,7 +73,7 @@ func (m *mockKeyQuerier) CreateIngestKey(ctx context.Context, arg db.CreateInges
 
 func TestResolveTenantFromKeyDB_EmptyKey(t *testing.T) {
 	q := &mockKeyQuerier{}
-	_, err := ResolveTenantFromKeyDB(context.Background(), q, "")
+	_, err := ResolveTenantFromKeyDB(context.Background(), q, "", testOwnerID)
 	if err == nil {
 		t.Fatal("expected error for empty key")
 	}
@@ -80,11 +84,11 @@ func TestResolveTenantFromKeyDB_EmptyKey(t *testing.T) {
 
 func TestResolveTenantFromKeyDB_UnknownKey(t *testing.T) {
 	q := &mockKeyQuerier{
-		getKeyFn: func(ctx context.Context, keyHash string) (db.IngestKey, error) {
+		getKeyFn: func(ctx context.Context, arg db.GetIngestKeyByHashParams) (db.IngestKey, error) {
 			return db.IngestKey{}, pgx.ErrNoRows
 		},
 	}
-	_, err := ResolveTenantFromKeyDB(context.Background(), q, "nonexistent-key")
+	_, err := ResolveTenantFromKeyDB(context.Background(), q, "nonexistent-key", testOwnerID)
 	if err == nil {
 		t.Fatal("expected error for unknown key")
 	}
@@ -96,11 +100,11 @@ func TestResolveTenantFromKeyDB_UnknownKey(t *testing.T) {
 func TestResolveTenantFromKeyDB_DBFailure(t *testing.T) {
 	dbErr := fmt.Errorf("connection refused")
 	q := &mockKeyQuerier{
-		getKeyFn: func(ctx context.Context, keyHash string) (db.IngestKey, error) {
+		getKeyFn: func(ctx context.Context, arg db.GetIngestKeyByHashParams) (db.IngestKey, error) {
 			return db.IngestKey{}, dbErr
 		},
 	}
-	_, err := ResolveTenantFromKeyDB(context.Background(), q, "some-key")
+	_, err := ResolveTenantFromKeyDB(context.Background(), q, "some-key", testOwnerID)
 	if err == nil {
 		t.Fatal("expected error for DB failure")
 	}
@@ -116,15 +120,15 @@ func TestResolveTenantFromKeyDB_DBFailure(t *testing.T) {
 
 func TestResolveTenantFromKeyDB_ValidKey(t *testing.T) {
 	q := &mockKeyQuerier{
-		getKeyFn: func(ctx context.Context, keyHash string) (db.IngestKey, error) {
+		getKeyFn: func(ctx context.Context, arg db.GetIngestKeyByHashParams) (db.IngestKey, error) {
 			expected := HashIngestKey("valid-key")
-			if keyHash != expected {
-				t.Fatalf("wrong hash passed to DB: got %q, want %q", keyHash, expected)
+			if arg.KeyHash != expected {
+				t.Fatalf("wrong hash passed to DB: got %q, want %q", arg.KeyHash, expected)
 			}
 			return db.IngestKey{Tenant: "personal", Label: "test"}, nil
 		},
 	}
-	tenant, err := ResolveTenantFromKeyDB(context.Background(), q, "valid-key")
+	tenant, err := ResolveTenantFromKeyDB(context.Background(), q, "valid-key", testOwnerID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -135,11 +139,11 @@ func TestResolveTenantFromKeyDB_ValidKey(t *testing.T) {
 
 func TestResolveTenantFromKeyDB_DayjobKey(t *testing.T) {
 	q := &mockKeyQuerier{
-		getKeyFn: func(ctx context.Context, keyHash string) (db.IngestKey, error) {
+		getKeyFn: func(ctx context.Context, arg db.GetIngestKeyByHashParams) (db.IngestKey, error) {
 			return db.IngestKey{Tenant: "dayjob", Label: "work-laptop"}, nil
 		},
 	}
-	tenant, err := ResolveTenantFromKeyDB(context.Background(), q, "dayjob-key")
+	tenant, err := ResolveTenantFromKeyDB(context.Background(), q, "dayjob-key", testOwnerID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -154,7 +158,7 @@ func TestResolveTenantFromKeyDB_DayjobKey(t *testing.T) {
 
 func TestMintIngestKey_EmptyKey(t *testing.T) {
 	q := &mockKeyQuerier{}
-	_, _, err := MintIngestKey(context.Background(), q, "", "personal", "label")
+	_, _, err := MintIngestKey(context.Background(), q, "", "personal", "label", testOwnerID)
 	if err == nil {
 		t.Fatal("expected error for empty key")
 	}
@@ -162,7 +166,7 @@ func TestMintIngestKey_EmptyKey(t *testing.T) {
 
 func TestMintIngestKey_EmptyTenant(t *testing.T) {
 	q := &mockKeyQuerier{}
-	_, _, err := MintIngestKey(context.Background(), q, "key", "", "label")
+	_, _, err := MintIngestKey(context.Background(), q, "key", "", "label", testOwnerID)
 	if err == nil {
 		t.Fatal("expected error for empty tenant")
 	}
@@ -184,7 +188,7 @@ func TestMintIngestKey_Success(t *testing.T) {
 			return db.IngestKey{ID: 1, KeyHash: arg.KeyHash, Tenant: arg.Tenant, Label: arg.Label}, nil
 		},
 	}
-	key, raw, err := MintIngestKey(context.Background(), q, "raw-key", "personal", "my-laptop")
+	key, raw, err := MintIngestKey(context.Background(), q, "raw-key", "personal", "my-laptop", testOwnerID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

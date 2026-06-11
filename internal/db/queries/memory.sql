@@ -1,12 +1,12 @@
 -- name: ListMemoryIndex :many
-SELECT * FROM memory_index ORDER BY last_indexed DESC;
+SELECT * FROM memory_index WHERE owner_id = $1 ORDER BY last_indexed DESC;
 
 -- name: GetMemoryByPath :one
-SELECT * FROM memory_index WHERE file_path = $1;
+SELECT * FROM memory_index WHERE file_path = $1 AND owner_id = $2;
 
 -- name: UpsertMemory :one
-INSERT INTO memory_index (file_path, title, content, tags, project_id)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO memory_index (owner_id, file_path, title, content, tags, project_id)
+VALUES ($1, $2, $3, $4, $5, $6)
 ON CONFLICT (file_path) DO UPDATE SET
     title = EXCLUDED.title,
     content = EXCLUDED.content,
@@ -17,10 +17,11 @@ RETURNING *;
 
 -- name: SearchMemory :many
 SELECT * FROM memory_index
-WHERE to_tsvector('english', coalesce(content, '')) @@ websearch_to_tsquery('english', $1)
-  AND (project_id = $3 OR $3 IS NULL)
-ORDER BY ts_rank(to_tsvector('english', coalesce(content, '')), websearch_to_tsquery('english', $1)) DESC
-LIMIT $2;
+WHERE owner_id = $1
+  AND to_tsvector('english', coalesce(content, '')) @@ websearch_to_tsquery('english', $2)
+  AND (project_id = $4 OR $4 IS NULL)
+ORDER BY ts_rank(to_tsvector('english', coalesce(content, '')), websearch_to_tsquery('english', $2)) DESC
+LIMIT $3;
 
 -- name: DeleteMemory :exec
-DELETE FROM memory_index WHERE file_path = $1;
+DELETE FROM memory_index WHERE file_path = $1 AND owner_id = $2;

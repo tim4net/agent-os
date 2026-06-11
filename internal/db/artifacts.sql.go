@@ -12,23 +12,29 @@ import (
 )
 
 const countArtifacts = `-- name: CountArtifacts :one
-SELECT COUNT(*) FROM artifacts WHERE ($1::text IS NULL OR $1::text = '' OR type = $1)
+SELECT COUNT(*) FROM artifacts WHERE owner_id = $1 AND ($2::text IS NULL OR $2::text = '' OR type = $2)
 `
 
-func (q *Queries) CountArtifacts(ctx context.Context, dollar_1 string) (int64, error) {
-	row := q.db.QueryRow(ctx, countArtifacts, dollar_1)
+type CountArtifactsParams struct {
+	OwnerID pgtype.UUID `json:"owner_id"`
+	Column2 string      `json:"column_2"`
+}
+
+func (q *Queries) CountArtifacts(ctx context.Context, arg CountArtifactsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countArtifacts, arg.OwnerID, arg.Column2)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
 }
 
 const createArtifact = `-- name: CreateArtifact :one
-INSERT INTO artifacts (agent_id, type, title, description, file_path, mime_type, metadata)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO artifacts (owner_id, agent_id, type, title, description, file_path, mime_type, metadata)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 RETURNING id, agent_id, type, title, description, file_path, mime_type, metadata, created_at, owner_id
 `
 
 type CreateArtifactParams struct {
+	OwnerID     pgtype.UUID `json:"owner_id"`
 	AgentID     pgtype.UUID `json:"agent_id"`
 	Type        string      `json:"type"`
 	Title       pgtype.Text `json:"title"`
@@ -40,6 +46,7 @@ type CreateArtifactParams struct {
 
 func (q *Queries) CreateArtifact(ctx context.Context, arg CreateArtifactParams) (Artifact, error) {
 	row := q.db.QueryRow(ctx, createArtifact,
+		arg.OwnerID,
 		arg.AgentID,
 		arg.Type,
 		arg.Title,
@@ -65,20 +72,30 @@ func (q *Queries) CreateArtifact(ctx context.Context, arg CreateArtifactParams) 
 }
 
 const deleteArtifact = `-- name: DeleteArtifact :exec
-DELETE FROM artifacts WHERE id = $1
+DELETE FROM artifacts WHERE id = $1 AND owner_id = $2
 `
 
-func (q *Queries) DeleteArtifact(ctx context.Context, id pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteArtifact, id)
+type DeleteArtifactParams struct {
+	ID      pgtype.UUID `json:"id"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) DeleteArtifact(ctx context.Context, arg DeleteArtifactParams) error {
+	_, err := q.db.Exec(ctx, deleteArtifact, arg.ID, arg.OwnerID)
 	return err
 }
 
 const getArtifact = `-- name: GetArtifact :one
-SELECT id, agent_id, type, title, description, file_path, mime_type, metadata, created_at, owner_id FROM artifacts WHERE id = $1
+SELECT id, agent_id, type, title, description, file_path, mime_type, metadata, created_at, owner_id FROM artifacts WHERE id = $1 AND owner_id = $2
 `
 
-func (q *Queries) GetArtifact(ctx context.Context, id pgtype.UUID) (Artifact, error) {
-	row := q.db.QueryRow(ctx, getArtifact, id)
+type GetArtifactParams struct {
+	ID      pgtype.UUID `json:"id"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) GetArtifact(ctx context.Context, arg GetArtifactParams) (Artifact, error) {
+	row := q.db.QueryRow(ctx, getArtifact, arg.ID, arg.OwnerID)
 	var i Artifact
 	err := row.Scan(
 		&i.ID,
@@ -96,11 +113,16 @@ func (q *Queries) GetArtifact(ctx context.Context, id pgtype.UUID) (Artifact, er
 }
 
 const getArtifactByPath = `-- name: GetArtifactByPath :one
-SELECT id, agent_id, type, title, description, file_path, mime_type, metadata, created_at, owner_id FROM artifacts WHERE file_path = $1
+SELECT id, agent_id, type, title, description, file_path, mime_type, metadata, created_at, owner_id FROM artifacts WHERE file_path = $1 AND owner_id = $2
 `
 
-func (q *Queries) GetArtifactByPath(ctx context.Context, filePath pgtype.Text) (Artifact, error) {
-	row := q.db.QueryRow(ctx, getArtifactByPath, filePath)
+type GetArtifactByPathParams struct {
+	FilePath pgtype.Text `json:"file_path"`
+	OwnerID  pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) GetArtifactByPath(ctx context.Context, arg GetArtifactByPathParams) (Artifact, error) {
+	row := q.db.QueryRow(ctx, getArtifactByPath, arg.FilePath, arg.OwnerID)
 	var i Artifact
 	err := row.Scan(
 		&i.ID,
@@ -119,23 +141,26 @@ func (q *Queries) GetArtifactByPath(ctx context.Context, filePath pgtype.Text) (
 
 const listArtifacts = `-- name: ListArtifacts :many
 SELECT id, agent_id, type, title, description, file_path, mime_type, metadata, created_at, owner_id FROM artifacts
-WHERE ($1::text IS NULL OR $1::text = '' OR type = $1)
-  AND ($2::uuid IS NULL OR agent_id = $2)
+WHERE owner_id = $1
+  AND ($2::text IS NULL OR $2::text = '' OR type = $2)
+  AND ($3::uuid IS NULL OR agent_id = $3)
 ORDER BY created_at DESC
-LIMIT $3 OFFSET $4
+LIMIT $4 OFFSET $5
 `
 
 type ListArtifactsParams struct {
-	Column1 string      `json:"column_1"`
-	Column2 pgtype.UUID `json:"column_2"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+	Column2 string      `json:"column_2"`
+	Column3 pgtype.UUID `json:"column_3"`
 	Limit   int32       `json:"limit"`
 	Offset  int32       `json:"offset"`
 }
 
 func (q *Queries) ListArtifacts(ctx context.Context, arg ListArtifactsParams) ([]Artifact, error) {
 	rows, err := q.db.Query(ctx, listArtifacts,
-		arg.Column1,
+		arg.OwnerID,
 		arg.Column2,
+		arg.Column3,
 		arg.Limit,
 		arg.Offset,
 	)

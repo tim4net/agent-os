@@ -57,6 +57,12 @@ func (a *API) HostLivenessRoutes() http.Handler {
 // PostHostLiveness handles POST /api/host/liveness.
 // Receives a liveness report from a host-reporter agent and upserts it.
 func (a *API) PostHostLiveness(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized: no owner identity")
+		return
+	}
+
 	var req LivenessReportRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
@@ -79,6 +85,7 @@ func (a *API) PostHostLiveness(w http.ResponseWriter, r *http.Request) {
 	}
 
 	record, err := a.queries.UpsertHostLiveness(r.Context(), db.UpsertHostLivenessParams{
+		OwnerID:   ownerID,
 		Host:      req.Host,
 		Pid:       req.PID,
 		SessionID: req.SessionID,
@@ -99,6 +106,12 @@ func (a *API) PostHostLiveness(w http.ResponseWriter, r *http.Request) {
 // ListHostLiveness handles GET /api/host/liveness?tenant=...&limit=50&offset=0
 // Lists host-liveness records, scoped to tenant. Tenant is optional — empty returns all.
 func (a *API) ListHostLiveness(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized: no owner identity")
+		return
+	}
+
 	tenant := r.URL.Query().Get("tenant")
 
 	limit := 50
@@ -121,9 +134,10 @@ func (a *API) ListHostLiveness(w http.ResponseWriter, r *http.Request) {
 	}
 
 	records, err := a.queries.ListHostLiveness(r.Context(), db.ListHostLivenessParams{
-		Tenant: tenant,
-		Lim:    int32(limit),
-		Off:    int32(offset),
+		Tenant:  tenant,
+		OwnerID: ownerID,
+		Lim:     int32(limit),
+		Off:     int32(offset),
 	})
 	if err != nil {
 		slog.Default().Error("host_liveness: list failed", "error", err)
@@ -131,7 +145,7 @@ func (a *API) ListHostLiveness(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	total, err := a.queries.CountHostLiveness(r.Context(), tenant)
+	total, err := a.queries.CountHostLiveness(r.Context(), db.CountHostLivenessParams{Tenant: tenant, OwnerID: ownerID})
 	if err != nil {
 		slog.Default().Error("host_liveness: count failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to count liveness records")

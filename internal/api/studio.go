@@ -283,6 +283,12 @@ func (s *StudioAPI) Generate(w http.ResponseWriter, r *http.Request) {
 
 // ListGenerations handles GET /api/studio/generations?type=image&limit=20&offset=0
 func (s *StudioAPI) ListGenerations(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	genType := r.URL.Query().Get("type")
 	if genType == "" {
 		genType = "image"
@@ -305,8 +311,9 @@ func (s *StudioAPI) ListGenerations(w http.ResponseWriter, r *http.Request) {
 	}
 
 	artifacts, err := s.queries.ListArtifacts(r.Context(), db.ListArtifactsParams{
-		Column1: genType,
-		Column2: pgtype.UUID{Valid: false},
+		OwnerID: ownerID,
+		Column2: genType,
+		Column3: pgtype.UUID{Valid: false},
 		Limit:   limit,
 		Offset:  offset,
 	})

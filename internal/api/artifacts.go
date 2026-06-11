@@ -93,6 +93,11 @@ func NewArtifactAPI(queries *db.Queries, artifactsPath string) *ArtifactAPI {
 // ListArtifacts handles GET /api/artifacts?type=image&agent_id=uuid&limit=20&offset=0
 func (aa *ArtifactAPI) ListArtifacts(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	ownerID, ok := OwnerIDFromContext(ctx)
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
 
 	artifactType := r.URL.Query().Get("type")
 	if artifactType == "" {
@@ -124,8 +129,9 @@ func (aa *ArtifactAPI) ListArtifacts(w http.ResponseWriter, r *http.Request) {
 	}
 
 	artifacts, err := aa.queries.ListArtifacts(ctx, db.ListArtifactsParams{
-		Column1: artifactType,
-		Column2: agentID,
+		OwnerID: ownerID,
+		Column2: artifactType,
+		Column3: agentID,
 		Limit:   limit,
 		Offset:  offset,
 	})
@@ -161,6 +167,12 @@ func (aa *ArtifactAPI) ListArtifacts(w http.ResponseWriter, r *http.Request) {
 
 // GetArtifact handles GET /api/artifacts/:id
 func (aa *ArtifactAPI) GetArtifact(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	idStr := chi.URLParam(r, "id")
 
 	var id pgtype.UUID
@@ -169,7 +181,7 @@ func (aa *ArtifactAPI) GetArtifact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	artifact, err := aa.queries.GetArtifact(r.Context(), id)
+	artifact, err := aa.queries.GetArtifact(r.Context(), db.GetArtifactParams{ID: id, OwnerID: ownerID})
 	if err != nil {
 		http.Error(w, "artifact not found", http.StatusNotFound)
 		return
@@ -191,6 +203,12 @@ func (aa *ArtifactAPI) GetArtifact(w http.ResponseWriter, r *http.Request) {
 
 // GetArtifactFile handles GET /api/artifacts/:id/file — serves the actual file from disk.
 func (aa *ArtifactAPI) GetArtifactFile(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	idStr := chi.URLParam(r, "id")
 
 	var id pgtype.UUID
@@ -199,7 +217,7 @@ func (aa *ArtifactAPI) GetArtifactFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	artifact, err := aa.queries.GetArtifact(r.Context(), id)
+	artifact, err := aa.queries.GetArtifact(r.Context(), db.GetArtifactParams{ID: id, OwnerID: ownerID})
 	if err != nil {
 		http.Error(w, "artifact not found", http.StatusNotFound)
 		return
@@ -257,6 +275,11 @@ func (aa *ArtifactAPI) GetArtifactFile(w http.ResponseWriter, r *http.Request) {
 // UploadArtifact handles POST /api/artifacts — multipart form upload.
 func (aa *ArtifactAPI) UploadArtifact(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	ownerID, ok := OwnerIDFromContext(ctx)
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
 
 	// Parse multipart form (max 100MB)
 	if err := r.ParseMultipartForm(100 << 20); err != nil {
@@ -319,6 +342,7 @@ func (aa *ArtifactAPI) UploadArtifact(w http.ResponseWriter, r *http.Request) {
 
 	// Create DB record
 	artifact, err := aa.queries.CreateArtifact(ctx, db.CreateArtifactParams{
+		OwnerID:     ownerID,
 		AgentID:     agentID,
 		Type:        artifactType,
 		Title:       pgtype.Text{String: title, Valid: title != ""},
@@ -342,6 +366,11 @@ func (aa *ArtifactAPI) UploadArtifact(w http.ResponseWriter, r *http.Request) {
 // DeleteArtifact handles DELETE /api/artifacts/:id
 func (aa *ArtifactAPI) DeleteArtifact(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	ownerID, ok := OwnerIDFromContext(ctx)
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
 	idStr := chi.URLParam(r, "id")
 
 	var id pgtype.UUID
@@ -351,14 +380,14 @@ func (aa *ArtifactAPI) DeleteArtifact(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get the artifact first so we can delete the file
-	artifact, err := aa.queries.GetArtifact(ctx, id)
+	artifact, err := aa.queries.GetArtifact(ctx, db.GetArtifactParams{ID: id, OwnerID: ownerID})
 	if err != nil {
 		http.Error(w, "artifact not found", http.StatusNotFound)
 		return
 	}
 
 	// Delete DB record
-	if err := aa.queries.DeleteArtifact(ctx, id); err != nil {
+	if err := aa.queries.DeleteArtifact(ctx, db.DeleteArtifactParams{ID: id, OwnerID: ownerID}); err != nil {
 		http.Error(w, "failed to delete artifact", http.StatusInternalServerError)
 		return
 	}
@@ -389,6 +418,12 @@ func (aa *ArtifactAPI) ArtifactRoutes() http.Handler {
 
 // ExportArtifact handles POST /api/artifacts/:id/export — exports artifact as a markdown note to the Obsidian vault.
 func (a *API) ExportArtifact(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	idStr := chi.URLParam(r, "id")
 
 	var id pgtype.UUID
@@ -397,7 +432,7 @@ func (a *API) ExportArtifact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	artifact, err := a.artifacts.queries.GetArtifact(r.Context(), id)
+	artifact, err := a.artifacts.queries.GetArtifact(r.Context(), db.GetArtifactParams{ID: id, OwnerID: ownerID})
 	if err != nil {
 		http.Error(w, "artifact not found", http.StatusNotFound)
 		return

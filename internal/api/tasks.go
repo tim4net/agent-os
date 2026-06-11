@@ -35,6 +35,12 @@ func (a *API) TaskRoutes() http.Handler {
 
 // ListTasks handles GET /api/tasks?status=&agent_id=&priority=
 func (a *API) ListTasks(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	statusFilter := r.URL.Query().Get("status")
 	agentIDStr := r.URL.Query().Get("agent_id")
 	priorityStr := r.URL.Query().Get("priority")
@@ -53,8 +59,9 @@ func (a *API) ListTasks(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tasks, err := a.queries.ListTasks(r.Context(), db.ListTasksParams{
-		Column1: statusParam.String,
-		Column2: agentIDParam,
+		OwnerID: ownerID,
+		Column2: statusParam.String,
+		Column3: agentIDParam,
 	})
 	if err != nil {
 		http.Error(w, "failed to list tasks: "+err.Error(), http.StatusInternalServerError)
@@ -87,6 +94,12 @@ func (a *API) ListTasks(w http.ResponseWriter, r *http.Request) {
 
 // GetTask handles GET /api/tasks/{id}
 func (a *API) GetTask(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	idStr := chi.URLParam(r, "id")
 
 	var id pgtype.UUID
@@ -95,7 +108,7 @@ func (a *API) GetTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	task, err := a.queries.GetTask(r.Context(), id)
+	task, err := a.queries.GetTask(r.Context(), db.GetTaskParams{ID: id, OwnerID: ownerID})
 	if err != nil {
 		http.Error(w, "task not found", http.StatusNotFound)
 		return
@@ -117,6 +130,12 @@ type CreateTaskRequest struct {
 
 // CreateTask handles POST /api/tasks
 func (a *API) CreateTask(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	var req CreateTaskRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -154,6 +173,7 @@ func (a *API) CreateTask(w http.ResponseWriter, r *http.Request) {
 	metadataJSON, _ := json.Marshal(metadata)
 
 	task, err := a.queries.CreateTask(r.Context(), db.CreateTaskParams{
+		OwnerID:     ownerID,
 		AgentID:     agentID,
 		Title:       req.Title,
 		Description: pgtypeText(req.Description),
@@ -183,6 +203,12 @@ type UpdateTaskRequest struct {
 
 // UpdateTask handles PUT /api/tasks/{id}
 func (a *API) UpdateTask(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	idStr := chi.URLParam(r, "id")
 
 	var id pgtype.UUID
@@ -198,7 +224,7 @@ func (a *API) UpdateTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get existing task to preserve fields not being updated
-	existing, err := a.queries.GetTask(r.Context(), id)
+	existing, err := a.queries.GetTask(r.Context(), db.GetTaskParams{ID: id, OwnerID: ownerID})
 	if err != nil {
 		http.Error(w, "task not found", http.StatusNotFound)
 		return
@@ -243,6 +269,7 @@ func (a *API) UpdateTask(w http.ResponseWriter, r *http.Request) {
 
 	task, err := a.queries.UpdateTask(r.Context(), db.UpdateTaskParams{
 		ID:          id,
+		OwnerID:     ownerID,
 		Title:       title,
 		Description: pgtypeText(description),
 		Status:      status,
@@ -260,6 +287,12 @@ func (a *API) UpdateTask(w http.ResponseWriter, r *http.Request) {
 
 // DeleteTask handles DELETE /api/tasks/{id}
 func (a *API) DeleteTask(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	idStr := chi.URLParam(r, "id")
 
 	var id pgtype.UUID
@@ -268,7 +301,7 @@ func (a *API) DeleteTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := a.queries.DeleteTask(r.Context(), id); err != nil {
+	if err := a.queries.DeleteTask(r.Context(), db.DeleteTaskParams{ID: id, OwnerID: ownerID}); err != nil {
 		http.Error(w, "failed to delete task", http.StatusInternalServerError)
 		return
 	}
@@ -290,6 +323,12 @@ type ReorderTaskItem struct {
 
 // ReorderTasks handles POST /api/tasks/reorder
 func (a *API) ReorderTasks(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	var req ReorderTasksRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -310,7 +349,7 @@ func (a *API) ReorderTasks(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Get existing task to preserve title and description
-		existing, err := a.queries.GetTask(r.Context(), id)
+		existing, err := a.queries.GetTask(r.Context(), db.GetTaskParams{ID: id, OwnerID: ownerID})
 		if err != nil {
 			http.Error(w, "task not found: "+item.ID, http.StatusNotFound)
 			return
@@ -318,6 +357,7 @@ func (a *API) ReorderTasks(w http.ResponseWriter, r *http.Request) {
 
 		task, err := a.queries.UpdateTask(r.Context(), db.UpdateTaskParams{
 			ID:          id,
+			OwnerID:     ownerID,
 			Title:       existing.Title,
 			Description: existing.Description,
 			Status:      item.Status,
@@ -342,6 +382,12 @@ func (a *API) ReorderTasks(w http.ResponseWriter, r *http.Request) {
 // BreakdownTask handles POST /api/tasks/{id}/breakdown
 // Sends the task to LiteLLM to break it into 3-8 subtasks.
 func (a *API) BreakdownTask(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	// Use a detached context with generous timeout — the local LLM can be slow
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
@@ -354,7 +400,7 @@ func (a *API) BreakdownTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	task, err := a.queries.GetTask(ctx, id)
+	task, err := a.queries.GetTask(ctx, db.GetTaskParams{ID: id, OwnerID: ownerID})
 	if err != nil {
 		http.Error(w, "task not found", http.StatusNotFound)
 		return

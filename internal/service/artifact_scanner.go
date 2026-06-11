@@ -83,7 +83,10 @@ func (s *ArtifactScanner) scan(ctx context.Context) {
 		}
 
 		// Check if already in DB
-		_, err = s.queries.GetArtifactByPath(ctx, pgtype.Text{String: relPath, Valid: true})
+		_, err = s.queries.GetArtifactByPath(ctx, db.GetArtifactByPathParams{
+			OwnerID:  pgtype.UUID{},
+			FilePath: pgtype.Text{String: relPath, Valid: true},
+		})
 		if err == nil {
 			// Already exists, skip
 			return nil
@@ -97,6 +100,7 @@ func (s *ArtifactScanner) scan(ctx context.Context) {
 		title := strings.TrimSuffix(filename, filepath.Ext(filename))
 
 		artifact, err := s.queries.CreateArtifact(ctx, db.CreateArtifactParams{
+			OwnerID:     pgtype.UUID{},
 			AgentID:     pgtype.UUID{Valid: false},
 			Type:        artifactType,
 			Title:       pgtype.Text{String: title, Valid: true},

@@ -74,7 +74,13 @@ func workflowToResponse(wf db.Workflow) (workflowResponse, error) {
 
 // ListWorkflows handles GET /api/workflows
 func (a *API) ListWorkflows(w http.ResponseWriter, r *http.Request) {
-	workflows, err := a.queries.ListWorkflows(r.Context())
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
+	workflows, err := a.queries.ListWorkflows(r.Context(), ownerID)
 	if err != nil {
 		http.Error(w, "failed to list workflows: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -100,6 +106,12 @@ func (a *API) ListWorkflows(w http.ResponseWriter, r *http.Request) {
 
 // GetWorkflow handles GET /api/workflows/{id}
 func (a *API) GetWorkflow(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	idStr := chi.URLParam(r, "id")
 
 	var id pgtype.UUID
@@ -108,7 +120,7 @@ func (a *API) GetWorkflow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	workflow, err := a.queries.GetWorkflow(r.Context(), id)
+	workflow, err := a.queries.GetWorkflow(r.Context(), db.GetWorkflowParams{ID: id, OwnerID: ownerID})
 	if err != nil {
 		http.Error(w, "workflow not found", http.StatusNotFound)
 		return
@@ -140,6 +152,12 @@ type WorkflowStep struct {
 
 // CreateWorkflow handles POST /api/workflows
 func (a *API) CreateWorkflow(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	var req CreateWorkflowRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -165,6 +183,7 @@ func (a *API) CreateWorkflow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	workflow, err := a.queries.CreateWorkflow(r.Context(), db.CreateWorkflowParams{
+		OwnerID:     ownerID,
 		Name:        req.Name,
 		Description: pgtypeText(req.Description),
 		Steps:       stepsJSON,
@@ -196,6 +215,12 @@ type UpdateWorkflowRequest struct {
 
 // UpdateWorkflow handles PATCH /api/workflows/{id}
 func (a *API) UpdateWorkflow(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	idStr := chi.URLParam(r, "id")
 
 	var id pgtype.UUID
@@ -204,7 +229,7 @@ func (a *API) UpdateWorkflow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	existing, err := a.queries.GetWorkflow(r.Context(), id)
+	existing, err := a.queries.GetWorkflow(r.Context(), db.GetWorkflowParams{ID: id, OwnerID: ownerID})
 	if err != nil {
 		http.Error(w, "workflow not found", http.StatusNotFound)
 		return
@@ -243,6 +268,7 @@ func (a *API) UpdateWorkflow(w http.ResponseWriter, r *http.Request) {
 
 	workflow, err := a.queries.UpdateWorkflow(r.Context(), db.UpdateWorkflowParams{
 		ID:          id,
+		OwnerID:     ownerID,
 		Name:        name,
 		Description: description,
 		Steps:       stepsJSON,
@@ -265,6 +291,12 @@ func (a *API) UpdateWorkflow(w http.ResponseWriter, r *http.Request) {
 
 // DeleteWorkflow handles DELETE /api/workflows/{id}
 func (a *API) DeleteWorkflow(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	idStr := chi.URLParam(r, "id")
 
 	var id pgtype.UUID
@@ -273,7 +305,7 @@ func (a *API) DeleteWorkflow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := a.queries.DeleteWorkflow(r.Context(), id); err != nil {
+	if err := a.queries.DeleteWorkflow(r.Context(), db.DeleteWorkflowParams{ID: id, OwnerID: ownerID}); err != nil {
 		http.Error(w, "failed to delete workflow", http.StatusInternalServerError)
 		return
 	}
@@ -284,6 +316,12 @@ func (a *API) DeleteWorkflow(w http.ResponseWriter, r *http.Request) {
 // RunWorkflow handles POST /api/workflows/{id}/run
 // Executes each step sequentially through LiteLLM.
 func (a *API) RunWorkflow(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	// Use a detached context with generous timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
 	defer cancel()
@@ -296,7 +334,7 @@ func (a *API) RunWorkflow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	workflow, err := a.queries.GetWorkflow(ctx, id)
+	workflow, err := a.queries.GetWorkflow(ctx, db.GetWorkflowParams{ID: id, OwnerID: ownerID})
 	if err != nil {
 		http.Error(w, "workflow not found", http.StatusNotFound)
 		return
@@ -316,6 +354,7 @@ func (a *API) RunWorkflow(w http.ResponseWriter, r *http.Request) {
 
 	// Create a workflow run
 	run, err := a.queries.CreateWorkflowRun(ctx, db.CreateWorkflowRunParams{
+		OwnerID:     ownerID,
 		WorkflowID:  id,
 		Status:      pgtype.Text{String: "running", Valid: true},
 		CurrentStep: pgtype.Int4{Int32: 0, Valid: true},
@@ -372,6 +411,7 @@ func (a *API) RunWorkflow(w http.ResponseWriter, r *http.Request) {
 			// Mark run as failed
 			a.queries.UpdateWorkflowRun(ctx, db.UpdateWorkflowRunParams{
 				ID:          run.ID,
+				OwnerID:     ownerID,
 				Status:      pgtype.Text{String: "failed", Valid: true},
 				CurrentStep: pgtype.Int4{Int32: int32(i), Valid: true},
 				Result:      []byte(`{"error":"` + err.Error() + `"}`),
@@ -385,6 +425,7 @@ func (a *API) RunWorkflow(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			a.queries.UpdateWorkflowRun(ctx, db.UpdateWorkflowRunParams{
 				ID:          run.ID,
+				OwnerID:     ownerID,
 				Status:      pgtype.Text{String: "failed", Valid: true},
 				CurrentStep: pgtype.Int4{Int32: int32(i), Valid: true},
 				Result:      []byte(`{"error":"` + err.Error() + `"}`),
@@ -398,6 +439,7 @@ func (a *API) RunWorkflow(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			a.queries.UpdateWorkflowRun(ctx, db.UpdateWorkflowRunParams{
 				ID:          run.ID,
+				OwnerID:     ownerID,
 				Status:      pgtype.Text{String: "failed", Valid: true},
 				CurrentStep: pgtype.Int4{Int32: int32(i), Valid: true},
 				Result:      []byte(`{"error":"failed to read LLM response"}`),
@@ -411,6 +453,7 @@ func (a *API) RunWorkflow(w http.ResponseWriter, r *http.Request) {
 			log.Printf("workflow run: LiteLLM returned status %d: %s", resp.StatusCode, string(respBody[:min(len(respBody), 200)]))
 			a.queries.UpdateWorkflowRun(ctx, db.UpdateWorkflowRunParams{
 				ID:          run.ID,
+				OwnerID:     ownerID,
 				Status:      pgtype.Text{String: "failed", Valid: true},
 				CurrentStep: pgtype.Int4{Int32: int32(i), Valid: true},
 				Result:      []byte(fmt.Sprintf(`{"error":"LiteLLM returned status %d: %s"}`, resp.StatusCode, string(respBody[:min(len(respBody), 100)]))),
@@ -424,6 +467,7 @@ func (a *API) RunWorkflow(w http.ResponseWriter, r *http.Request) {
 			log.Printf("workflow run: failed to parse LLM response (err=%v, body=%s)", err, string(respBody[:min(len(respBody), 300)]))
 			a.queries.UpdateWorkflowRun(ctx, db.UpdateWorkflowRunParams{
 				ID:          run.ID,
+				OwnerID:     ownerID,
 				Status:      pgtype.Text{String: "failed", Valid: true},
 				CurrentStep: pgtype.Int4{Int32: int32(i), Valid: true},
 				Result:      []byte(`{"error":"failed to parse LLM response"}`),
@@ -445,6 +489,7 @@ func (a *API) RunWorkflow(w http.ResponseWriter, r *http.Request) {
 		})
 		a.queries.UpdateWorkflowRun(ctx, db.UpdateWorkflowRunParams{
 			ID:          run.ID,
+			OwnerID:     ownerID,
 			Status:      pgtype.Text{String: "running", Valid: true},
 			CurrentStep: pgtype.Int4{Int32: int32(i + 1), Valid: true},
 			Result:      resultJSON,
@@ -458,6 +503,7 @@ func (a *API) RunWorkflow(w http.ResponseWriter, r *http.Request) {
 	})
 	run, err = a.queries.UpdateWorkflowRun(ctx, db.UpdateWorkflowRunParams{
 		ID:          run.ID,
+		OwnerID:     ownerID,
 		Status:      pgtype.Text{String: "completed", Valid: true},
 		CurrentStep: pgtype.Int4{Int32: int32(len(steps)), Valid: true},
 		Result:      finalResult,

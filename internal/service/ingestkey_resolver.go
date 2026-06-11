@@ -8,6 +8,7 @@ import (
 	"log/slog"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/tim4net/agent-os/internal/db"
 )
 
@@ -15,7 +16,7 @@ import (
 // Using a narrow interface keeps the resolver testable without mocking the full
 // Querier surface.
 type IngestKeyQuerier interface {
-	GetIngestKeyByHash(ctx context.Context, keyHash string) (db.IngestKey, error)
+	GetIngestKeyByHash(ctx context.Context, arg db.GetIngestKeyByHashParams) (db.IngestKey, error)
 	CreateIngestKey(ctx context.Context, arg db.CreateIngestKeyParams) (db.IngestKey, error)
 }
 
@@ -40,12 +41,12 @@ var ErrInvalidIngestKey = errors.New("invalid ingest key")
 // unknown, or revoked.
 //
 // This replaces the old env-backed ResolveTenantFromKey placeholder.
-func ResolveTenantFromKeyDB(ctx context.Context, querier IngestKeyQuerier, rawKey string) (string, error) {
+func ResolveTenantFromKeyDB(ctx context.Context, querier IngestKeyQuerier, rawKey string, ownerID pgtype.UUID) (string, error) {
 	if rawKey == "" {
 		return "", fmt.Errorf("%w: missing ingest key", ErrInvalidIngestKey)
 	}
 	keyHash := HashIngestKey(rawKey)
-	row, err := querier.GetIngestKeyByHash(ctx, keyHash)
+	row, err := querier.GetIngestKeyByHash(ctx, db.GetIngestKeyByHashParams{KeyHash: keyHash, OwnerID: ownerID})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			slog.Default().Warn("ingest key not found (unknown or revoked)", "key_hash_prefix", keyHash[:8])
@@ -59,7 +60,7 @@ func ResolveTenantFromKeyDB(ctx context.Context, querier IngestKeyQuerier, rawKe
 // MintIngestKey creates a new ingest key in the database. It hashes the raw
 // key, inserts the hashed record, and returns the created row. The raw key
 // is returned to the caller exactly once (this function) — it is never stored.
-func MintIngestKey(ctx context.Context, querier IngestKeyQuerier, rawKey, tenant, label string) (db.IngestKey, string, error) {
+func MintIngestKey(ctx context.Context, querier IngestKeyQuerier, rawKey, tenant, label string, ownerID pgtype.UUID) (db.IngestKey, string, error) {
 	if rawKey == "" {
 		return db.IngestKey{}, "", fmt.Errorf("raw key must not be empty")
 	}
@@ -68,6 +69,7 @@ func MintIngestKey(ctx context.Context, querier IngestKeyQuerier, rawKey, tenant
 	}
 	keyHash := HashIngestKey(rawKey)
 	created, err := querier.CreateIngestKey(ctx, db.CreateIngestKeyParams{
+		OwnerID: ownerID,
 		KeyHash: keyHash,
 		Tenant:  tenant,
 		Label:   label,
