@@ -49,7 +49,7 @@ func (a *API) generateSummary(ctx context.Context, conversationText string) (str
 			},
 		},
 		"stream":     false,
-		"max_tokens": 40,
+		"max_tokens": 4096,
 	}
 
 	jsonBody, err := json.Marshal(body)
@@ -57,7 +57,7 @@ func (a *API) generateSummary(ctx context.Context, conversationText string) (str
 		return "", fmt.Errorf("marshal summary request: %w", err)
 	}
 
-	reqCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	reqCtx, cancel := context.WithTimeout(ctx, 180*time.Second)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, url, bytes.NewReader(jsonBody))
@@ -86,8 +86,10 @@ func (a *API) generateSummary(ctx context.Context, conversationText string) (str
 	var result struct {
 		Choices []struct {
 			Message struct {
-				Content string `json:"content"`
+				Content            string `json:"content"`
+				ReasoningContent   string `json:"reasoning_content"`
 			} `json:"message"`
+			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
 	}
 
@@ -100,6 +102,13 @@ func (a *API) generateSummary(ctx context.Context, conversationText string) (str
 	}
 
 	summary := strings.TrimSpace(result.Choices[0].Message.Content)
+
+	// Thinking models (e.g. Qwen 3.6) may consume all output tokens on
+	// chain-of-thought reasoning, leaving `content` empty. Fall back to
+	// parsing the reasoning_content for a candidate summary line.
+	if summary == "" && result.Choices[0].FinishReason == "length" {
+		summary = extractSummaryFromThinking(result.Choices[0].Message.ReasoningContent)
+	}
 	// Strip any surrounding quotes, then re-trim in case the quotes wrapped
 	// padding whitespace (e.g. `" hi "`).
 	summary = strings.TrimSpace(strings.Trim(summary, "\"'\u201c\u201d"))
@@ -119,4 +128,29 @@ func (a *API) generateSummary(ctx context.Context, conversationText string) (str
 	}
 
 	return summary, nil
+}
+
+// extractSummaryFromThinking attempts to extract a useful summary line from a
+// thinking model's chain-of-thought output when the actual content field is
+// empty (because all output tokens were consumed by reasoning).
+func extractSummaryFromThinking(reasoning string) string {
+	if reasoning == "" {
+		return ""
+	}
+	lines := strings.Split(reasoning, "\n")
+	// Walk backwards — the last few lines of reasoning often contain the
+	// actual answer the model was converging on.
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		// Skip empty lines, XML-like tags, and very short fragments
+		if line == "" || strings.HasPrefix(line, "<") || len(line) < 10 {
+			continue
+		}
+		// Take the first reasonable line we find as the summary candidate
+		if len(line) > 100 {
+			line = line[:100]
+		}
+		return line
+	}
+	return ""
 }

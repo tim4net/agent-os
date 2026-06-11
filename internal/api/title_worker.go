@@ -130,7 +130,7 @@ func (tw *TitleWorker) resummarizeActive(ctx context.Context) {
 
 func (tw *TitleWorker) resummarizeOne(ctx context.Context, convID pgtype.UUID, agentID pgtype.UUID) {
 	// Use a separate context with timeout to avoid blocking
-	jobCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	jobCtx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
 	defer cancel()
 
 	msgs, err := tw.api.queries.ListMessages(jobCtx, convID)
