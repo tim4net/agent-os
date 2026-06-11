@@ -154,7 +154,13 @@ export function Sidebar({
     }))
   }
 
-  function toggleAgentTree(agentId: string) {
+  function toggleAgentTree(agent: Agent) {
+    const agentId = agent.id
+    // If clicking a different agent than currently selected, select it for chat
+    if (selectedAgent?.id !== agentId) {
+      onSelectAgent(agent)
+    }
+    // Always toggle the tree expand/collapse
     setExpandedAgents((prev) => {
       const next = new Set(prev)
       if (next.has(agentId)) next.delete(agentId)
@@ -345,7 +351,7 @@ export function Sidebar({
                     {/* Agent header row */}
                     <div className="relative group">
                       <button
-                        onClick={() => toggleAgentTree(agent.id)}
+                        onClick={() => toggleAgentTree(agent)}
                         className={`w-full flex items-center gap-2 pl-2.5 pr-8 py-2 rounded-xl text-xs transition-all duration-200 ${
                           isSelected
                             ? 'bg-[var(--bg-active)] text-[var(--text-primary)]'

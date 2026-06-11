@@ -208,7 +208,9 @@ func (a *API) ChatWithAgent(w http.ResponseWriter, r *http.Request) {
 	} else {
 		// Create a new conversation
 		var title pgtype.Text
-		title.String = "New conversation"
+		// Use timestamped title to avoid Hermes session title collisions
+		// ("New conversation" already-in-use errors after the first one).
+		title.String = "AgentOS " + time.Now().Format("2006-01-02 15:04:05")
 		title.Valid = true
 
 		// For Hermes agents, create a session and store its ID in metadata
