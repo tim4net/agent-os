@@ -123,9 +123,31 @@ healthy() {
 log "restarting stack"
 restart_stack
 if healthy 25; then
-  log "HEALTHY at $DEPLOY_SHA (migrations +$applied) — deploy OK"
+  log "HEALTHY at $DEPLOY_SHA (migrations +$applied) — verifying running images"
+  # ---------- 6b. verify running container image == :latest ----------
+  verify_running_image() {
+    local svc="$1"
+    local img="$2"
+    local cname
+    cname="$(podman ps --filter "name=${svc%.service}" --format '{{.Names}}' | head -1)"
+    if [ -z "$cname" ]; then
+      fail "verify_running_image: container for $svc not found"
+    fi
+    local running_id latest_id
+    running_id="$(podman inspect "$cname" --format '{{.Image}}')"
+    latest_id="$(podman inspect "$img:latest" --format '{{.Id}}')"
+    if [ "$running_id" != "$latest_id" ]; then
+      fail "verify_running_image: $svc running image ($running_id) != $img:latest ($latest_id)"
+    fi
+    log "verified $svc running image == $img:latest"
+  }
+  verify_running_image "$API_SVC" "$API_IMG"
+  verify_running_image "$WEB_SVC" "$WEB_IMG"
+  log "DEPLOY_OK sha=$DEPLOY_SHA migrations=$applied"
   # prune candidate tags (latest now points at the same image id)
   podman rmi "$API_IMG:candidate" "$WEB_IMG:candidate" 2>/dev/null || true
+  # prune dangling images to prevent accumulation
+  podman image prune -f 2>/dev/null || true
   echo "DEPLOY_OK sha=$DEPLOY_SHA migrations=$applied"
   exit 0
 fi
