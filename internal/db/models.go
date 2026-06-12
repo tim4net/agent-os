@@ -113,6 +113,7 @@ type Agent struct {
 	SystemPrompt pgtype.Text        `json:"system_prompt"`
 	Persona      []byte             `json:"persona"`
 	Visible      bool               `json:"visible"`
+	OwnerID      pgtype.UUID        `json:"owner_id"`
 }
 
 type AgentGrant struct {
@@ -121,6 +122,7 @@ type AgentGrant struct {
 	ResourceID pgtype.UUID        `json:"resource_id"`
 	Scope      string             `json:"scope"`
 	GrantedAt  pgtype.Timestamptz `json:"granted_at"`
+	OwnerID    pgtype.UUID        `json:"owner_id"`
 }
 
 type AppInstance struct {
@@ -140,6 +142,7 @@ type AppInstance struct {
 	LastHeartbeat pgtype.Timestamptz `json:"last_heartbeat"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+	OwnerID       pgtype.UUID        `json:"owner_id"`
 }
 
 type Artifact struct {
@@ -152,6 +155,7 @@ type Artifact struct {
 	MimeType    pgtype.Text        `json:"mime_type"`
 	Metadata    []byte             `json:"metadata"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	OwnerID     pgtype.UUID        `json:"owner_id"`
 }
 
 type ControlState struct {
@@ -169,6 +173,7 @@ type Conversation struct {
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
 	Summary   pgtype.Text        `json:"summary"`
+	OwnerID   pgtype.UUID        `json:"owner_id"`
 }
 
 type Delegation struct {
@@ -181,6 +186,7 @@ type Delegation struct {
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	CompletedAt    pgtype.Timestamptz `json:"completed_at"`
 	Metadata       []byte             `json:"metadata"`
+	OwnerID        pgtype.UUID        `json:"owner_id"`
 }
 
 type Finding struct {
@@ -207,6 +213,7 @@ type Goal struct {
 	Metadata    []byte             `json:"metadata"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	OwnerID     pgtype.UUID        `json:"owner_id"`
 }
 
 type HostLiveness struct {
@@ -219,6 +226,7 @@ type HostLiveness struct {
 	Tenant    string             `json:"tenant"`
 	Alive     bool               `json:"alive"`
 	SeenAt    pgtype.Timestamptz `json:"seen_at"`
+	OwnerID   pgtype.UUID        `json:"owner_id"`
 }
 
 type IngestKey struct {
@@ -228,6 +236,7 @@ type IngestKey struct {
 	Label     string             `json:"label"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 	RevokedAt pgtype.Timestamptz `json:"revoked_at"`
+	OwnerID   pgtype.UUID        `json:"owner_id"`
 }
 
 type MemoryIndex struct {
@@ -237,6 +246,8 @@ type MemoryIndex struct {
 	Content     pgtype.Text        `json:"content"`
 	Tags        []string           `json:"tags"`
 	LastIndexed pgtype.Timestamptz `json:"last_indexed"`
+	OwnerID     pgtype.UUID        `json:"owner_id"`
+	ProjectID   pgtype.UUID        `json:"project_id"`
 }
 
 type Message struct {
@@ -246,6 +257,7 @@ type Message struct {
 	Content        string             `json:"content"`
 	Metadata       []byte             `json:"metadata"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	OwnerID        pgtype.UUID        `json:"owner_id"`
 }
 
 type PipelineItem struct {
@@ -258,6 +270,7 @@ type PipelineItem struct {
 	AgentID   pgtype.UUID        `json:"agent_id"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+	OwnerID   pgtype.UUID        `json:"owner_id"`
 }
 
 type Project struct {
@@ -270,6 +283,7 @@ type Project struct {
 	Tracker     string             `json:"tracker"`
 	ExternalRef pgtype.Text        `json:"external_ref"`
 	RepoUrl     pgtype.Text        `json:"repo_url"`
+	OwnerID     pgtype.UUID        `json:"owner_id"`
 }
 
 type Resource struct {
@@ -286,6 +300,7 @@ type Resource struct {
 	Status    string             `json:"status"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+	OwnerID   pgtype.UUID        `json:"owner_id"`
 }
 
 type RunLog struct {
@@ -308,6 +323,7 @@ type Skill struct {
 	AgentID     pgtype.UUID        `json:"agent_id"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	OwnerID     pgtype.UUID        `json:"owner_id"`
 }
 
 type Task struct {
@@ -321,6 +337,7 @@ type Task struct {
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
 	ParentTaskID pgtype.UUID        `json:"parent_task_id"`
+	OwnerID      pgtype.UUID        `json:"owner_id"`
 }
 
 type TrackerItem struct {
@@ -336,6 +353,7 @@ type TrackerItem struct {
 	SyncedAt     pgtype.Timestamptz `json:"synced_at"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+	OwnerID      pgtype.UUID        `json:"owner_id"`
 }
 
 type User struct {
@@ -369,6 +387,7 @@ type WorkEvent struct {
 	Payload       []byte             `json:"payload"`
 	Ts            pgtype.Timestamptz `json:"ts"`
 	ReceivedAt    pgtype.Timestamptz `json:"received_at"`
+	OwnerID       pgtype.UUID        `json:"owner_id"`
 }
 
 type WorkUnit struct {
@@ -390,6 +409,7 @@ type Workflow struct {
 	AgentID     pgtype.UUID        `json:"agent_id"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	OwnerID     pgtype.UUID        `json:"owner_id"`
 }
 
 type WorkflowRun struct {
@@ -400,4 +420,5 @@ type WorkflowRun struct {
 	Result      []byte             `json:"result"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	OwnerID     pgtype.UUID        `json:"owner_id"`
 }
