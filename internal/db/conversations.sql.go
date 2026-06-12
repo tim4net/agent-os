@@ -14,7 +14,7 @@ import (
 const createConversation = `-- name: CreateConversation :one
 INSERT INTO conversations (agent_id, title, metadata)
 VALUES ($1, $2, $3)
-RETURNING id, agent_id, title, metadata, created_at, updated_at, summary
+RETURNING id, agent_id, title, metadata, created_at, updated_at, summary, owner_id
 `
 
 type CreateConversationParams struct {
@@ -34,6 +34,7 @@ func (q *Queries) CreateConversation(ctx context.Context, arg CreateConversation
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Summary,
+		&i.OwnerID,
 	)
 	return i, err
 }
@@ -41,7 +42,7 @@ func (q *Queries) CreateConversation(ctx context.Context, arg CreateConversation
 const createMessage = `-- name: CreateMessage :one
 INSERT INTO messages (conversation_id, role, content, metadata)
 VALUES ($1, $2, $3, $4)
-RETURNING id, conversation_id, role, content, metadata, created_at
+RETURNING id, conversation_id, role, content, metadata, created_at, owner_id
 `
 
 type CreateMessageParams struct {
@@ -66,6 +67,7 @@ func (q *Queries) CreateMessage(ctx context.Context, arg CreateMessageParams) (M
 		&i.Content,
 		&i.Metadata,
 		&i.CreatedAt,
+		&i.OwnerID,
 	)
 	return i, err
 }
@@ -126,7 +128,7 @@ func (q *Queries) DeleteMessagesByConversation(ctx context.Context, conversation
 }
 
 const getConversation = `-- name: GetConversation :one
-SELECT id, agent_id, title, metadata, created_at, updated_at, summary FROM conversations WHERE id = $1
+SELECT id, agent_id, title, metadata, created_at, updated_at, summary, owner_id FROM conversations WHERE id = $1
 `
 
 func (q *Queries) GetConversation(ctx context.Context, id pgtype.UUID) (Conversation, error) {
@@ -140,12 +142,13 @@ func (q *Queries) GetConversation(ctx context.Context, id pgtype.UUID) (Conversa
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Summary,
+		&i.OwnerID,
 	)
 	return i, err
 }
 
 const getLastUserMessage = `-- name: GetLastUserMessage :one
-SELECT id, conversation_id, role, content, metadata, created_at FROM messages
+SELECT id, conversation_id, role, content, metadata, created_at, owner_id FROM messages
 WHERE conversation_id = $1 AND role = 'user'
 ORDER BY created_at DESC LIMIT 1
 `
@@ -160,12 +163,13 @@ func (q *Queries) GetLastUserMessage(ctx context.Context, conversationID pgtype.
 		&i.Content,
 		&i.Metadata,
 		&i.CreatedAt,
+		&i.OwnerID,
 	)
 	return i, err
 }
 
 const listConversations = `-- name: ListConversations :many
-SELECT c.id, c.agent_id, c.title, c.metadata, c.created_at, c.updated_at, c.summary FROM conversations c
+SELECT c.id, c.agent_id, c.title, c.metadata, c.created_at, c.updated_at, c.summary, c.owner_id FROM conversations c
 JOIN agents a ON c.agent_id = a.id
 WHERE a.visible = true
 AND ($1::uuid IS NULL OR c.agent_id = $1)
@@ -189,6 +193,7 @@ func (q *Queries) ListConversations(ctx context.Context, dollar_1 pgtype.UUID) (
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Summary,
+			&i.OwnerID,
 		); err != nil {
 			return nil, err
 		}
@@ -201,7 +206,7 @@ func (q *Queries) ListConversations(ctx context.Context, dollar_1 pgtype.UUID) (
 }
 
 const listMessages = `-- name: ListMessages :many
-SELECT id, conversation_id, role, content, metadata, created_at FROM messages
+SELECT id, conversation_id, role, content, metadata, created_at, owner_id FROM messages
 WHERE conversation_id = $1
 ORDER BY created_at ASC
 `
@@ -222,6 +227,7 @@ func (q *Queries) ListMessages(ctx context.Context, conversationID pgtype.UUID) 
 			&i.Content,
 			&i.Metadata,
 			&i.CreatedAt,
+			&i.OwnerID,
 		); err != nil {
 			return nil, err
 		}
@@ -236,7 +242,7 @@ func (q *Queries) ListMessages(ctx context.Context, conversationID pgtype.UUID) 
 const updateConversation = `-- name: UpdateConversation :one
 UPDATE conversations SET title = $2, updated_at = NOW()
 WHERE id = $1
-RETURNING id, agent_id, title, metadata, created_at, updated_at, summary
+RETURNING id, agent_id, title, metadata, created_at, updated_at, summary, owner_id
 `
 
 type UpdateConversationParams struct {
@@ -255,6 +261,7 @@ func (q *Queries) UpdateConversation(ctx context.Context, arg UpdateConversation
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Summary,
+		&i.OwnerID,
 	)
 	return i, err
 }
@@ -262,7 +269,7 @@ func (q *Queries) UpdateConversation(ctx context.Context, arg UpdateConversation
 const updateConversationMetadata = `-- name: UpdateConversationMetadata :one
 UPDATE conversations SET metadata = $2, updated_at = NOW()
 WHERE id = $1
-RETURNING id, agent_id, title, metadata, created_at, updated_at, summary
+RETURNING id, agent_id, title, metadata, created_at, updated_at, summary, owner_id
 `
 
 type UpdateConversationMetadataParams struct {
@@ -281,6 +288,7 @@ func (q *Queries) UpdateConversationMetadata(ctx context.Context, arg UpdateConv
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Summary,
+		&i.OwnerID,
 	)
 	return i, err
 }
@@ -288,7 +296,7 @@ func (q *Queries) UpdateConversationMetadata(ctx context.Context, arg UpdateConv
 const updateConversationSummary = `-- name: UpdateConversationSummary :one
 UPDATE conversations SET summary = $2, updated_at = NOW()
 WHERE id = $1
-RETURNING id, agent_id, title, metadata, created_at, updated_at, summary
+RETURNING id, agent_id, title, metadata, created_at, updated_at, summary, owner_id
 `
 
 type UpdateConversationSummaryParams struct {
@@ -307,6 +315,7 @@ func (q *Queries) UpdateConversationSummary(ctx context.Context, arg UpdateConve
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Summary,
+		&i.OwnerID,
 	)
 	return i, err
 }

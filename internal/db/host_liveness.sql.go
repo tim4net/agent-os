@@ -67,7 +67,7 @@ func (q *Queries) GetBoundedSessionHostLiveness(ctx context.Context, arg GetBoun
 }
 
 const getHostLiveness = `-- name: GetHostLiveness :one
-SELECT id, host, pid, session_id, harness, cwd, tenant, alive, seen_at FROM host_liveness
+SELECT id, host, pid, session_id, harness, cwd, tenant, alive, seen_at, owner_id FROM host_liveness
 WHERE host = $1 AND pid = $2
 AND ($3::text = '' OR tenant = $3::text)
 `
@@ -93,12 +93,13 @@ func (q *Queries) GetHostLiveness(ctx context.Context, arg GetHostLivenessParams
 		&i.Tenant,
 		&i.Alive,
 		&i.SeenAt,
+		&i.OwnerID,
 	)
 	return i, err
 }
 
 const listHostLiveness = `-- name: ListHostLiveness :many
-SELECT id, host, pid, session_id, harness, cwd, tenant, alive, seen_at FROM host_liveness
+SELECT id, host, pid, session_id, harness, cwd, tenant, alive, seen_at, owner_id FROM host_liveness
 WHERE ($1::text = '' OR tenant = $1::text)
 ORDER BY seen_at DESC
 LIMIT $3::int
@@ -132,6 +133,7 @@ func (q *Queries) ListHostLiveness(ctx context.Context, arg ListHostLivenessPara
 			&i.Tenant,
 			&i.Alive,
 			&i.SeenAt,
+			&i.OwnerID,
 		); err != nil {
 			return nil, err
 		}
@@ -162,7 +164,7 @@ DO UPDATE SET
     tenant      = EXCLUDED.tenant,
     alive       = EXCLUDED.alive,
     seen_at     = NOW()
-RETURNING id, host, pid, session_id, harness, cwd, tenant, alive, seen_at
+RETURNING id, host, pid, session_id, harness, cwd, tenant, alive, seen_at, owner_id
 `
 
 type UpsertHostLivenessParams struct {
@@ -199,6 +201,7 @@ func (q *Queries) UpsertHostLiveness(ctx context.Context, arg UpsertHostLiveness
 		&i.Tenant,
 		&i.Alive,
 		&i.SeenAt,
+		&i.OwnerID,
 	)
 	return i, err
 }

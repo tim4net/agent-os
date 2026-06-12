@@ -14,7 +14,7 @@ import (
 const createPipelineItem = `-- name: CreatePipelineItem :one
 INSERT INTO pipeline_items (type, title, status, content, metadata, agent_id)
 VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, type, title, status, content, metadata, agent_id, created_at, updated_at
+RETURNING id, type, title, status, content, metadata, agent_id, created_at, updated_at, owner_id
 `
 
 type CreatePipelineItemParams struct {
@@ -46,6 +46,7 @@ func (q *Queries) CreatePipelineItem(ctx context.Context, arg CreatePipelineItem
 		&i.AgentID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OwnerID,
 	)
 	return i, err
 }
@@ -60,7 +61,7 @@ func (q *Queries) DeletePipelineItem(ctx context.Context, id pgtype.UUID) error 
 }
 
 const getPipelineItem = `-- name: GetPipelineItem :one
-SELECT id, type, title, status, content, metadata, agent_id, created_at, updated_at FROM pipeline_items WHERE id = $1
+SELECT id, type, title, status, content, metadata, agent_id, created_at, updated_at, owner_id FROM pipeline_items WHERE id = $1
 `
 
 func (q *Queries) GetPipelineItem(ctx context.Context, id pgtype.UUID) (PipelineItem, error) {
@@ -76,12 +77,13 @@ func (q *Queries) GetPipelineItem(ctx context.Context, id pgtype.UUID) (Pipeline
 		&i.AgentID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OwnerID,
 	)
 	return i, err
 }
 
 const listPipelineItems = `-- name: ListPipelineItems :many
-SELECT id, type, title, status, content, metadata, agent_id, created_at, updated_at FROM pipeline_items
+SELECT id, type, title, status, content, metadata, agent_id, created_at, updated_at, owner_id FROM pipeline_items
 WHERE ($1::text = '' OR status = $1)
   AND ($2::text = '' OR type = $2)
 ORDER BY created_at DESC
@@ -111,6 +113,7 @@ func (q *Queries) ListPipelineItems(ctx context.Context, arg ListPipelineItemsPa
 			&i.AgentID,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.OwnerID,
 		); err != nil {
 			return nil, err
 		}
@@ -125,7 +128,7 @@ func (q *Queries) ListPipelineItems(ctx context.Context, arg ListPipelineItemsPa
 const updatePipelineItem = `-- name: UpdatePipelineItem :one
 UPDATE pipeline_items SET title = $2, status = $3, content = $4, metadata = $5, updated_at = NOW()
 WHERE id = $1
-RETURNING id, type, title, status, content, metadata, agent_id, created_at, updated_at
+RETURNING id, type, title, status, content, metadata, agent_id, created_at, updated_at, owner_id
 `
 
 type UpdatePipelineItemParams struct {
@@ -155,6 +158,7 @@ func (q *Queries) UpdatePipelineItem(ctx context.Context, arg UpdatePipelineItem
 		&i.AgentID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OwnerID,
 	)
 	return i, err
 }

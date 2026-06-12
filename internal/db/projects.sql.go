@@ -14,7 +14,7 @@ import (
 const createProject = `-- name: CreateProject :one
 INSERT INTO projects (slug, name, tenant, tracker, external_ref, repo_url)
 VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, slug, name, tenant, created_at, updated_at, tracker, external_ref, repo_url
+RETURNING id, slug, name, tenant, created_at, updated_at, tracker, external_ref, repo_url, owner_id
 `
 
 type CreateProjectParams struct {
@@ -46,6 +46,7 @@ func (q *Queries) CreateProject(ctx context.Context, arg CreateProjectParams) (P
 		&i.Tracker,
 		&i.ExternalRef,
 		&i.RepoUrl,
+		&i.OwnerID,
 	)
 	return i, err
 }
@@ -54,7 +55,7 @@ const ensureProjectBySlug = `-- name: EnsureProjectBySlug :one
 INSERT INTO projects (slug, name, tenant)
 VALUES ($1, $2, $3)
 ON CONFLICT (slug) DO UPDATE SET updated_at = NOW()
-RETURNING id, slug, name, tenant, created_at, updated_at, tracker, external_ref, repo_url
+RETURNING id, slug, name, tenant, created_at, updated_at, tracker, external_ref, repo_url, owner_id
 `
 
 type EnsureProjectBySlugParams struct {
@@ -77,12 +78,13 @@ func (q *Queries) EnsureProjectBySlug(ctx context.Context, arg EnsureProjectBySl
 		&i.Tracker,
 		&i.ExternalRef,
 		&i.RepoUrl,
+		&i.OwnerID,
 	)
 	return i, err
 }
 
 const getProject = `-- name: GetProject :one
-SELECT id, slug, name, tenant, created_at, updated_at, tracker, external_ref, repo_url FROM projects WHERE id = $1
+SELECT id, slug, name, tenant, created_at, updated_at, tracker, external_ref, repo_url, owner_id FROM projects WHERE id = $1
 `
 
 func (q *Queries) GetProject(ctx context.Context, id pgtype.UUID) (Project, error) {
@@ -98,12 +100,13 @@ func (q *Queries) GetProject(ctx context.Context, id pgtype.UUID) (Project, erro
 		&i.Tracker,
 		&i.ExternalRef,
 		&i.RepoUrl,
+		&i.OwnerID,
 	)
 	return i, err
 }
 
 const getProjectBySlug = `-- name: GetProjectBySlug :one
-SELECT id, slug, name, tenant, created_at, updated_at, tracker, external_ref, repo_url FROM projects WHERE slug = $1
+SELECT id, slug, name, tenant, created_at, updated_at, tracker, external_ref, repo_url, owner_id FROM projects WHERE slug = $1
 `
 
 func (q *Queries) GetProjectBySlug(ctx context.Context, slug string) (Project, error) {
@@ -119,12 +122,13 @@ func (q *Queries) GetProjectBySlug(ctx context.Context, slug string) (Project, e
 		&i.Tracker,
 		&i.ExternalRef,
 		&i.RepoUrl,
+		&i.OwnerID,
 	)
 	return i, err
 }
 
 const listProjects = `-- name: ListProjects :many
-SELECT id, slug, name, tenant, created_at, updated_at, tracker, external_ref, repo_url FROM projects ORDER BY name
+SELECT id, slug, name, tenant, created_at, updated_at, tracker, external_ref, repo_url, owner_id FROM projects ORDER BY name
 `
 
 func (q *Queries) ListProjects(ctx context.Context) ([]Project, error) {
@@ -146,6 +150,7 @@ func (q *Queries) ListProjects(ctx context.Context) ([]Project, error) {
 			&i.Tracker,
 			&i.ExternalRef,
 			&i.RepoUrl,
+			&i.OwnerID,
 		); err != nil {
 			return nil, err
 		}
@@ -160,7 +165,7 @@ func (q *Queries) ListProjects(ctx context.Context) ([]Project, error) {
 const updateProjectTracker = `-- name: UpdateProjectTracker :one
 UPDATE projects SET tracker = $2, external_ref = $3, repo_url = $4, updated_at = NOW()
 WHERE id = $1
-RETURNING id, slug, name, tenant, created_at, updated_at, tracker, external_ref, repo_url
+RETURNING id, slug, name, tenant, created_at, updated_at, tracker, external_ref, repo_url, owner_id
 `
 
 type UpdateProjectTrackerParams struct {
@@ -188,6 +193,7 @@ func (q *Queries) UpdateProjectTracker(ctx context.Context, arg UpdateProjectTra
 		&i.Tracker,
 		&i.ExternalRef,
 		&i.RepoUrl,
+		&i.OwnerID,
 	)
 	return i, err
 }

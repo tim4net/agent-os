@@ -14,7 +14,7 @@ import (
 const createGoal = `-- name: CreateGoal :one
 INSERT INTO goals (title, description, status, progress, target_date, metadata)
 VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, title, description, status, progress, target_date, metadata, created_at, updated_at
+RETURNING id, title, description, status, progress, target_date, metadata, created_at, updated_at, owner_id
 `
 
 type CreateGoalParams struct {
@@ -46,6 +46,7 @@ func (q *Queries) CreateGoal(ctx context.Context, arg CreateGoalParams) (Goal, e
 		&i.Metadata,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OwnerID,
 	)
 	return i, err
 }
@@ -60,7 +61,7 @@ func (q *Queries) DeleteGoal(ctx context.Context, id pgtype.UUID) error {
 }
 
 const getGoal = `-- name: GetGoal :one
-SELECT id, title, description, status, progress, target_date, metadata, created_at, updated_at FROM goals WHERE id = $1
+SELECT id, title, description, status, progress, target_date, metadata, created_at, updated_at, owner_id FROM goals WHERE id = $1
 `
 
 func (q *Queries) GetGoal(ctx context.Context, id pgtype.UUID) (Goal, error) {
@@ -76,12 +77,13 @@ func (q *Queries) GetGoal(ctx context.Context, id pgtype.UUID) (Goal, error) {
 		&i.Metadata,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OwnerID,
 	)
 	return i, err
 }
 
 const listGoals = `-- name: ListGoals :many
-SELECT id, title, description, status, progress, target_date, metadata, created_at, updated_at FROM goals ORDER BY created_at DESC
+SELECT id, title, description, status, progress, target_date, metadata, created_at, updated_at, owner_id FROM goals ORDER BY created_at DESC
 `
 
 func (q *Queries) ListGoals(ctx context.Context) ([]Goal, error) {
@@ -103,6 +105,7 @@ func (q *Queries) ListGoals(ctx context.Context) ([]Goal, error) {
 			&i.Metadata,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.OwnerID,
 		); err != nil {
 			return nil, err
 		}
@@ -117,7 +120,7 @@ func (q *Queries) ListGoals(ctx context.Context) ([]Goal, error) {
 const updateGoal = `-- name: UpdateGoal :one
 UPDATE goals SET title = $2, description = $3, status = $4, progress = $5, target_date = $6, metadata = $7, updated_at = NOW()
 WHERE id = $1
-RETURNING id, title, description, status, progress, target_date, metadata, created_at, updated_at
+RETURNING id, title, description, status, progress, target_date, metadata, created_at, updated_at, owner_id
 `
 
 type UpdateGoalParams struct {
@@ -151,6 +154,7 @@ func (q *Queries) UpdateGoal(ctx context.Context, arg UpdateGoalParams) (Goal, e
 		&i.Metadata,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OwnerID,
 	)
 	return i, err
 }

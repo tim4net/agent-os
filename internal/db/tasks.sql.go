@@ -25,7 +25,7 @@ func (q *Queries) CountSubtasks(ctx context.Context, parentTaskID pgtype.UUID) (
 const createSubtask = `-- name: CreateSubtask :one
 INSERT INTO tasks (agent_id, title, description, status, priority, metadata, parent_task_id)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, agent_id, title, description, status, priority, metadata, created_at, updated_at, parent_task_id
+RETURNING id, agent_id, title, description, status, priority, metadata, created_at, updated_at, parent_task_id, owner_id
 `
 
 type CreateSubtaskParams struct {
@@ -60,6 +60,7 @@ func (q *Queries) CreateSubtask(ctx context.Context, arg CreateSubtaskParams) (T
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ParentTaskID,
+		&i.OwnerID,
 	)
 	return i, err
 }
@@ -67,7 +68,7 @@ func (q *Queries) CreateSubtask(ctx context.Context, arg CreateSubtaskParams) (T
 const createTask = `-- name: CreateTask :one
 INSERT INTO tasks (agent_id, title, description, status, priority, metadata)
 VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, agent_id, title, description, status, priority, metadata, created_at, updated_at, parent_task_id
+RETURNING id, agent_id, title, description, status, priority, metadata, created_at, updated_at, parent_task_id, owner_id
 `
 
 type CreateTaskParams struct {
@@ -100,6 +101,7 @@ func (q *Queries) CreateTask(ctx context.Context, arg CreateTaskParams) (Task, e
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ParentTaskID,
+		&i.OwnerID,
 	)
 	return i, err
 }
@@ -114,7 +116,7 @@ func (q *Queries) DeleteTask(ctx context.Context, id pgtype.UUID) error {
 }
 
 const getTask = `-- name: GetTask :one
-SELECT id, agent_id, title, description, status, priority, metadata, created_at, updated_at, parent_task_id FROM tasks WHERE id = $1
+SELECT id, agent_id, title, description, status, priority, metadata, created_at, updated_at, parent_task_id, owner_id FROM tasks WHERE id = $1
 `
 
 func (q *Queries) GetTask(ctx context.Context, id pgtype.UUID) (Task, error) {
@@ -131,12 +133,13 @@ func (q *Queries) GetTask(ctx context.Context, id pgtype.UUID) (Task, error) {
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ParentTaskID,
+		&i.OwnerID,
 	)
 	return i, err
 }
 
 const listSubtasks = `-- name: ListSubtasks :many
-SELECT id, agent_id, title, description, status, priority, metadata, created_at, updated_at, parent_task_id FROM tasks WHERE parent_task_id = $1
+SELECT id, agent_id, title, description, status, priority, metadata, created_at, updated_at, parent_task_id, owner_id FROM tasks WHERE parent_task_id = $1
 ORDER BY priority DESC, created_at ASC
 `
 
@@ -160,6 +163,7 @@ func (q *Queries) ListSubtasks(ctx context.Context, parentTaskID pgtype.UUID) ([
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.ParentTaskID,
+			&i.OwnerID,
 		); err != nil {
 			return nil, err
 		}
@@ -172,7 +176,7 @@ func (q *Queries) ListSubtasks(ctx context.Context, parentTaskID pgtype.UUID) ([
 }
 
 const listTasks = `-- name: ListTasks :many
-SELECT id, agent_id, title, description, status, priority, metadata, created_at, updated_at, parent_task_id FROM tasks
+SELECT id, agent_id, title, description, status, priority, metadata, created_at, updated_at, parent_task_id, owner_id FROM tasks
 WHERE ($1::text = '' OR status = $1)
   AND ($2::uuid IS NULL OR agent_id = $2)
 ORDER BY priority DESC, created_at ASC
@@ -203,6 +207,7 @@ func (q *Queries) ListTasks(ctx context.Context, arg ListTasksParams) ([]Task, e
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.ParentTaskID,
+			&i.OwnerID,
 		); err != nil {
 			return nil, err
 		}
@@ -217,7 +222,7 @@ func (q *Queries) ListTasks(ctx context.Context, arg ListTasksParams) ([]Task, e
 const updateTask = `-- name: UpdateTask :one
 UPDATE tasks SET title = $2, description = $3, status = $4, priority = $5, metadata = $6, updated_at = NOW()
 WHERE id = $1
-RETURNING id, agent_id, title, description, status, priority, metadata, created_at, updated_at, parent_task_id
+RETURNING id, agent_id, title, description, status, priority, metadata, created_at, updated_at, parent_task_id, owner_id
 `
 
 type UpdateTaskParams struct {
@@ -250,6 +255,7 @@ func (q *Queries) UpdateTask(ctx context.Context, arg UpdateTaskParams) (Task, e
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ParentTaskID,
+		&i.OwnerID,
 	)
 	return i, err
 }

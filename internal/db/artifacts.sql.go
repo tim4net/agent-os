@@ -25,7 +25,7 @@ func (q *Queries) CountArtifacts(ctx context.Context, dollar_1 string) (int64, e
 const createArtifact = `-- name: CreateArtifact :one
 INSERT INTO artifacts (agent_id, type, title, description, file_path, mime_type, metadata)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, agent_id, type, title, description, file_path, mime_type, metadata, created_at
+RETURNING id, agent_id, type, title, description, file_path, mime_type, metadata, created_at, owner_id
 `
 
 type CreateArtifactParams struct {
@@ -59,6 +59,7 @@ func (q *Queries) CreateArtifact(ctx context.Context, arg CreateArtifactParams) 
 		&i.MimeType,
 		&i.Metadata,
 		&i.CreatedAt,
+		&i.OwnerID,
 	)
 	return i, err
 }
@@ -73,7 +74,7 @@ func (q *Queries) DeleteArtifact(ctx context.Context, id pgtype.UUID) error {
 }
 
 const getArtifact = `-- name: GetArtifact :one
-SELECT id, agent_id, type, title, description, file_path, mime_type, metadata, created_at FROM artifacts WHERE id = $1
+SELECT id, agent_id, type, title, description, file_path, mime_type, metadata, created_at, owner_id FROM artifacts WHERE id = $1
 `
 
 func (q *Queries) GetArtifact(ctx context.Context, id pgtype.UUID) (Artifact, error) {
@@ -89,12 +90,13 @@ func (q *Queries) GetArtifact(ctx context.Context, id pgtype.UUID) (Artifact, er
 		&i.MimeType,
 		&i.Metadata,
 		&i.CreatedAt,
+		&i.OwnerID,
 	)
 	return i, err
 }
 
 const getArtifactByPath = `-- name: GetArtifactByPath :one
-SELECT id, agent_id, type, title, description, file_path, mime_type, metadata, created_at FROM artifacts WHERE file_path = $1
+SELECT id, agent_id, type, title, description, file_path, mime_type, metadata, created_at, owner_id FROM artifacts WHERE file_path = $1
 `
 
 func (q *Queries) GetArtifactByPath(ctx context.Context, filePath pgtype.Text) (Artifact, error) {
@@ -110,12 +112,13 @@ func (q *Queries) GetArtifactByPath(ctx context.Context, filePath pgtype.Text) (
 		&i.MimeType,
 		&i.Metadata,
 		&i.CreatedAt,
+		&i.OwnerID,
 	)
 	return i, err
 }
 
 const listArtifacts = `-- name: ListArtifacts :many
-SELECT id, agent_id, type, title, description, file_path, mime_type, metadata, created_at FROM artifacts
+SELECT id, agent_id, type, title, description, file_path, mime_type, metadata, created_at, owner_id FROM artifacts
 WHERE ($1::text IS NULL OR $1::text = '' OR type = $1)
   AND ($2::uuid IS NULL OR agent_id = $2)
 ORDER BY created_at DESC
@@ -153,6 +156,7 @@ func (q *Queries) ListArtifacts(ctx context.Context, arg ListArtifactsParams) ([
 			&i.MimeType,
 			&i.Metadata,
 			&i.CreatedAt,
+			&i.OwnerID,
 		); err != nil {
 			return nil, err
 		}

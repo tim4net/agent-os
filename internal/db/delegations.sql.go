@@ -42,7 +42,7 @@ func (q *Queries) CountDelegations(ctx context.Context, arg CountDelegationsPara
 const createDelegation = `-- name: CreateDelegation :one
 INSERT INTO delegations (parent_agent_id, child_agent_name, task_goal, status, result_summary, metadata)
 VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, parent_agent_id, child_agent_name, task_goal, status, result_summary, created_at, completed_at, metadata
+RETURNING id, parent_agent_id, child_agent_name, task_goal, status, result_summary, created_at, completed_at, metadata, owner_id
 `
 
 type CreateDelegationParams struct {
@@ -74,12 +74,13 @@ func (q *Queries) CreateDelegation(ctx context.Context, arg CreateDelegationPara
 		&i.CreatedAt,
 		&i.CompletedAt,
 		&i.Metadata,
+		&i.OwnerID,
 	)
 	return i, err
 }
 
 const getDelegation = `-- name: GetDelegation :one
-SELECT id, parent_agent_id, child_agent_name, task_goal, status, result_summary, created_at, completed_at, metadata FROM delegations WHERE id = $1
+SELECT id, parent_agent_id, child_agent_name, task_goal, status, result_summary, created_at, completed_at, metadata, owner_id FROM delegations WHERE id = $1
 `
 
 func (q *Queries) GetDelegation(ctx context.Context, id pgtype.UUID) (Delegation, error) {
@@ -95,12 +96,13 @@ func (q *Queries) GetDelegation(ctx context.Context, id pgtype.UUID) (Delegation
 		&i.CreatedAt,
 		&i.CompletedAt,
 		&i.Metadata,
+		&i.OwnerID,
 	)
 	return i, err
 }
 
 const listDelegations = `-- name: ListDelegations :many
-SELECT id, parent_agent_id, child_agent_name, task_goal, status, result_summary, created_at, completed_at, metadata FROM delegations
+SELECT id, parent_agent_id, child_agent_name, task_goal, status, result_summary, created_at, completed_at, metadata, owner_id FROM delegations
 WHERE ($1::uuid IS NULL OR parent_agent_id = $1)
   AND ($2::text = '' OR status = $2)
 ORDER BY created_at DESC
@@ -138,6 +140,7 @@ func (q *Queries) ListDelegations(ctx context.Context, arg ListDelegationsParams
 			&i.CreatedAt,
 			&i.CompletedAt,
 			&i.Metadata,
+			&i.OwnerID,
 		); err != nil {
 			return nil, err
 		}
@@ -152,7 +155,7 @@ func (q *Queries) ListDelegations(ctx context.Context, arg ListDelegationsParams
 const updateDelegation = `-- name: UpdateDelegation :one
 UPDATE delegations SET status = $2, result_summary = COALESCE($3, result_summary), completed_at = CASE WHEN $2 IN ('completed','failed','interrupted') THEN now() ELSE completed_at END, metadata = COALESCE($4, metadata)
 WHERE id = $1
-RETURNING id, parent_agent_id, child_agent_name, task_goal, status, result_summary, created_at, completed_at, metadata
+RETURNING id, parent_agent_id, child_agent_name, task_goal, status, result_summary, created_at, completed_at, metadata, owner_id
 `
 
 type UpdateDelegationParams struct {
@@ -180,6 +183,7 @@ func (q *Queries) UpdateDelegation(ctx context.Context, arg UpdateDelegationPara
 		&i.CreatedAt,
 		&i.CompletedAt,
 		&i.Metadata,
+		&i.OwnerID,
 	)
 	return i, err
 }

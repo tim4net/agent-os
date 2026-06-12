@@ -14,7 +14,7 @@ import (
 const createSkill = `-- name: CreateSkill :one
 INSERT INTO skills (name, description, category, content, triggers, agent_id)
 VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, name, description, category, content, triggers, agent_id, created_at, updated_at
+RETURNING id, name, description, category, content, triggers, agent_id, created_at, updated_at, owner_id
 `
 
 type CreateSkillParams struct {
@@ -46,6 +46,7 @@ func (q *Queries) CreateSkill(ctx context.Context, arg CreateSkillParams) (Skill
 		&i.AgentID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OwnerID,
 	)
 	return i, err
 }
@@ -60,7 +61,7 @@ func (q *Queries) DeleteSkill(ctx context.Context, id pgtype.UUID) error {
 }
 
 const getSkill = `-- name: GetSkill :one
-SELECT id, name, description, category, content, triggers, agent_id, created_at, updated_at FROM skills WHERE id = $1
+SELECT id, name, description, category, content, triggers, agent_id, created_at, updated_at, owner_id FROM skills WHERE id = $1
 `
 
 func (q *Queries) GetSkill(ctx context.Context, id pgtype.UUID) (Skill, error) {
@@ -76,6 +77,7 @@ func (q *Queries) GetSkill(ctx context.Context, id pgtype.UUID) (Skill, error) {
 		&i.AgentID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OwnerID,
 	)
 	return i, err
 }
@@ -127,7 +129,7 @@ func (q *Queries) ListSkillSummaries(ctx context.Context) ([]ListSkillSummariesR
 }
 
 const listSkills = `-- name: ListSkills :many
-SELECT id, name, description, category, content, triggers, agent_id, created_at, updated_at FROM skills
+SELECT id, name, description, category, content, triggers, agent_id, created_at, updated_at, owner_id FROM skills
 ORDER BY created_at DESC
 `
 
@@ -150,6 +152,7 @@ func (q *Queries) ListSkills(ctx context.Context) ([]Skill, error) {
 			&i.AgentID,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.OwnerID,
 		); err != nil {
 			return nil, err
 		}
@@ -162,7 +165,7 @@ func (q *Queries) ListSkills(ctx context.Context) ([]Skill, error) {
 }
 
 const listSkillsByAgent = `-- name: ListSkillsByAgent :many
-SELECT id, name, description, category, content, triggers, agent_id, created_at, updated_at FROM skills
+SELECT id, name, description, category, content, triggers, agent_id, created_at, updated_at, owner_id FROM skills
 WHERE agent_id = $1
 ORDER BY created_at DESC
 `
@@ -186,6 +189,7 @@ func (q *Queries) ListSkillsByAgent(ctx context.Context, agentID pgtype.UUID) ([
 			&i.AgentID,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.OwnerID,
 		); err != nil {
 			return nil, err
 		}
@@ -200,7 +204,7 @@ func (q *Queries) ListSkillsByAgent(ctx context.Context, agentID pgtype.UUID) ([
 const updateSkill = `-- name: UpdateSkill :one
 UPDATE skills SET name = $2, description = $3, category = $4, content = $5, triggers = $6, agent_id = $7, updated_at = NOW()
 WHERE id = $1
-RETURNING id, name, description, category, content, triggers, agent_id, created_at, updated_at
+RETURNING id, name, description, category, content, triggers, agent_id, created_at, updated_at, owner_id
 `
 
 type UpdateSkillParams struct {
@@ -234,6 +238,7 @@ func (q *Queries) UpdateSkill(ctx context.Context, arg UpdateSkillParams) (Skill
 		&i.AgentID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OwnerID,
 	)
 	return i, err
 }
@@ -247,7 +252,7 @@ ON CONFLICT (name) DO UPDATE SET
     content = EXCLUDED.content,
     triggers = EXCLUDED.triggers,
     updated_at = NOW()
-RETURNING id, name, description, category, content, triggers, agent_id, created_at, updated_at
+RETURNING id, name, description, category, content, triggers, agent_id, created_at, updated_at, owner_id
 `
 
 type UpsertSkillParams struct {
@@ -279,6 +284,7 @@ func (q *Queries) UpsertSkill(ctx context.Context, arg UpsertSkillParams) (Skill
 		&i.AgentID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OwnerID,
 	)
 	return i, err
 }

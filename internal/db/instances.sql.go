@@ -39,7 +39,7 @@ VALUES (
     $10,
     $11
 )
-RETURNING id, harness, session_id, host, pid, label, health_url, branch, sha, cwd, tenant, status, last_probed_at, last_heartbeat, created_at, updated_at
+RETURNING id, harness, session_id, host, pid, label, health_url, branch, sha, cwd, tenant, status, last_probed_at, last_heartbeat, created_at, updated_at, owner_id
 `
 
 type CreateAppInstanceParams struct {
@@ -89,6 +89,7 @@ func (q *Queries) CreateAppInstance(ctx context.Context, arg CreateAppInstancePa
 		&i.LastHeartbeat,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OwnerID,
 	)
 	return i, err
 }
@@ -104,7 +105,7 @@ func (q *Queries) DeleteAppInstance(ctx context.Context, id pgtype.UUID) error {
 }
 
 const getAppInstance = `-- name: GetAppInstance :one
-SELECT id, harness, session_id, host, pid, label, health_url, branch, sha, cwd, tenant, status, last_probed_at, last_heartbeat, created_at, updated_at FROM app_instances WHERE id = $1
+SELECT id, harness, session_id, host, pid, label, health_url, branch, sha, cwd, tenant, status, last_probed_at, last_heartbeat, created_at, updated_at, owner_id FROM app_instances WHERE id = $1
 `
 
 // Fetches a single app instance by ID.
@@ -128,12 +129,13 @@ func (q *Queries) GetAppInstance(ctx context.Context, id pgtype.UUID) (AppInstan
 		&i.LastHeartbeat,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OwnerID,
 	)
 	return i, err
 }
 
 const listAppInstances = `-- name: ListAppInstances :many
-SELECT id, harness, session_id, host, pid, label, health_url, branch, sha, cwd, tenant, status, last_probed_at, last_heartbeat, created_at, updated_at FROM app_instances
+SELECT id, harness, session_id, host, pid, label, health_url, branch, sha, cwd, tenant, status, last_probed_at, last_heartbeat, created_at, updated_at, owner_id FROM app_instances
 WHERE ($1::text = '' OR tenant = $1::text)
 ORDER BY
     CASE WHEN status = 'up' THEN 0 ELSE 1 END,
@@ -178,6 +180,7 @@ func (q *Queries) ListAppInstances(ctx context.Context, arg ListAppInstancesPara
 			&i.LastHeartbeat,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.OwnerID,
 		); err != nil {
 			return nil, err
 		}
@@ -271,7 +274,7 @@ DO UPDATE SET
 WHERE app_instances.host = EXCLUDED.host
   AND app_instances.health_url = EXCLUDED.health_url
   AND app_instances.tenant = EXCLUDED.tenant
-RETURNING id, harness, session_id, host, pid, label, health_url, branch, sha, cwd, tenant, status, last_probed_at, last_heartbeat, created_at, updated_at
+RETURNING id, harness, session_id, host, pid, label, health_url, branch, sha, cwd, tenant, status, last_probed_at, last_heartbeat, created_at, updated_at, owner_id
 `
 
 type UpsertAppInstanceByHostURLParams struct {
@@ -322,6 +325,7 @@ func (q *Queries) UpsertAppInstanceByHostURL(ctx context.Context, arg UpsertAppI
 		&i.LastHeartbeat,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OwnerID,
 	)
 	return i, err
 }
@@ -354,7 +358,7 @@ DO UPDATE SET
 WHERE app_instances.host = EXCLUDED.host
   AND app_instances.health_url = EXCLUDED.health_url
   AND app_instances.tenant = EXCLUDED.tenant
-RETURNING id, harness, session_id, host, pid, label, health_url, branch, sha, cwd, tenant, status, last_probed_at, last_heartbeat, created_at, updated_at
+RETURNING id, harness, session_id, host, pid, label, health_url, branch, sha, cwd, tenant, status, last_probed_at, last_heartbeat, created_at, updated_at, owner_id
 `
 
 type UpsertAppInstanceOnServerStartedParams struct {
@@ -404,6 +408,7 @@ func (q *Queries) UpsertAppInstanceOnServerStarted(ctx context.Context, arg Upse
 		&i.LastHeartbeat,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OwnerID,
 	)
 	return i, err
 }

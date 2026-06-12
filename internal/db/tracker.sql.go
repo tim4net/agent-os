@@ -39,7 +39,7 @@ func (q *Queries) CountTrackerItemsByTenant(ctx context.Context, tenant string) 
 }
 
 const getTrackerItem = `-- name: GetTrackerItem :one
-SELECT id, project_id, external_ref, title, status, item_type, canonical_url, payload, tenant, synced_at, created_at, updated_at FROM tracker_items
+SELECT id, project_id, external_ref, title, status, item_type, canonical_url, payload, tenant, synced_at, created_at, updated_at, owner_id FROM tracker_items
 WHERE project_id = $1 AND external_ref = $2
 `
 
@@ -64,12 +64,13 @@ func (q *Queries) GetTrackerItem(ctx context.Context, arg GetTrackerItemParams) 
 		&i.SyncedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OwnerID,
 	)
 	return i, err
 }
 
 const getTrackerProjects = `-- name: GetTrackerProjects :many
-SELECT id, slug, name, tenant, created_at, updated_at, tracker, external_ref, repo_url FROM projects WHERE tracker = $1 AND tenant = $2
+SELECT id, slug, name, tenant, created_at, updated_at, tracker, external_ref, repo_url, owner_id FROM projects WHERE tracker = $1 AND tenant = $2
 `
 
 type GetTrackerProjectsParams struct {
@@ -97,6 +98,7 @@ func (q *Queries) GetTrackerProjects(ctx context.Context, arg GetTrackerProjects
 			&i.Tracker,
 			&i.ExternalRef,
 			&i.RepoUrl,
+			&i.OwnerID,
 		); err != nil {
 			return nil, err
 		}
@@ -109,7 +111,7 @@ func (q *Queries) GetTrackerProjects(ctx context.Context, arg GetTrackerProjects
 }
 
 const listTrackerItemsByProject = `-- name: ListTrackerItemsByProject :many
-SELECT id, project_id, external_ref, title, status, item_type, canonical_url, payload, tenant, synced_at, created_at, updated_at FROM tracker_items
+SELECT id, project_id, external_ref, title, status, item_type, canonical_url, payload, tenant, synced_at, created_at, updated_at, owner_id FROM tracker_items
 WHERE project_id = $1 AND tenant = $2
 ORDER BY synced_at DESC
 LIMIT $3 OFFSET $4
@@ -149,6 +151,7 @@ func (q *Queries) ListTrackerItemsByProject(ctx context.Context, arg ListTracker
 			&i.SyncedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.OwnerID,
 		); err != nil {
 			return nil, err
 		}
@@ -161,7 +164,7 @@ func (q *Queries) ListTrackerItemsByProject(ctx context.Context, arg ListTracker
 }
 
 const listTrackerItemsByTenant = `-- name: ListTrackerItemsByTenant :many
-SELECT id, project_id, external_ref, title, status, item_type, canonical_url, payload, tenant, synced_at, created_at, updated_at FROM tracker_items
+SELECT id, project_id, external_ref, title, status, item_type, canonical_url, payload, tenant, synced_at, created_at, updated_at, owner_id FROM tracker_items
 WHERE tenant = $1
 ORDER BY synced_at DESC
 LIMIT $2 OFFSET $3
@@ -195,6 +198,7 @@ func (q *Queries) ListTrackerItemsByTenant(ctx context.Context, arg ListTrackerI
 			&i.SyncedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.OwnerID,
 		); err != nil {
 			return nil, err
 		}
@@ -219,7 +223,7 @@ INSERT INTO tracker_items (
     payload = EXCLUDED.payload,
     synced_at = NOW(),
     updated_at = NOW()
-RETURNING id, project_id, external_ref, title, status, item_type, canonical_url, payload, tenant, synced_at, created_at, updated_at
+RETURNING id, project_id, external_ref, title, status, item_type, canonical_url, payload, tenant, synced_at, created_at, updated_at, owner_id
 `
 
 type UpsertTrackerItemParams struct {
@@ -259,6 +263,7 @@ func (q *Queries) UpsertTrackerItem(ctx context.Context, arg UpsertTrackerItemPa
 		&i.SyncedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OwnerID,
 	)
 	return i, err
 }

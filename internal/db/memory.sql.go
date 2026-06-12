@@ -21,7 +21,7 @@ func (q *Queries) DeleteMemory(ctx context.Context, filePath string) error {
 }
 
 const getMemoryByPath = `-- name: GetMemoryByPath :one
-SELECT id, file_path, title, content, tags, last_indexed FROM memory_index WHERE file_path = $1
+SELECT id, file_path, title, content, tags, last_indexed, owner_id, project_id FROM memory_index WHERE file_path = $1
 `
 
 func (q *Queries) GetMemoryByPath(ctx context.Context, filePath string) (MemoryIndex, error) {
@@ -34,12 +34,14 @@ func (q *Queries) GetMemoryByPath(ctx context.Context, filePath string) (MemoryI
 		&i.Content,
 		&i.Tags,
 		&i.LastIndexed,
+		&i.OwnerID,
+		&i.ProjectID,
 	)
 	return i, err
 }
 
 const listMemoryIndex = `-- name: ListMemoryIndex :many
-SELECT id, file_path, title, content, tags, last_indexed FROM memory_index ORDER BY last_indexed DESC
+SELECT id, file_path, title, content, tags, last_indexed, owner_id, project_id FROM memory_index ORDER BY last_indexed DESC
 `
 
 func (q *Queries) ListMemoryIndex(ctx context.Context) ([]MemoryIndex, error) {
@@ -58,6 +60,8 @@ func (q *Queries) ListMemoryIndex(ctx context.Context) ([]MemoryIndex, error) {
 			&i.Content,
 			&i.Tags,
 			&i.LastIndexed,
+			&i.OwnerID,
+			&i.ProjectID,
 		); err != nil {
 			return nil, err
 		}
@@ -70,7 +74,7 @@ func (q *Queries) ListMemoryIndex(ctx context.Context) ([]MemoryIndex, error) {
 }
 
 const searchMemory = `-- name: SearchMemory :many
-SELECT id, file_path, title, content, tags, last_indexed FROM memory_index
+SELECT id, file_path, title, content, tags, last_indexed, owner_id, project_id FROM memory_index
 WHERE to_tsvector('english', coalesce(content, '')) @@ websearch_to_tsquery('english', $1)
 ORDER BY ts_rank(to_tsvector('english', coalesce(content, '')), websearch_to_tsquery('english', $1)) DESC
 LIMIT $2
@@ -97,6 +101,8 @@ func (q *Queries) SearchMemory(ctx context.Context, arg SearchMemoryParams) ([]M
 			&i.Content,
 			&i.Tags,
 			&i.LastIndexed,
+			&i.OwnerID,
+			&i.ProjectID,
 		); err != nil {
 			return nil, err
 		}
@@ -116,7 +122,7 @@ ON CONFLICT (file_path) DO UPDATE SET
     content = EXCLUDED.content,
     tags = EXCLUDED.tags,
     last_indexed = NOW()
-RETURNING id, file_path, title, content, tags, last_indexed
+RETURNING id, file_path, title, content, tags, last_indexed, owner_id, project_id
 `
 
 type UpsertMemoryParams struct {
@@ -141,6 +147,8 @@ func (q *Queries) UpsertMemory(ctx context.Context, arg UpsertMemoryParams) (Mem
 		&i.Content,
 		&i.Tags,
 		&i.LastIndexed,
+		&i.OwnerID,
+		&i.ProjectID,
 	)
 	return i, err
 }

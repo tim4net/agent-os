@@ -12,7 +12,7 @@ import (
 )
 
 const getWorkEventByEventID = `-- name: GetWorkEventByEventID :one
-SELECT id, event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, project_id, tenant, external_ref, branch, sha, cwd, title, cost_usd, payload, ts, received_at FROM work_events WHERE event_id = $1
+SELECT id, event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, project_id, tenant, external_ref, branch, sha, cwd, title, cost_usd, payload, ts, received_at, owner_id FROM work_events WHERE event_id = $1
 `
 
 func (q *Queries) GetWorkEventByEventID(ctx context.Context, eventID pgtype.UUID) (WorkEvent, error) {
@@ -40,12 +40,13 @@ func (q *Queries) GetWorkEventByEventID(ctx context.Context, eventID pgtype.UUID
 		&i.Payload,
 		&i.Ts,
 		&i.ReceivedAt,
+		&i.OwnerID,
 	)
 	return i, err
 }
 
 const getWorkEventsBySession = `-- name: GetWorkEventsBySession :many
-SELECT id, event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, project_id, tenant, external_ref, branch, sha, cwd, title, cost_usd, payload, ts, received_at FROM work_events
+SELECT id, event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, project_id, tenant, external_ref, branch, sha, cwd, title, cost_usd, payload, ts, received_at, owner_id FROM work_events
 WHERE harness = $1 AND session_id = $2
 ORDER BY received_at DESC
 LIMIT $3
@@ -88,6 +89,7 @@ func (q *Queries) GetWorkEventsBySession(ctx context.Context, arg GetWorkEventsB
 			&i.Payload,
 			&i.Ts,
 			&i.ReceivedAt,
+			&i.OwnerID,
 		); err != nil {
 			return nil, err
 		}
@@ -109,7 +111,7 @@ INSERT INTO work_events (
     $7, $8, $9, $10, $11,
     $12, $13, $14, $15, $16, $17, $18, $19
 ) ON CONFLICT (event_id) DO NOTHING
-RETURNING id, event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, project_id, tenant, external_ref, branch, sha, cwd, title, cost_usd, payload, ts, received_at
+RETURNING id, event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, project_id, tenant, external_ref, branch, sha, cwd, title, cost_usd, payload, ts, received_at, owner_id
 `
 
 type InsertWorkEventParams struct {
@@ -180,6 +182,7 @@ func (q *Queries) InsertWorkEvent(ctx context.Context, arg InsertWorkEventParams
 		&i.Payload,
 		&i.Ts,
 		&i.ReceivedAt,
+		&i.OwnerID,
 	)
 	return i, err
 }

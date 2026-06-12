@@ -637,7 +637,12 @@ func (a *API) deferredLLMTitle(convID pgtype.UUID, agentID pgtype.UUID) {
 		ID:    convID,
 		Title: titleText,
 	}); updateErr != nil {
-		slog.Warn("failed to update conversation title with LLM summary", "conversation_id", convID.String(), "error", updateErr)
+		// Conversation may have been deleted between chat and title generation — not an error
+		if updateErr.Error() == "no rows in result set" {
+			slog.Debug("skipped title update for deleted conversation", "conversation_id", convID.String())
+		} else {
+			slog.Warn("failed to update conversation title with LLM summary", "conversation_id", convID.String(), "error", updateErr)
+		}
 	} else {
 		slog.Debug("updated conversation title via LLM", "conversation_id", convID.String(), "title", uniqueTitle)
 	}

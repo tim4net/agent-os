@@ -14,7 +14,7 @@ import (
 const createWorkflow = `-- name: CreateWorkflow :one
 INSERT INTO workflows (name, description, steps, agent_id)
 VALUES ($1, $2, $3, $4)
-RETURNING id, name, description, steps, agent_id, created_at, updated_at
+RETURNING id, name, description, steps, agent_id, created_at, updated_at, owner_id
 `
 
 type CreateWorkflowParams struct {
@@ -40,6 +40,7 @@ func (q *Queries) CreateWorkflow(ctx context.Context, arg CreateWorkflowParams) 
 		&i.AgentID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OwnerID,
 	)
 	return i, err
 }
@@ -47,7 +48,7 @@ func (q *Queries) CreateWorkflow(ctx context.Context, arg CreateWorkflowParams) 
 const createWorkflowRun = `-- name: CreateWorkflowRun :one
 INSERT INTO workflow_runs (workflow_id, status, current_step, result)
 VALUES ($1, $2, $3, $4)
-RETURNING id, workflow_id, status, current_step, result, created_at, updated_at
+RETURNING id, workflow_id, status, current_step, result, created_at, updated_at, owner_id
 `
 
 type CreateWorkflowRunParams struct {
@@ -73,6 +74,7 @@ func (q *Queries) CreateWorkflowRun(ctx context.Context, arg CreateWorkflowRunPa
 		&i.Result,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OwnerID,
 	)
 	return i, err
 }
@@ -87,7 +89,7 @@ func (q *Queries) DeleteWorkflow(ctx context.Context, id pgtype.UUID) error {
 }
 
 const getLatestWorkflowRun = `-- name: GetLatestWorkflowRun :one
-SELECT id, workflow_id, status, current_step, result, created_at, updated_at FROM workflow_runs
+SELECT id, workflow_id, status, current_step, result, created_at, updated_at, owner_id FROM workflow_runs
 WHERE workflow_id = $1
 ORDER BY created_at DESC
 LIMIT 1
@@ -104,12 +106,13 @@ func (q *Queries) GetLatestWorkflowRun(ctx context.Context, workflowID pgtype.UU
 		&i.Result,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OwnerID,
 	)
 	return i, err
 }
 
 const getWorkflow = `-- name: GetWorkflow :one
-SELECT id, name, description, steps, agent_id, created_at, updated_at FROM workflows WHERE id = $1
+SELECT id, name, description, steps, agent_id, created_at, updated_at, owner_id FROM workflows WHERE id = $1
 `
 
 func (q *Queries) GetWorkflow(ctx context.Context, id pgtype.UUID) (Workflow, error) {
@@ -123,12 +126,13 @@ func (q *Queries) GetWorkflow(ctx context.Context, id pgtype.UUID) (Workflow, er
 		&i.AgentID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OwnerID,
 	)
 	return i, err
 }
 
 const getWorkflowRun = `-- name: GetWorkflowRun :one
-SELECT id, workflow_id, status, current_step, result, created_at, updated_at FROM workflow_runs WHERE id = $1
+SELECT id, workflow_id, status, current_step, result, created_at, updated_at, owner_id FROM workflow_runs WHERE id = $1
 `
 
 func (q *Queries) GetWorkflowRun(ctx context.Context, id pgtype.UUID) (WorkflowRun, error) {
@@ -142,12 +146,13 @@ func (q *Queries) GetWorkflowRun(ctx context.Context, id pgtype.UUID) (WorkflowR
 		&i.Result,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OwnerID,
 	)
 	return i, err
 }
 
 const listWorkflowRuns = `-- name: ListWorkflowRuns :many
-SELECT id, workflow_id, status, current_step, result, created_at, updated_at FROM workflow_runs
+SELECT id, workflow_id, status, current_step, result, created_at, updated_at, owner_id FROM workflow_runs
 WHERE workflow_id = $1
 ORDER BY created_at DESC
 `
@@ -169,6 +174,7 @@ func (q *Queries) ListWorkflowRuns(ctx context.Context, workflowID pgtype.UUID) 
 			&i.Result,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.OwnerID,
 		); err != nil {
 			return nil, err
 		}
@@ -181,7 +187,7 @@ func (q *Queries) ListWorkflowRuns(ctx context.Context, workflowID pgtype.UUID) 
 }
 
 const listWorkflows = `-- name: ListWorkflows :many
-SELECT id, name, description, steps, agent_id, created_at, updated_at FROM workflows
+SELECT id, name, description, steps, agent_id, created_at, updated_at, owner_id FROM workflows
 ORDER BY created_at DESC
 `
 
@@ -202,6 +208,7 @@ func (q *Queries) ListWorkflows(ctx context.Context) ([]Workflow, error) {
 			&i.AgentID,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.OwnerID,
 		); err != nil {
 			return nil, err
 		}
@@ -216,7 +223,7 @@ func (q *Queries) ListWorkflows(ctx context.Context) ([]Workflow, error) {
 const updateWorkflow = `-- name: UpdateWorkflow :one
 UPDATE workflows SET name = $2, description = $3, steps = $4, agent_id = $5, updated_at = NOW()
 WHERE id = $1
-RETURNING id, name, description, steps, agent_id, created_at, updated_at
+RETURNING id, name, description, steps, agent_id, created_at, updated_at, owner_id
 `
 
 type UpdateWorkflowParams struct {
@@ -244,6 +251,7 @@ func (q *Queries) UpdateWorkflow(ctx context.Context, arg UpdateWorkflowParams) 
 		&i.AgentID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OwnerID,
 	)
 	return i, err
 }
@@ -251,7 +259,7 @@ func (q *Queries) UpdateWorkflow(ctx context.Context, arg UpdateWorkflowParams) 
 const updateWorkflowRun = `-- name: UpdateWorkflowRun :one
 UPDATE workflow_runs SET status = $2, current_step = $3, result = $4, updated_at = NOW()
 WHERE id = $1
-RETURNING id, workflow_id, status, current_step, result, created_at, updated_at
+RETURNING id, workflow_id, status, current_step, result, created_at, updated_at, owner_id
 `
 
 type UpdateWorkflowRunParams struct {
@@ -277,6 +285,7 @@ func (q *Queries) UpdateWorkflowRun(ctx context.Context, arg UpdateWorkflowRunPa
 		&i.Result,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.OwnerID,
 	)
 	return i, err
 }

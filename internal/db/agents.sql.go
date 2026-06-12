@@ -14,7 +14,7 @@ import (
 const createAgent = `-- name: CreateAgent :one
 INSERT INTO agents (name, display_name, harness, base_url, metadata)
 VALUES ($1, $2, $3, $4, $5)
-RETURNING id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible
+RETURNING id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id
 `
 
 type CreateAgentParams struct {
@@ -49,6 +49,7 @@ func (q *Queries) CreateAgent(ctx context.Context, arg CreateAgentParams) (Agent
 		&i.SystemPrompt,
 		&i.Persona,
 		&i.Visible,
+		&i.OwnerID,
 	)
 	return i, err
 }
@@ -66,7 +67,7 @@ const ensureAgent = `-- name: EnsureAgent :one
 INSERT INTO agents (name, display_name, harness, base_url, metadata)
 VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT (name) DO NOTHING
-RETURNING id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible
+RETURNING id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id
 `
 
 type EnsureAgentParams struct {
@@ -101,12 +102,13 @@ func (q *Queries) EnsureAgent(ctx context.Context, arg EnsureAgentParams) (Agent
 		&i.SystemPrompt,
 		&i.Persona,
 		&i.Visible,
+		&i.OwnerID,
 	)
 	return i, err
 }
 
 const getAgent = `-- name: GetAgent :one
-SELECT id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible FROM agents WHERE id = $1
+SELECT id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id FROM agents WHERE id = $1
 `
 
 func (q *Queries) GetAgent(ctx context.Context, id pgtype.UUID) (Agent, error) {
@@ -127,12 +129,13 @@ func (q *Queries) GetAgent(ctx context.Context, id pgtype.UUID) (Agent, error) {
 		&i.SystemPrompt,
 		&i.Persona,
 		&i.Visible,
+		&i.OwnerID,
 	)
 	return i, err
 }
 
 const getAgentByName = `-- name: GetAgentByName :one
-SELECT id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible FROM agents WHERE name = $1
+SELECT id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id FROM agents WHERE name = $1
 `
 
 func (q *Queries) GetAgentByName(ctx context.Context, name string) (Agent, error) {
@@ -153,12 +156,13 @@ func (q *Queries) GetAgentByName(ctx context.Context, name string) (Agent, error
 		&i.SystemPrompt,
 		&i.Persona,
 		&i.Visible,
+		&i.OwnerID,
 	)
 	return i, err
 }
 
 const listAgents = `-- name: ListAgents :many
-SELECT id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible FROM agents ORDER BY created_at
+SELECT id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id FROM agents ORDER BY created_at
 `
 
 func (q *Queries) ListAgents(ctx context.Context) ([]Agent, error) {
@@ -185,6 +189,7 @@ func (q *Queries) ListAgents(ctx context.Context) ([]Agent, error) {
 			&i.SystemPrompt,
 			&i.Persona,
 			&i.Visible,
+			&i.OwnerID,
 		); err != nil {
 			return nil, err
 		}
@@ -197,7 +202,7 @@ func (q *Queries) ListAgents(ctx context.Context) ([]Agent, error) {
 }
 
 const listVisibleAgents = `-- name: ListVisibleAgents :many
-SELECT id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible FROM agents WHERE visible = true ORDER BY created_at
+SELECT id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id FROM agents WHERE visible = true ORDER BY created_at
 `
 
 func (q *Queries) ListVisibleAgents(ctx context.Context) ([]Agent, error) {
@@ -224,6 +229,7 @@ func (q *Queries) ListVisibleAgents(ctx context.Context) ([]Agent, error) {
 			&i.SystemPrompt,
 			&i.Persona,
 			&i.Visible,
+			&i.OwnerID,
 		); err != nil {
 			return nil, err
 		}
@@ -238,7 +244,7 @@ func (q *Queries) ListVisibleAgents(ctx context.Context) ([]Agent, error) {
 const updateAgent = `-- name: UpdateAgent :one
 UPDATE agents SET display_name = $2, harness = $3, base_url = $4, metadata = $5, updated_at = NOW()
 WHERE id = $1
-RETURNING id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible
+RETURNING id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id
 `
 
 type UpdateAgentParams struct {
@@ -273,6 +279,7 @@ func (q *Queries) UpdateAgent(ctx context.Context, arg UpdateAgentParams) (Agent
 		&i.SystemPrompt,
 		&i.Persona,
 		&i.Visible,
+		&i.OwnerID,
 	)
 	return i, err
 }
@@ -280,7 +287,7 @@ func (q *Queries) UpdateAgent(ctx context.Context, arg UpdateAgentParams) (Agent
 const updateAgentConfig = `-- name: UpdateAgentConfig :one
 UPDATE agents SET role = $2, system_prompt = $3, persona = $4, updated_at = NOW()
 WHERE id = $1
-RETURNING id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible
+RETURNING id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id
 `
 
 type UpdateAgentConfigParams struct {
@@ -313,6 +320,7 @@ func (q *Queries) UpdateAgentConfig(ctx context.Context, arg UpdateAgentConfigPa
 		&i.SystemPrompt,
 		&i.Persona,
 		&i.Visible,
+		&i.OwnerID,
 	)
 	return i, err
 }
@@ -320,7 +328,7 @@ func (q *Queries) UpdateAgentConfig(ctx context.Context, arg UpdateAgentConfigPa
 const updateAgentStatus = `-- name: UpdateAgentStatus :one
 UPDATE agents SET status = $2, last_seen = NOW(), updated_at = NOW()
 WHERE id = $1
-RETURNING id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible
+RETURNING id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id
 `
 
 type UpdateAgentStatusParams struct {
@@ -346,6 +354,7 @@ func (q *Queries) UpdateAgentStatus(ctx context.Context, arg UpdateAgentStatusPa
 		&i.SystemPrompt,
 		&i.Persona,
 		&i.Visible,
+		&i.OwnerID,
 	)
 	return i, err
 }

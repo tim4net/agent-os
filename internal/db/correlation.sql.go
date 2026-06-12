@@ -28,7 +28,7 @@ func (q *Queries) CountWorkUnits(ctx context.Context, tenant string) (int64, err
 }
 
 const getWorkUnitEvents = `-- name: GetWorkUnitEvents :many
-SELECT id, event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, project_id, tenant, external_ref, branch, sha, cwd, title, cost_usd, payload, ts, received_at
+SELECT id, event_id, schema_version, harness, session_id, host, pid, kind, status, liveness_mode, project_id, tenant, external_ref, branch, sha, cwd, title, cost_usd, payload, ts, received_at, owner_id
 FROM work_events
 WHERE COALESCE(tenant, '')            = $1
   AND COALESCE(project_id::text, '')  = $2
@@ -85,6 +85,7 @@ func (q *Queries) GetWorkUnitEvents(ctx context.Context, arg GetWorkUnitEventsPa
 			&i.Payload,
 			&i.Ts,
 			&i.ReceivedAt,
+			&i.OwnerID,
 		); err != nil {
 			return nil, err
 		}

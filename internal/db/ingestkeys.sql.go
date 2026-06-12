@@ -25,7 +25,7 @@ func (q *Queries) CountActiveIngestKeys(ctx context.Context, tenant string) (int
 const createIngestKey = `-- name: CreateIngestKey :one
 INSERT INTO ingest_keys (key_hash, tenant, label)
 VALUES ($1, $2, $3)
-RETURNING id, key_hash, tenant, label, created_at, revoked_at
+RETURNING id, key_hash, tenant, label, created_at, revoked_at, owner_id
 `
 
 type CreateIngestKeyParams struct {
@@ -46,12 +46,13 @@ func (q *Queries) CreateIngestKey(ctx context.Context, arg CreateIngestKeyParams
 		&i.Label,
 		&i.CreatedAt,
 		&i.RevokedAt,
+		&i.OwnerID,
 	)
 	return i, err
 }
 
 const getIngestKeyByHash = `-- name: GetIngestKeyByHash :one
-SELECT id, key_hash, tenant, label, created_at, revoked_at FROM ingest_keys
+SELECT id, key_hash, tenant, label, created_at, revoked_at, owner_id FROM ingest_keys
 WHERE key_hash = $1 AND revoked_at IS NULL
 `
 
@@ -67,12 +68,13 @@ func (q *Queries) GetIngestKeyByHash(ctx context.Context, keyHash string) (Inges
 		&i.Label,
 		&i.CreatedAt,
 		&i.RevokedAt,
+		&i.OwnerID,
 	)
 	return i, err
 }
 
 const listIngestKeysByTenant = `-- name: ListIngestKeysByTenant :many
-SELECT id, key_hash, tenant, label, created_at, revoked_at FROM ingest_keys
+SELECT id, key_hash, tenant, label, created_at, revoked_at, owner_id FROM ingest_keys
 WHERE tenant = $1
 ORDER BY created_at DESC
 `
@@ -94,6 +96,7 @@ func (q *Queries) ListIngestKeysByTenant(ctx context.Context, tenant string) ([]
 			&i.Label,
 			&i.CreatedAt,
 			&i.RevokedAt,
+			&i.OwnerID,
 		); err != nil {
 			return nil, err
 		}
