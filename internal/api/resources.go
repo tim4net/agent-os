@@ -46,16 +46,6 @@ func toResourceView(r any) resourceView {
 	switch v := r.(type) {
 	case db.Resource:
 		id, slug, kind, label, provider, isSecret, config, last4, status, createdAt, updatedAt, encValue = v.ID, v.Slug, v.Kind, v.Label, v.Provider, v.IsSecret, v.Config, v.Last4, v.Status, v.CreatedAt, v.UpdatedAt, v.EncValue
-	case db.ListResourcesRow:
-		id, slug, kind, label, provider, isSecret, config, last4, status, createdAt, updatedAt, encValue = v.ID, v.Slug, v.Kind, v.Label, v.Provider, v.IsSecret, v.Config, v.Last4, v.Status, v.CreatedAt, v.UpdatedAt, v.EncValue
-	case db.ListResourcesByKindRow:
-		id, slug, kind, label, provider, isSecret, config, last4, status, createdAt, updatedAt, encValue = v.ID, v.Slug, v.Kind, v.Label, v.Provider, v.IsSecret, v.Config, v.Last4, v.Status, v.CreatedAt, v.UpdatedAt, v.EncValue
-	case db.CreateResourceRow:
-		id, slug, kind, label, provider, isSecret, config, last4, status, createdAt, updatedAt, encValue = v.ID, v.Slug, v.Kind, v.Label, v.Provider, v.IsSecret, v.Config, v.Last4, v.Status, v.CreatedAt, v.UpdatedAt, v.EncValue
-	case db.UpdateResourceRow:
-		id, slug, kind, label, provider, isSecret, config, last4, status, createdAt, updatedAt, encValue = v.ID, v.Slug, v.Kind, v.Label, v.Provider, v.IsSecret, v.Config, v.Last4, v.Status, v.CreatedAt, v.UpdatedAt, v.EncValue
-	case db.ListResourcesForAgentRow:
-		id, slug, kind, label, provider, isSecret, config, last4, status, createdAt, updatedAt, encValue = v.ID, v.Slug, v.Kind, v.Label, v.Provider, v.IsSecret, v.Config, v.Last4, v.Status, v.CreatedAt, v.UpdatedAt, v.EncValue
 	}
 
 	cfg := json.RawMessage(config)
@@ -330,16 +320,6 @@ func (a *API) resolveResourceSecret(res any) string {
 	switch v := res.(type) {
 	case db.Resource:
 		encValue = v.EncValue
-	case db.ListResourcesRow:
-		encValue = v.EncValue
-	case db.ListResourcesByKindRow:
-		encValue = v.EncValue
-	case db.CreateResourceRow:
-		encValue = v.EncValue
-	case db.UpdateResourceRow:
-		encValue = v.EncValue
-	case db.ListResourcesForAgentRow:
-		encValue = v.EncValue
 	}
 
 	if len(encValue) == 0 || !a.cipher.Enabled() {
@@ -364,10 +344,6 @@ type grantView struct {
 func toGrantView(g any) grantView {
 	switch v := g.(type) {
 	case db.AgentGrant:
-		return grantView{AgentID: v.AgentID, ResourceID: v.ResourceID, Scope: v.Scope, GrantedAt: v.GrantedAt}
-	case db.ListAllGrantsRow:
-		return grantView{AgentID: v.AgentID, ResourceID: v.ResourceID, Scope: v.Scope, GrantedAt: v.GrantedAt}
-	case db.GrantResourceRow:
 		return grantView{AgentID: v.AgentID, ResourceID: v.ResourceID, Scope: v.Scope, GrantedAt: v.GrantedAt}
 	}
 	return grantView{}
@@ -397,7 +373,7 @@ func (a *API) ListAllGrants(w http.ResponseWriter, r *http.Request) {
 // ListAgentGrants handles GET /api/agents/{id}/grants — resources granted to one
 // agent (masked resource views), for the per-agent access drawer.
 func (a *API) ListAgentGrants(w http.ResponseWriter, r *http.Request) {
-	_, ok := OwnerIDFromContext(r.Context())
+	ownerID, ok := OwnerIDFromContext(r.Context())
 	if !ok {
 		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
 		return
@@ -405,6 +381,11 @@ func (a *API) ListAgentGrants(w http.ResponseWriter, r *http.Request) {
 
 	id, ok := parseUUIDParam(w, r, "id")
 	if !ok {
+		return
+	}
+	// Verify the agent belongs to this owner before listing its grants.
+	if _, err := a.queries.GetAgent(r.Context(), db.GetAgentParams{ID: id, OwnerID: ownerID}); err != nil {
+		http.Error(w, "agent not found", http.StatusNotFound)
 		return
 	}
 	rows, err := a.queries.ListResourcesForAgent(r.Context(), id)
