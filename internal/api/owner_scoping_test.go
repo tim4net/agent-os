@@ -63,7 +63,7 @@ func seedTestOwner(t *testing.T, pool *pgxpool.Pool, login string) pgtype.UUID {
 	err := pool.QueryRow(ctx,
 		`INSERT INTO users (login, display_name) VALUES ($1, $2)
 		 ON CONFLICT (login) DO UPDATE SET display_name = EXCLUDED.display_name
-		 RETURNING id`, login, login).Scan(&id.Bytes, &id.Valid)
+		 RETURNING id`, login, login).Scan(&id)
 	if err != nil {
 		t.Fatalf("seed test owner %q: %v", login, err)
 	}
@@ -256,7 +256,7 @@ func TestOwnerID_HandlerRejection(t *testing.T) {
 }
 
 // TestOwnerID_HandlerWithIdentity tests that a request with proper identity
-// returns 200 and properly scoped data.
+// returns 200 and properly scoped data (only the requesting owner's agents).
 func TestOwnerID_HandlerWithIdentity(t *testing.T) {
 	if os.Getenv("AOS_TEST_DATABASE_URL") == "" {
 		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
@@ -265,20 +265,34 @@ func TestOwnerID_HandlerWithIdentity(t *testing.T) {
 	defer pool.Close()
 
 	ownerID := seedTestOwner(t, pool, "test-owner-handler")
+	otherOwner := seedTestOwner(t, pool, "test-owner-other")
 	defer cleanupTestAgents(t, pool, "test-handler")
 
 	ctx := context.Background()
 	queries := db.New(pool)
 
-	// Create an agent for this owner
+	// Create an agent for this owner (visible so ListVisibleAgents returns it).
+	agentName := fmt.Sprintf("test-handler-%s", uuid.New().String()[:8])
 	_, err := queries.CreateAgent(ctx, db.CreateAgentParams{
-		OwnerID: ownerID,
-		Name:    fmt.Sprintf("test-handler-%s", uuid.New().String()[:8]),
+		OwnerID:     ownerID,
+		Name:        agentName,
 		DisplayName: "Handler Test",
-		Harness: "hermes", BaseUrl: "http://localhost:80", Metadata: []byte("{}"),
+		Harness:     "hermes", BaseUrl: "http://localhost:80", Metadata: []byte("{}"),
 	})
 	if err != nil {
 		t.Fatalf("CreateAgent: %v", err)
+	}
+
+	// Create an agent for a DIFFERENT owner — must NOT appear in our response.
+	otherName := fmt.Sprintf("test-handler-other-%s", uuid.New().String()[:8])
+	_, err = queries.CreateAgent(ctx, db.CreateAgentParams{
+		OwnerID:     otherOwner,
+		Name:        otherName,
+		DisplayName: "Other Owner",
+		Harness:     "hermes", BaseUrl: "http://localhost:81", Metadata: []byte("{}"),
+	})
+	if err != nil {
+		t.Fatalf("CreateAgent other: %v", err)
 	}
 
 	// Make request with identity header
@@ -297,13 +311,24 @@ func TestOwnerID_HandlerWithIdentity(t *testing.T) {
 		t.Fatalf("ListAgents with identity: got status %d, want 200. Body: %s", w.Code, w.Body.String())
 	}
 
-	var agents []db.Agent
+	// The handler returns []agentView (a safe projection that deliberately omits
+	// owner_id). Verify scoping by name: our agent must be present, the other
+	// owner's agent must be absent.
+	var agents []map[string]any
 	if err := json.Unmarshal(w.Body.Bytes(), &agents); err != nil {
 		t.Fatalf("unmarshal response: %v", err)
 	}
+	found := false
 	for _, a := range agents {
-		if a.OwnerID != ownerID {
-			t.Errorf("handler returned agent with wrong owner_id: got %v, want %v", a.OwnerID, ownerID)
+		name, _ := a["name"].(string)
+		if name == otherName {
+			t.Errorf("handler leaked another owner's agent %q into our scoped response", name)
 		}
+		if name == agentName {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("handler did not return our agent %q — scoping returned wrong owner's data", agentName)
 	}
 }

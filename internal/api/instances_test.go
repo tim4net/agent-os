@@ -120,6 +120,7 @@ func TestHTTPInstances_ListEmpty_Returns200(t *testing.T) {
 	defer pool.Close()
 
 	req := httptest.NewRequest("GET", "/?tenant="+tenant, nil)
+	req = req.WithContext(withTestOwner(req.Context()))
 	rec := httptest.NewRecorder()
 	a.InstanceRoutes().ServeHTTP(rec, req)
 
@@ -152,6 +153,7 @@ func TestHTTPInstances_ListWithSeededData(t *testing.T) {
 	seedAppInstance(t, pool, "host2", "http://localhost:8081/health", tenant, "down", withInstanceLabel("server-2"))
 
 	req := httptest.NewRequest("GET", "/?tenant="+tenant, nil)
+	req = req.WithContext(withTestOwner(req.Context()))
 	rec := httptest.NewRecorder()
 	a.InstanceRoutes().ServeHTTP(rec, req)
 
@@ -182,6 +184,7 @@ func TestHTTPInstances_TenantIsolation(t *testing.T) {
 
 	// Query tenantA → only tenantA instances
 	req := httptest.NewRequest("GET", "/?tenant="+tenantA, nil)
+	req = req.WithContext(withTestOwner(req.Context()))
 	rec := httptest.NewRecorder()
 	a.InstanceRoutes().ServeHTTP(rec, req)
 
@@ -199,6 +202,7 @@ func TestHTTPInstances_TenantIsolation(t *testing.T) {
 
 	// Query tenantB → only tenantB instances
 	req2 := httptest.NewRequest("GET", "/?tenant="+tenantB, nil)
+	req2 = req2.WithContext(withTestOwner(req2.Context()))
 	rec2 := httptest.NewRecorder()
 	a.InstanceRoutes().ServeHTTP(rec2, req2)
 
@@ -224,6 +228,7 @@ func TestHTTPInstances_ListPagination(t *testing.T) {
 
 	// limit=1 offset=0 → first page
 	req := httptest.NewRequest("GET", "/?tenant="+tenant+"&limit=1&offset=0", nil)
+	req = req.WithContext(withTestOwner(req.Context()))
 	rec := httptest.NewRecorder()
 	a.InstanceRoutes().ServeHTTP(rec, req)
 
@@ -258,6 +263,7 @@ func TestHTTPInstances_GetByID(t *testing.T) {
 	id := seedAppInstance(t, pool, "host1", "http://localhost:8080/health", tenant, "up")
 
 	req := httptest.NewRequest("GET", "/"+id, nil)
+	req = req.WithContext(withTestOwner(req.Context()))
 	rec := httptest.NewRecorder()
 	a.InstanceRoutes().ServeHTTP(rec, req)
 
@@ -285,6 +291,7 @@ func TestHTTPInstances_GetNotFound_Returns404(t *testing.T) {
 	defer pool.Close()
 
 	req := httptest.NewRequest("GET", "/"+uuid.NewString(), nil)
+	req = req.WithContext(withTestOwner(req.Context()))
 	rec := httptest.NewRecorder()
 	a.InstanceRoutes().ServeHTTP(rec, req)
 
@@ -303,6 +310,7 @@ func TestHTTPInstances_GetInvalidID_Returns400(t *testing.T) {
 	defer pool.Close()
 
 	req := httptest.NewRequest("GET", "/not-a-uuid", nil)
+	req = req.WithContext(withTestOwner(req.Context()))
 	rec := httptest.NewRecorder()
 	a.InstanceRoutes().ServeHTTP(rec, req)
 
@@ -322,6 +330,7 @@ func TestHTTPInstances_Create_Returns201(t *testing.T) {
 
 	body := `{"host":"myhost","health_url":"http://myhost:3000/health","tenant":"` + tenant + `","label":"my-server","harness":"claude"}`
 	req := httptest.NewRequest("POST", "/", strings.NewReader(body))
+	req = req.WithContext(withTestOwner(req.Context()))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	a.InstanceRoutes().ServeHTTP(rec, req)
@@ -357,6 +366,7 @@ func TestHTTPInstances_CreateMissingHost_Returns400(t *testing.T) {
 
 	body := `{"health_url":"http://myhost:3000/health","tenant":"test"}`
 	req := httptest.NewRequest("POST", "/", strings.NewReader(body))
+	req = req.WithContext(withTestOwner(req.Context()))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	a.InstanceRoutes().ServeHTTP(rec, req)
@@ -377,6 +387,7 @@ func TestHTTPInstances_CreateMissingHealthURL_Returns400(t *testing.T) {
 
 	body := `{"host":"myhost","tenant":"test"}`
 	req := httptest.NewRequest("POST", "/", strings.NewReader(body))
+	req = req.WithContext(withTestOwner(req.Context()))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	a.InstanceRoutes().ServeHTTP(rec, req)
@@ -396,6 +407,7 @@ func TestHTTPInstances_CreateInvalidJSON_Returns400(t *testing.T) {
 	defer pool.Close()
 
 	req := httptest.NewRequest("POST", "/", strings.NewReader("not json"))
+	req = req.WithContext(withTestOwner(req.Context()))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	a.InstanceRoutes().ServeHTTP(rec, req)
@@ -414,6 +426,7 @@ func TestHTTPInstances_CreateUpsert_Deduplicates(t *testing.T) {
 
 	// First create
 	req1 := httptest.NewRequest("POST", "/", strings.NewReader(body))
+	req1 = req1.WithContext(withTestOwner(req1.Context()))
 	req1.Header.Set("Content-Type", "application/json")
 	rec1 := httptest.NewRecorder()
 	a.InstanceRoutes().ServeHTTP(rec1, req1)
@@ -428,6 +441,7 @@ func TestHTTPInstances_CreateUpsert_Deduplicates(t *testing.T) {
 	// Second create with same host+url+tenant → upsert (same ID)
 	body2 := `{"host":"myhost","health_url":"http://myhost:3000/health","tenant":"` + tenant + `","label":"server-v2","harness":"claude"}`
 	req2 := httptest.NewRequest("POST", "/", strings.NewReader(body2))
+	req2 = req2.WithContext(withTestOwner(req2.Context()))
 	req2.Header.Set("Content-Type", "application/json")
 	rec2 := httptest.NewRecorder()
 	a.InstanceRoutes().ServeHTTP(rec2, req2)
@@ -449,6 +463,7 @@ func TestHTTPInstances_CreateUpsert_Deduplicates(t *testing.T) {
 
 	// Verify only 1 instance in DB
 	req3 := httptest.NewRequest("GET", "/?tenant="+tenant, nil)
+	req3 = req3.WithContext(withTestOwner(req3.Context()))
 	rec3 := httptest.NewRecorder()
 	a.InstanceRoutes().ServeHTTP(rec3, req3)
 	var resp3 InstancesListResponse
@@ -476,6 +491,7 @@ func TestHTTPInstances_ProbeRunningServer_ReturnsUp(t *testing.T) {
 	id := seedAppInstance(t, pool, "testhost", srv.URL, tenant, "unknown")
 
 	req := httptest.NewRequest("POST", "/"+id+"/probe", bytes.NewReader([]byte{}))
+	req = req.WithContext(withTestOwner(req.Context()))
 	rec := httptest.NewRecorder()
 	a.InstanceRoutes().ServeHTTP(rec, req)
 
@@ -499,6 +515,7 @@ func TestHTTPInstances_ProbeRunningServer_ReturnsUp(t *testing.T) {
 
 	// Verify DB was updated — fetch the instance again
 	reqGet := httptest.NewRequest("GET", "/"+id, nil)
+	reqGet = reqGet.WithContext(withTestOwner(reqGet.Context()))
 	recGet := httptest.NewRecorder()
 	a.InstanceRoutes().ServeHTTP(recGet, reqGet)
 	var instResp InstanceResponse
@@ -521,6 +538,7 @@ func TestHTTPInstances_ProbeStoppedServer_ReturnsDown(t *testing.T) {
 		withInstanceLastProbedAt(time.Now().Add(-1*time.Hour)))
 
 	req := httptest.NewRequest("POST", "/"+id+"/probe", bytes.NewReader([]byte{}))
+	req = req.WithContext(withTestOwner(req.Context()))
 	rec := httptest.NewRecorder()
 	a.InstanceRoutes().ServeHTTP(rec, req)
 
@@ -536,6 +554,7 @@ func TestHTTPInstances_ProbeStoppedServer_ReturnsDown(t *testing.T) {
 
 	// Verify DB was updated
 	reqGet := httptest.NewRequest("GET", "/"+id, nil)
+	reqGet = reqGet.WithContext(withTestOwner(reqGet.Context()))
 	recGet := httptest.NewRecorder()
 	a.InstanceRoutes().ServeHTTP(recGet, reqGet)
 	var instResp InstanceResponse
@@ -550,6 +569,7 @@ func TestHTTPInstances_ProbeNotFound_Returns404(t *testing.T) {
 	defer pool.Close()
 
 	req := httptest.NewRequest("POST", "/"+uuid.NewString()+"/probe", bytes.NewReader([]byte{}))
+	req = req.WithContext(withTestOwner(req.Context()))
 	rec := httptest.NewRecorder()
 	a.InstanceRoutes().ServeHTTP(rec, req)
 
@@ -563,6 +583,7 @@ func TestHTTPInstances_ProbeInvalidID_Returns400(t *testing.T) {
 	defer pool.Close()
 
 	req := httptest.NewRequest("POST", "/bad-id/probe", bytes.NewReader([]byte{}))
+	req = req.WithContext(withTestOwner(req.Context()))
 	rec := httptest.NewRecorder()
 	a.InstanceRoutes().ServeHTTP(rec, req)
 
@@ -584,6 +605,7 @@ func TestHTTPInstances_InitialStatusIsUnknown(t *testing.T) {
 	id := seedAppInstance(t, pool, "neverprobed", "http://localhost:1/health", tenant, "unknown")
 
 	req := httptest.NewRequest("GET", "/"+id, nil)
+	req = req.WithContext(withTestOwner(req.Context()))
 	rec := httptest.NewRecorder()
 	a.InstanceRoutes().ServeHTTP(rec, req)
 
@@ -617,6 +639,7 @@ func TestHTTPInstances_ResponseShape(t *testing.T) {
 		withInstanceLabel("test-server"))
 
 	req := httptest.NewRequest("GET", "/"+id, nil)
+	req = req.WithContext(withTestOwner(req.Context()))
 	rec := httptest.NewRecorder()
 	a.InstanceRoutes().ServeHTTP(rec, req)
 
@@ -664,6 +687,7 @@ func TestHTTPInstances_EmptyTenant_Returns400(t *testing.T) {
 
 	// No tenant param at all
 	req := httptest.NewRequest("GET", "/", nil)
+	req = req.WithContext(withTestOwner(req.Context()))
 	rec := httptest.NewRecorder()
 	a.InstanceRoutes().ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
@@ -688,6 +712,7 @@ func TestHTTPInstances_DayjobTenantNeverLeaks(t *testing.T) {
 
 	// Query for personal tenant — must never contain dayjob rows
 	req := httptest.NewRequest("GET", "/?tenant="+personalTenant, nil)
+	req = req.WithContext(withTestOwner(req.Context()))
 	rec := httptest.NewRecorder()
 	a.InstanceRoutes().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -713,6 +738,7 @@ func TestHTTPInstances_DayjobTenantNeverLeaks(t *testing.T) {
 
 	// Also verify empty-tenant is blocked (no dayjob leak via unscoped query)
 	req2 := httptest.NewRequest("GET", "/", nil)
+	req2 = req2.WithContext(withTestOwner(req2.Context()))
 	rec2 := httptest.NewRecorder()
 	a.InstanceRoutes().ServeHTTP(rec2, req2)
 	if rec2.Code != http.StatusBadRequest {
@@ -732,6 +758,7 @@ func TestUpsertAppInstanceOnServerStarted_Create_SetsUnknown(t *testing.T) {
 
 	// First call: no existing row → creates with status 'unknown'
 	inst, err := queries.UpsertAppInstanceOnServerStarted(context.Background(), db.UpsertAppInstanceOnServerStartedParams{
+		OwnerID:   testOwnerID(),
 		Harness:   "claude",
 		SessionID: uuid.NewString(),
 		Host:      "testhost-started",
@@ -765,6 +792,7 @@ func TestUpsertAppInstanceOnServerStarted_UpRow_NoStatusReset(t *testing.T) {
 
 	// Call UpsertAppInstanceOnServerStarted — up should NOT be reset
 	inst, err := queries.UpsertAppInstanceOnServerStarted(context.Background(), db.UpsertAppInstanceOnServerStartedParams{
+		OwnerID:   testOwnerID(),
 		Harness:   "claude",
 		SessionID: uuid.NewString(),
 		Host:      "uphost",
@@ -798,6 +826,7 @@ func TestUpsertAppInstanceOnServerStarted_DownRow_FlipsToUnknown(t *testing.T) {
 
 	// Call UpsertAppInstanceOnServerStarted — down should flip to unknown
 	inst, err := queries.UpsertAppInstanceOnServerStarted(context.Background(), db.UpsertAppInstanceOnServerStartedParams{
+		OwnerID:   testOwnerID(),
 		Harness:   "claude",
 		SessionID: uuid.NewString(),
 		Host:      "downhost",
@@ -824,6 +853,7 @@ func TestUpsertAppInstanceOnServerStarted_Idempotent_SingleRow(t *testing.T) {
 	queries := db.New(pool)
 
 	params := db.UpsertAppInstanceOnServerStartedParams{
+		OwnerID:   testOwnerID(),
 		Harness:   "claude",
 		SessionID: uuid.NewString(),
 		Host:      "idemhost",
@@ -853,7 +883,7 @@ func TestUpsertAppInstanceOnServerStarted_Idempotent_SingleRow(t *testing.T) {
 	}
 
 	// Verify only one row in DB
-	rows, err := queries.ListAppInstances(context.Background(), db.ListAppInstancesParams{Tenant: tenant, Lim: 100, Off: 0})
+	rows, err := queries.ListAppInstances(context.Background(), db.ListAppInstancesParams{OwnerID: testOwnerID(), Tenant: tenant, Lim: 100, Off: 0})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -877,8 +907,9 @@ func TestMarkInstanceDownByServerStopped_SetsDown(t *testing.T) {
 
 	// Mark down by host+tenant
 	err := queries.MarkInstanceDownByServerStopped(context.Background(), db.MarkInstanceDownByServerStoppedParams{
-		Host:   "stophost",
-		Tenant: tenant,
+		OwnerID: owner0UUID,
+		Host:    "stophost",
+		Tenant:  tenant,
 	})
 	if err != nil {
 		t.Fatalf("MarkInstanceDownByServerStopped: %v", err)
@@ -911,15 +942,16 @@ func TestMarkInstanceDownByServerStopped_TenantScoped(t *testing.T) {
 
 	// Mark down only for tenantA
 	err := queries.MarkInstanceDownByServerStopped(context.Background(), db.MarkInstanceDownByServerStoppedParams{
-		Host:   "sharedhost",
-		Tenant: tenantA,
+		OwnerID: owner0UUID,
+		Host:    "sharedhost",
+		Tenant:  tenantA,
 	})
 	if err != nil {
 		t.Fatalf("MarkInstanceDownByServerStopped: %v", err)
 	}
 
 	// tenantA instance should be down
-	rowsA, _ := queries.ListAppInstances(context.Background(), db.ListAppInstancesParams{Tenant: tenantA, Lim: 100, Off: 0})
+	rowsA, _ := queries.ListAppInstances(context.Background(), db.ListAppInstancesParams{OwnerID: owner0UUID, Tenant: tenantA, Lim: 100, Off: 0})
 	if len(rowsA) != 1 || rowsA[0].Status != "down" {
 		t.Fatalf("tenantA instance should be down, got status %q", rowsA[0].Status)
 	}
@@ -953,15 +985,16 @@ func TestMarkInstanceDownByServerStopped_NoHealthURL_Skipped(t *testing.T) {
 
 	// MarkInstanceDownByServerStopped should be a no-op (0 rows updated)
 	err = queries.MarkInstanceDownByServerStopped(ctx, db.MarkInstanceDownByServerStoppedParams{
-		Host:   "nohealthhost",
-		Tenant: tenant,
+		OwnerID: owner0UUID,
+		Host:    "nohealthhost",
+		Tenant:  tenant,
 	})
 	if err != nil {
 		t.Fatalf("MarkInstanceDownByServerStopped: %v", err)
 	}
 
 	// Instance should still be up
-	rows, _ := queries.ListAppInstances(context.Background(), db.ListAppInstancesParams{Tenant: tenant, Lim: 100, Off: 0})
+	rows, _ := queries.ListAppInstances(context.Background(), db.ListAppInstancesParams{OwnerID: owner0UUID, Tenant: tenant, Lim: 100, Off: 0})
 	if len(rows) != 1 || rows[0].Status != "up" {
 		t.Fatalf("instance with no health_url should remain up, got status %q", rows[0].Status)
 	}

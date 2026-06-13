@@ -182,9 +182,10 @@ func (c *GitHubClient) listIssues(ctx context.Context, owner, repo string) ([]Gi
 // GitHubSource implements TrackerSource + TrackerSyncer for GitHub Issues (WP-F).
 // Read-only: only GET calls to the GitHub REST API. No writes to GitHub.
 type GitHubSource struct {
-	client *GitHubClient
-	q      TrackerQuerier
-	log    *slog.Logger
+	client  *GitHubClient
+	q       TrackerQuerier
+	log     *slog.Logger
+	ownerID pgtype.UUID
 }
 
 // NewGitHubSource creates a new GitHub Issues tracker source.
@@ -205,6 +206,12 @@ func NewGitHubSourceWithClient(q TrackerQuerier, client *GitHubClient, log *slog
 	}
 }
 
+// WithOwnerID sets the owner ID for multi-tenant scoping (builder pattern).
+func (s *GitHubSource) WithOwnerID(id pgtype.UUID) *GitHubSource {
+	s.ownerID = id
+	return s
+}
+
 // List returns tracker items for a project from the DB (already synced), tenant-scoped.
 func (s *GitHubSource) List(ctx context.Context, projectID pgtype.UUID, tenant string, limit, offset int) ([]TrackerItemEntry, error) {
 	if limit <= 0 {
@@ -220,6 +227,7 @@ func (s *GitHubSource) List(ctx context.Context, projectID pgtype.UUID, tenant s
 	rows, err := s.q.ListTrackerItemsByProject(ctx, db.ListTrackerItemsByProjectParams{
 		ProjectID: projectID,
 		Tenant:    tenant,
+		OwnerID:   s.ownerID,
 		Limit:     int32(limit),
 		Offset:    int32(offset),
 	})
@@ -239,6 +247,7 @@ func (s *GitHubSource) Get(ctx context.Context, projectID pgtype.UUID, externalR
 	row, err := s.q.GetTrackerItem(ctx, db.GetTrackerItemParams{
 		ProjectID:   projectID,
 		ExternalRef: externalRef,
+		OwnerID:     s.ownerID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("github: get item: %w", err)
@@ -255,6 +264,7 @@ func (s *GitHubSource) Sync(ctx context.Context, projectID pgtype.UUID, tenant s
 	projects, err := s.q.GetTrackerProjects(ctx, db.GetTrackerProjectsParams{
 		Tracker: "github_issues",
 		Tenant:  tenant,
+		OwnerID: s.ownerID,
 	})
 	if err != nil {
 		return SyncResult{}, fmt.Errorf("github: get projects: %w", err)
@@ -317,6 +327,7 @@ func (s *GitHubSource) Sync(ctx context.Context, projectID pgtype.UUID, tenant s
 		canonicalURL := pgtype.Text{String: issue.HTMLURL, Valid: issue.HTMLURL != ""}
 
 		_, err = s.q.UpsertTrackerItem(ctx, db.UpsertTrackerItemParams{
+			OwnerID:      s.ownerID,
 			ProjectID:    projectID,
 			ExternalRef:  externalRef,
 			Title:        issue.Title,

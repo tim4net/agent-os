@@ -510,6 +510,7 @@ func trackerRequest(a *API, method, path string, query map[string]string) *httpt
 		}
 	}
 	r := httptest.NewRequest(method, fullURL, nil)
+	r = r.WithContext(withTestOwner(r.Context()))
 	rec := httptest.NewRecorder()
 	a.TrackerRoutes().ServeHTTP(rec, r)
 	return rec

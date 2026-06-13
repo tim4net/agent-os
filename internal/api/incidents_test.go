@@ -64,6 +64,7 @@ func doneSessionWorkEvent(eventID, sessionID string) string {
 func ingestWorkEvent(t *testing.T, a *API, body string) int {
 	t.Helper()
 	req := httptest.NewRequest("POST", "/work", strings.NewReader(body))
+	req = req.WithContext(withTestOwner(req.Context()))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-AgentOS-Ingest-Key", "test-key")
 	rec := httptest.NewRecorder()
@@ -91,6 +92,7 @@ func TestIncidents_NoFailedSessions_ReturnsEmptyGreen(t *testing.T) {
 	seedTestIngestKey(t, pool)
 
 	req := httptest.NewRequest("GET", "/?tenant=incidents-empty-green-test", nil)
+	req = req.WithContext(withTestOwner(req.Context()))
 	rec := httptest.NewRecorder()
 	a.IncidentRoutes().ServeHTTP(rec, req)
 
@@ -158,6 +160,7 @@ func TestIncidents_FailedSessionSurfaces(t *testing.T) {
 
 	// Query the incidents endpoint (REST — proves "surfaces within one poll cycle")
 	incReq := httptest.NewRequest("GET", "/?tenant=personal", nil)
+	incReq = incReq.WithContext(withTestOwner(incReq.Context()))
 	incRec := httptest.NewRecorder()
 	a.IncidentRoutes().ServeHTTP(incRec, incReq)
 
@@ -227,6 +230,7 @@ func TestIncidents_DoneSessionDoesNotSurface(t *testing.T) {
 
 	// Query incidents
 	req := httptest.NewRequest("GET", "/?tenant=personal", nil)
+	req = req.WithContext(withTestOwner(req.Context()))
 	rec := httptest.NewRecorder()
 	a.IncidentRoutes().ServeHTTP(rec, req)
 
@@ -270,6 +274,7 @@ func TestIncidents_TenantIsolation(t *testing.T) {
 
 	// Query incidents with tenant=dayjob — the personal failure must not appear
 	req := httptest.NewRequest("GET", "/?tenant=dayjob", nil)
+	req = req.WithContext(withTestOwner(req.Context()))
 	rec := httptest.NewRecorder()
 	a.IncidentRoutes().ServeHTTP(rec, req)
 
@@ -315,6 +320,7 @@ func TestIncidents_Pagination(t *testing.T) {
 
 	// Page 1: limit=2
 	req1 := httptest.NewRequest("GET", "/?tenant=personal&limit=2&offset=0", nil)
+	req1 = req1.WithContext(withTestOwner(req1.Context()))
 	rec1 := httptest.NewRecorder()
 	a.IncidentRoutes().ServeHTTP(rec1, req1)
 
@@ -331,6 +337,7 @@ func TestIncidents_Pagination(t *testing.T) {
 
 	// Page 2: limit=2, offset=2
 	req2 := httptest.NewRequest("GET", "/?tenant=personal&limit=2&offset=2", nil)
+	req2 = req2.WithContext(withTestOwner(req2.Context()))
 	rec2 := httptest.NewRecorder()
 	a.IncidentRoutes().ServeHTTP(rec2, req2)
 
@@ -388,6 +395,7 @@ func TestIncidents_NewestFirst(t *testing.T) {
 	}
 
 	req := httptest.NewRequest("GET", "/?tenant=personal&limit=10", nil)
+	req = req.WithContext(withTestOwner(req.Context()))
 	rec := httptest.NewRecorder()
 	a.IncidentRoutes().ServeHTTP(rec, req)
 
@@ -420,6 +428,7 @@ func TestIncidents_ResponseShape(t *testing.T) {
 	seedTestIngestKey(t, pool)
 
 	req := httptest.NewRequest("GET", "/?tenant=personal", nil)
+	req = req.WithContext(withTestOwner(req.Context()))
 	rec := httptest.NewRecorder()
 	a.IncidentRoutes().ServeHTTP(rec, req)
 
@@ -470,6 +479,7 @@ func TestIncidents_AllTenantsFilter(t *testing.T) {
 
 	// Query with no tenant filter
 	req := httptest.NewRequest("GET", "/", nil)
+	req = req.WithContext(withTestOwner(req.Context()))
 	rec := httptest.NewRecorder()
 	a.IncidentRoutes().ServeHTTP(rec, req)
 
@@ -505,6 +515,7 @@ func TestIncidents_ClampAbsurdLimit(t *testing.T) {
 
 	// Request with absurd limit
 	req := httptest.NewRequest("GET", "/?tenant=personal&limit=999999999", nil)
+	req = req.WithContext(withTestOwner(req.Context()))
 	rec := httptest.NewRecorder()
 	a.IncidentRoutes().ServeHTTP(rec, req)
 
@@ -556,6 +567,7 @@ func TestIncidents_FailedThenSucceededDoesNotSurface(t *testing.T) {
 
 	// Query incidents — the session should NOT appear as failed
 	req := httptest.NewRequest("GET", "/?tenant=personal", nil)
+	req = req.WithContext(withTestOwner(req.Context()))
 	rec := httptest.NewRecorder()
 	a.IncidentRoutes().ServeHTTP(rec, req)
 
@@ -596,6 +608,7 @@ func TestIncidents_DownInstanceSurfaces(t *testing.T) {
 	}
 
 	req := httptest.NewRequest("GET", "/?tenant=personal", nil)
+	req = req.WithContext(withTestOwner(req.Context()))
 	rec := httptest.NewRecorder()
 	a.IncidentRoutes().ServeHTTP(rec, req)
 
@@ -673,6 +686,7 @@ func TestIncidents_StaleSessionSurfaces(t *testing.T) {
 	// Use a very large stale_window to make our 10-minute-old event definitely stale.
 	// The default 5-minute window should already catch it.
 	req := httptest.NewRequest("GET", "/?tenant=personal&stale_window=6m", nil)
+	req = req.WithContext(withTestOwner(req.Context()))
 	rec := httptest.NewRecorder()
 	a.IncidentRoutes().ServeHTTP(rec, req)
 
@@ -711,6 +725,7 @@ func TestIncidents_UnifiedTotal(t *testing.T) {
 
 	// Count baseline incidents before we add anything.
 	req0 := httptest.NewRequest("GET", "/?tenant=personal&limit=200", nil)
+	req0 = req0.WithContext(withTestOwner(req0.Context()))
 	rec0 := httptest.NewRecorder()
 	a.IncidentRoutes().ServeHTTP(rec0, req0)
 	var resp0 IncidentsResponse
@@ -742,6 +757,7 @@ func TestIncidents_UnifiedTotal(t *testing.T) {
 
 	// Query all incidents with a large limit.
 	req := httptest.NewRequest("GET", "/?tenant=personal&limit=200", nil)
+	req = req.WithContext(withTestOwner(req.Context()))
 	rec := httptest.NewRecorder()
 	a.IncidentRoutes().ServeHTTP(rec, req)
 
@@ -806,6 +822,7 @@ func TestIncidents_ProjectFanOutDoesNotDuplicate(t *testing.T) {
 	ingestWorkEvent(t, a, string(failBody))
 
 	req := httptest.NewRequest("GET", "/?tenant=personal&limit=200", nil)
+	req = req.WithContext(withTestOwner(req.Context()))
 	rec := httptest.NewRecorder()
 	a.IncidentRoutes().ServeHTTP(rec, req)
 
@@ -854,6 +871,7 @@ func TestIncidents_TotalOnOutOfRangePage(t *testing.T) {
 
 	// Query with an offset past all incidents
 	req := httptest.NewRequest("GET", "/?tenant=personal&limit=10&offset=99999", nil)
+	req = req.WithContext(withTestOwner(req.Context()))
 	rec := httptest.NewRecorder()
 	a.IncidentRoutes().ServeHTTP(rec, req)
 

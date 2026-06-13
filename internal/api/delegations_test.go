@@ -38,6 +38,7 @@ func TestHTTPDelegation_POSTSynthesizesWorkEvent(t *testing.T) {
 	body, _ := json.Marshal(payload)
 
 	req := httptest.NewRequest("POST", "/", bytes.NewReader(body))
+	req = req.WithContext(withTestOwner(req.Context()))
 	req.Header.Set("Content-Type", "application/json")
 
 	rec := httptest.NewRecorder()
@@ -100,6 +101,7 @@ func TestHTTPDelegation_PATCHTerminalSynthesizesSessionEnd(t *testing.T) {
 	}
 	postJSON, _ := json.Marshal(postBody)
 	postReq := httptest.NewRequest("POST", "/", bytes.NewReader(postJSON))
+	postReq = postReq.WithContext(withTestOwner(postReq.Context()))
 	postReq.Header.Set("Content-Type", "application/json")
 
 	postRec := httptest.NewRecorder()
@@ -119,6 +121,7 @@ func TestHTTPDelegation_PATCHTerminalSynthesizesSessionEnd(t *testing.T) {
 	}
 	patchJSON, _ := json.Marshal(patchBody)
 	patchReq := httptest.NewRequest("PATCH", "/"+degID, bytes.NewReader(patchJSON))
+	patchReq = patchReq.WithContext(withTestOwner(patchReq.Context()))
 	patchReq.Header.Set("Content-Type", "application/json")
 
 	patchRec := httptest.NewRecorder()
@@ -165,6 +168,7 @@ func TestHTTPDelegation_PATCHNonTerminalNoSynthesis(t *testing.T) {
 	}
 	postJSON, _ := json.Marshal(postBody)
 	postReq := httptest.NewRequest("POST", "/", bytes.NewReader(postJSON))
+	postReq = postReq.WithContext(withTestOwner(postReq.Context()))
 	postReq.Header.Set("Content-Type", "application/json")
 	postRec := httptest.NewRecorder()
 	a.DelegationRoutes().ServeHTTP(postRec, postReq)
@@ -179,6 +183,7 @@ func TestHTTPDelegation_PATCHNonTerminalNoSynthesis(t *testing.T) {
 	patchBody := map[string]string{"status": "running"}
 	patchJSON, _ := json.Marshal(patchBody)
 	patchReq := httptest.NewRequest("PATCH", "/"+delegResp.ID, bytes.NewReader(patchJSON))
+	patchReq = patchReq.WithContext(withTestOwner(patchReq.Context()))
 	patchReq.Header.Set("Content-Type", "application/json")
 	patchRec := httptest.NewRecorder()
 	a.DelegationRoutes().ServeHTTP(patchRec, patchReq)

@@ -18,6 +18,7 @@ import (
 func seedEvent(t *testing.T, a *API, body string) {
 	t.Helper()
 	req := httptest.NewRequest("POST", "/work", strings.NewReader(body))
+	req = req.WithContext(withTestOwner(req.Context()))
 	req.Header.Set("X-AgentOS-Ingest-Key", "test-key")
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -31,6 +32,7 @@ func seedEvent(t *testing.T, a *API, body string) {
 func fetchUnits(t *testing.T, a *API, query string) WorkUnitsResponse {
 	t.Helper()
 	req := httptest.NewRequest("GET", "/?limit=200"+query, nil)
+	req = req.WithContext(withTestOwner(req.Context()))
 	rec := httptest.NewRecorder()
 	a.WorkUnitRoutes().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {

@@ -96,7 +96,7 @@ func (a *API) ListTrackerItems(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		src := service.NewShortcutSource(a.queries, slog.Default().WithGroup("shortcut"))
+		src := service.NewShortcutSource(a.queries, slog.Default().WithGroup("shortcut")).WithOwnerID(ownerID)
 		items, err := src.List(r.Context(), projectID, tenant, limit, offset)
 		if err != nil {
 			log.Printf("trackers: list by project failed: %v", err)
@@ -200,9 +200,9 @@ func (a *API) SyncTrackerItems(w http.ResponseWriter, r *http.Request) {
 	} else {
 		switch proj.Tracker {
 		case "shortcut":
-			src = service.NewShortcutSource(a.queries, slog.Default().WithGroup("shortcut"))
+			src = service.NewShortcutSource(a.queries, slog.Default().WithGroup("shortcut")).WithOwnerID(ownerID)
 		case "github_issues":
-			src = service.NewGitHubSource(a.queries, slog.Default().WithGroup("github"))
+			src = service.NewGitHubSource(a.queries, slog.Default().WithGroup("github")).WithOwnerID(ownerID)
 		default:
 			http.Error(w, fmt.Sprintf("unsupported tracker: %s", proj.Tracker), http.StatusBadRequest)
 			return

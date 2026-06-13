@@ -52,6 +52,7 @@ func doJSON(t *testing.T, a *API, method, path string, body any) *httptest.Respo
 		r = bytes.NewReader(nil)
 	}
 	req := httptest.NewRequest(method, path, r)
+	req = req.WithContext(withTestOwner(req.Context()))
 	rec := httptest.NewRecorder()
 	a.Router().ServeHTTP(rec, req)
 	return rec
@@ -106,6 +107,7 @@ func TestGrantRevokeDefaultDeny(t *testing.T) {
 	// seed an agent + a credential resource
 	ag, err := a.queries.CreateAgent(context.Background(), db.CreateAgentParams{
 		Name: "scout", DisplayName: "Scout", Harness: "hermes", BaseUrl: "http://scout", Metadata: []byte("{}"),
+		OwnerID: testOwnerID(),
 	})
 	if err != nil {
 		t.Fatalf("seed agent: %v", err)

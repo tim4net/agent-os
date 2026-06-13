@@ -94,6 +94,7 @@ func postChat(t *testing.T, a *API, agentID pgtype.UUID, body string) (*httptest
 	r := chi.NewRouter()
 	r.Post("/api/agents/{id}/chat", a.ChatWithAgent)
 	req := httptest.NewRequest(http.MethodPost, "/api/agents/"+agentID.String()+"/chat", strings.NewReader(body))
+	req = req.WithContext(withTestOwner(req.Context()))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
