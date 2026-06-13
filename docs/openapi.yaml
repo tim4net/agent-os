@@ -195,6 +195,22 @@ paths:
         '400': { description: Bad request }
         '404': { description: Not found }
         '500': { description: Server error }
+  /api/agents/{id}/delegate:
+    post:
+      tags: [agents]
+      operationId: post_DelegateToAgent
+      summary: Delegate To Agent
+      description: Handler DelegateToAgent in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
   /api/agents/{id}/grants:
     get:
       tags: [agents]

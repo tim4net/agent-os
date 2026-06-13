@@ -219,6 +219,7 @@ func (a *API) Router() http.Handler {
 			r.Get("/commands", a.GetAgentCommands)
 			r.Get("/version", a.GetAgentVersion)
 			r.Post("/chat", a.ChatWithAgent)
+			r.Post("/delegate", a.DelegateToAgent)
 			// Per-agent capability grants (the Access drawer).
 			r.Get("/grants", a.ListAgentGrants)
 			r.Put("/grants/{resourceId}", a.GrantAgentResource)

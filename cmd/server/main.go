@@ -120,6 +120,9 @@ func main() {
 			case strings.HasSuffix(r.URL.Path, "/summarize"):
 				next.ServeHTTP(w, r)
 				return
+			case strings.HasSuffix(r.URL.Path, "/delegate"):
+				next.ServeHTTP(w, r)
+				return
 			}
 			middleware.Timeout(60*time.Second)(next).ServeHTTP(w, r)
 		})
