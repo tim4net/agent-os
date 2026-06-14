@@ -2,10 +2,10 @@ package secret
 
 import (
 	"context"
-	"log/slog"
+	"fmt"
+	"os"
 	"testing"
 	"time"
-	"fmt"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
@@ -13,17 +13,25 @@ import (
 )
 
 func setupTestDB(t *testing.T) (*db.Queries, func()) {
-	ctx := context.Background()
-	connStr := "postgres://aos_test:aos_test_pw@localhost:55434/aos_test?sslmode=disable"
-	pool, err := pgxpool.New(ctx, connStr)
+	t.Helper()
+	dsn := os.Getenv("AOS_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("AOS_TEST_DATABASE_URL not set — skipping integration test")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, dsn)
 	require.NoError(t, err)
-
-	_, err = db.MigrateUpWithLogger(ctx, pool, slog.Default())
-	require.NoError(t, err)
-
-	queries := db.New(pool)
-	
-	return queries, func() {
+	require.NoError(t, pool.Ping(ctx))
+	// CI pre-migrates the database via raw psql before running tests, so we
+	// must NOT call MigrateUp here — it would see an empty schema_migrations
+	// table, re-apply migration 1, collide with existing tables, and leave a
+	// dirty-migration error.
+	//
+	// Clear per-owner encryption state so tests with different KEKs don't
+	// trip over stale wrapped DEKs left by a prior test against this shared DB.
+	_, _ = pool.Exec(ctx, "TRUNCATE user_keys, resources CASCADE")
+	return db.New(pool), func() {
 		pool.Close()
 	}
 }

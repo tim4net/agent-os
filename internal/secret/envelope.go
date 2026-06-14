@@ -25,7 +25,7 @@ func NewEnvelopeCipher(kek *Cipher, queries *db.Queries) *EnvelopeCipher {
 }
 
 func (e *EnvelopeCipher) Enabled() bool {
-	return e.kek.Enabled()
+	return e != nil && e.kek.Enabled()
 }
 
 func (e *EnvelopeCipher) EnsureOwnerKey(ctx context.Context, ownerID [16]byte) error {

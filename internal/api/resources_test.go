@@ -17,7 +17,7 @@ import (
 func newTestAPIForVault(t *testing.T) *API {
 	t.Helper()
 	pool := getTestDB(t)
-	_, _ = pool.Exec(context.Background(), "TRUNCATE agent_grants, resources, agents CASCADE")
+	_, _ = pool.Exec(context.Background(), "TRUNCATE agent_grants, resources, agents, user_keys CASCADE")
 	t.Cleanup(func() { pool.Close() })
 
 	key := make([]byte, 32)
@@ -32,7 +32,14 @@ func newTestAPIForVault(t *testing.T) *API {
 	reg.Register("hermes", harness.NewHermesHarness)
 	reg.Register("openclaw", harness.NewOpenClawHarness)
 	reg.Register("generic", harness.NewGenericHarness)
-	return &API{queries: db.New(pool), pool: pool, cipher: cipher, registry: reg}
+	queries := db.New(pool)
+	return &API{
+		queries:  queries,
+		pool:     pool,
+		cipher:   cipher,
+		envelope: secret.NewEnvelopeCipher(cipher, queries),
+		registry: reg,
+	}
 }
 
 func doJSON(t *testing.T, a *API, method, path string, body any) *httptest.ResponseRecorder {
