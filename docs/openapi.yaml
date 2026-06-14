@@ -24,6 +24,8 @@ tags:
   - name: events
   - name: fleet
   - name: goals
+  - name: grants
+  - name: harnesses
   - name: health
   - name: host
   - name: incidents
@@ -31,6 +33,7 @@ tags:
   - name: ledger
   - name: memory
   - name: pipeline
+  - name: resources
   - name: skills
   - name: slash-command
   - name: spend
@@ -99,6 +102,21 @@ paths:
         '404': { description: Not found }
         '500': { description: Server error }
   /api/agents/{id}:
+    delete:
+      tags: [agents]
+      operationId: delete_DeleteAgent
+      summary: Delete Agent
+      description: Handler DeleteAgent in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
     get:
       tags: [agents]
       operationId: get_GetAgent
@@ -177,12 +195,83 @@ paths:
         '400': { description: Bad request }
         '404': { description: Not found }
         '500': { description: Server error }
+  /api/agents/{id}/grants:
+    get:
+      tags: [agents]
+      operationId: get_ListAgentGrants
+      summary: List Agent Grants
+      description: Handler ListAgentGrants in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/agents/{id}/grants/{resourceId}:
+    delete:
+      tags: [agents]
+      operationId: delete_RevokeAgentResource
+      summary: Revoke Agent Resource
+      description: Handler RevokeAgentResource in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: resourceId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+    put:
+      tags: [agents]
+      operationId: put_GrantAgentResource
+      summary: Grant Agent Resource
+      description: Handler GrantAgentResource in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: resourceId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
   /api/agents/{id}/models:
     get:
       tags: [agents]
       operationId: get_GetAgentModels
       summary: Get Agent Models
       description: Handler GetAgentModels in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/agents/{id}/version:
+    get:
+      tags: [agents]
+      operationId: get_GetAgentVersion
+      summary: Get Agent Version
+      description: Handler GetAgentVersion in internal/api.
       parameters:
         - name: id
           in: path
@@ -368,17 +457,6 @@ paths:
       operationId: post_CreateConversation
       summary: Create Conversation
       description: Handler CreateConversation in internal/api.
-      responses:
-        '200': { description: Success }
-        '400': { description: Bad request }
-        '404': { description: Not found }
-        '500': { description: Server error }
-  /api/conversations/summarize:
-    post:
-      tags: [conversations]
-      operationId: post_ConversationSummary
-      summary: Conversation Summary
-      description: Handler ConversationSummary in internal/api.
       responses:
         '200': { description: Success }
         '400': { description: Bad request }
@@ -575,6 +653,28 @@ paths:
           in: path
           required: true
           schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/grants:
+    get:
+      tags: [grants]
+      operationId: get_ListAllGrants
+      summary: List All Grants
+      description: Handler ListAllGrants in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/harnesses:
+    get:
+      tags: [harnesses]
+      operationId: get_ListHarnesses
+      summary: List Harnesses
+      description: Handler ListHarnesses in internal/api.
       responses:
         '200': { description: Success }
         '400': { description: Bad request }
@@ -872,6 +972,58 @@ paths:
       operationId: post_GeneratePipelineContent
       summary: Generate Pipeline Content
       description: Handler GeneratePipelineContent in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/resources:
+    get:
+      tags: [resources]
+      operationId: get_ListResources
+      summary: List Resources
+      description: Handler ListResources in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+    post:
+      tags: [resources]
+      operationId: post_CreateResource
+      summary: Create Resource
+      description: Handler CreateResource in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/resources/{id}:
+    delete:
+      tags: [resources]
+      operationId: delete_DeleteResource
+      summary: Delete Resource
+      description: Handler DeleteResource in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+    put:
+      tags: [resources]
+      operationId: put_UpdateResource
+      summary: Update Resource
+      description: Handler UpdateResource in internal/api.
       parameters:
         - name: id
           in: path

@@ -21,6 +21,7 @@ type API struct {
 	bus              *service.EventBus
 	feed             *service.ActivityFeed
 	cipher           *secret.Cipher
+	envelope         *secret.EnvelopeCipher
 	litellmURL       string
 	obsidianPath     string
 	hermesSkillsPath string
@@ -39,7 +40,7 @@ type API struct {
 }
 
 // NewAPI creates a new API instance with the given dependencies.
-func NewAPI(queries *db.Queries, pool *pgxpool.Pool, registry *harness.Registry, bus *service.EventBus, feed *service.ActivityFeed, cipher *secret.Cipher, litellmURL string, artifactsPath string, obsidianPath string, hermesSkillsPath string, apiKeys map[string]string, keys ProviderKeys, llmModel string) *API {
+func NewAPI(queries *db.Queries, pool *pgxpool.Pool, registry *harness.Registry, bus *service.EventBus, feed *service.ActivityFeed, cipher *secret.Cipher, envelope *secret.EnvelopeCipher, litellmURL string, artifactsPath string, obsidianPath string, hermesSkillsPath string, apiKeys map[string]string, keys ProviderKeys, llmModel string) *API {
 	return &API{
 		queries:          queries,
 		pool:             pool,
@@ -47,6 +48,7 @@ func NewAPI(queries *db.Queries, pool *pgxpool.Pool, registry *harness.Registry,
 		bus:              bus,
 		feed:             feed,
 		cipher:           cipher,
+		envelope:         envelope,
 		litellmURL:       litellmURL,
 		obsidianPath:     obsidianPath,
 		hermesSkillsPath: hermesSkillsPath,
@@ -107,7 +109,7 @@ func (a *API) buildHarnessConfig(ctx context.Context, agent db.Agent) map[string
 	for _, res := range granted {
 		switch res.Kind {
 		case "credential":
-			secret := a.resolveResourceSecret(res)
+			secret := a.resolveResourceSecret(ctx, res)
 			if secret == "" {
 				continue
 			}
@@ -136,7 +138,7 @@ func (a *API) buildHarnessConfig(ctx context.Context, agent db.Agent) map[string
 			for k, v := range cfg {
 				srv[k] = v
 			}
-			if secret := a.resolveResourceSecret(res); secret != "" {
+			if secret := a.resolveResourceSecret(ctx, res); secret != "" {
 				srv["auth_token"] = secret
 			}
 			mcpServers = append(mcpServers, srv)
@@ -151,7 +153,7 @@ func (a *API) buildHarnessConfig(ctx context.Context, agent db.Agent) map[string
 			for k, v := range cfg {
 				intg[k] = v
 			}
-			if secret := a.resolveResourceSecret(res); secret != "" {
+			if secret := a.resolveResourceSecret(ctx, res); secret != "" {
 				intg["token"] = secret
 			}
 			if config["integrations"] == nil {

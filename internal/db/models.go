@@ -287,20 +287,21 @@ type Project struct {
 }
 
 type Resource struct {
-	ID        pgtype.UUID        `json:"id"`
-	Slug      string             `json:"slug"`
-	Kind      string             `json:"kind"`
-	Label     string             `json:"label"`
-	Provider  string             `json:"provider"`
-	IsSecret  bool               `json:"is_secret"`
-	EncValue  []byte             `json:"enc_value"`
-	EncConfig []byte             `json:"enc_config"`
-	Config    []byte             `json:"config"`
-	Last4     string             `json:"last4"`
-	Status    string             `json:"status"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
-	OwnerID   pgtype.UUID        `json:"owner_id"`
+	ID            pgtype.UUID        `json:"id"`
+	Slug          string             `json:"slug"`
+	Kind          string             `json:"kind"`
+	Label         string             `json:"label"`
+	Provider      string             `json:"provider"`
+	IsSecret      bool               `json:"is_secret"`
+	EncValue      []byte             `json:"enc_value"`
+	EncConfig     []byte             `json:"enc_config"`
+	Config        []byte             `json:"config"`
+	Last4         string             `json:"last4"`
+	Status        string             `json:"status"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+	OwnerID       pgtype.UUID        `json:"owner_id"`
+	EncKeyVersion int32              `json:"enc_key_version"`
 }
 
 type RunLog struct {
@@ -363,6 +364,14 @@ type User struct {
 	IsActive    bool               `json:"is_active"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type UserKey struct {
+	UserID     pgtype.UUID        `json:"user_id"`
+	WrappedDek []byte             `json:"wrapped_dek"`
+	KeyVersion int32              `json:"key_version"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	RotatedAt  pgtype.Timestamptz `json:"rotated_at"`
 }
 
 type WorkEvent struct {
