@@ -125,14 +125,35 @@ func (a *API) DeleteAgent(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// seedOwnerID is the UUID of the seed user (migration 024). Used as a fallback
+// when the identity middleware hasn't populated the context (tests, dev without
+// auth proxy). Agents with a different owner_id fail the WHERE clause → 404.
+var seedOwnerID = pgtype.UUID{
+	Bytes: [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
+	Valid: true,
+}
+
+// resolveOwnerID returns the owner UUID from the request context (set by the
+// identity middleware), falling back to the seed owner when absent.
+func resolveOwnerID(ctx context.Context) pgtype.UUID {
+	if id, ok := OwnerIDFromContext(ctx); ok {
+		return id
+	}
+	return seedOwnerID
+}
+
 // UpdateAgentConfigRequest is the request body for updating agent config.
+// Name is a pointer so we can distinguish "not provided" (nil) from "provided
+// but empty" (non-nil, ""). An empty name triggers a 400 validation error.
 type UpdateAgentConfigRequest struct {
+	Name         *string         `json:"name"`
 	Role         string          `json:"role"`
 	SystemPrompt string          `json:"system_prompt"`
 	Persona      json.RawMessage `json:"persona"`
 }
 
-// UpdateAgentConfig handles PATCH /api/agents/{id} to update role, system_prompt, persona.
+// UpdateAgentConfig handles PATCH /api/agents/{id} to update role, system_prompt,
+// persona, and optionally rename the agent (name + display_name).
 func (a *API) UpdateAgentConfig(w http.ResponseWriter, r *http.Request) {
 	idStr := chi.URLParam(r, "id")
 
@@ -148,6 +169,60 @@ func (a *API) UpdateAgentConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// --- Rename phase (if name is provided) ---
+	if req.Name != nil {
+		name := strings.TrimSpace(*req.Name)
+		if name == "" {
+			http.Error(w, "name must not be empty", http.StatusBadRequest)
+			return
+		}
+		if len(name) > 64 {
+			http.Error(w, "name must be 64 characters or fewer", http.StatusBadRequest)
+			return
+		}
+
+		ownerID := resolveOwnerID(r.Context())
+
+		// Check for duplicate name within the same owner.
+		if existing, err := a.queries.GetAgentByNameAndOwner(r.Context(), db.GetAgentByNameAndOwnerParams{
+			Name:    name,
+			OwnerID: ownerID,
+		}); err == nil && existing.ID != id {
+			http.Error(w, "an agent with this name already exists", http.StatusConflict)
+			return
+		}
+
+		// Perform the owner-scoped rename. If the agent belongs to a different
+		// owner, the WHERE clause won't match → ErrNoRows → 404.
+		renamed, err := a.queries.RenameAgent(r.Context(), db.RenameAgentParams{
+			ID:          id,
+			Name:        name,
+			DisplayName: name, // display_name mirrors name on rename
+			OwnerID:     ownerID,
+		})
+		if err != nil {
+			http.Error(w, "agent not found", http.StatusNotFound)
+			return
+		}
+
+		// Emit activity event for the rename (AC6).
+		if a.bus != nil {
+			a.bus.PublishTyped("agent_renamed", map[string]any{
+				"agent_id":   idStr,
+				"agent_name": name,
+			})
+		}
+
+		// If no config fields to update, return the renamed agent.
+		if req.Role == "" && req.SystemPrompt == "" && len(req.Persona) == 0 {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(sanitizeAgent(renamed))
+			return
+		}
+
+		// Fall through to update config on the just-renamed agent.
+	}
+
 	persona := []byte("{}")
 	if len(req.Persona) > 0 {
 		persona = req.Persona
@@ -160,7 +235,7 @@ func (a *API) UpdateAgentConfig(w http.ResponseWriter, r *http.Request) {
 		Persona:      persona,
 	})
 	if err != nil {
-		http.Error(w, "failed to update agent config: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "agent not found", http.StatusNotFound)
 		return
 	}
 

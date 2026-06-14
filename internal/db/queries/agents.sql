@@ -36,5 +36,13 @@ VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT (name) DO NOTHING
 RETURNING *;
 
+-- name: RenameAgent :one
+UPDATE agents SET name = $2, display_name = $3, updated_at = NOW()
+WHERE id = $1 AND owner_id = $4
+RETURNING *;
+
+-- name: GetAgentByNameAndOwner :one
+SELECT * FROM agents WHERE name = $1 AND owner_id = $2;
+
 -- name: DeleteAgent :exec
 DELETE FROM agents WHERE id = $1;

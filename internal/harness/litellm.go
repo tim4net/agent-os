@@ -285,3 +285,7 @@ func (l *LiteLLMHarness) Close() error {
 	l.httpClient.CloseIdleConnections()
 	return nil
 }
+
+func init() {
+	Register("litellm", NewLiteLLMHarness)
+}
