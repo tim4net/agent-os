@@ -377,17 +377,12 @@ const listResourcesForAgent = `-- name: ListResourcesForAgent :many
 SELECT r.id, r.slug, r.kind, r.label, r.provider, r.is_secret, r.enc_value, r.enc_config, r.config, r.last4, r.status, r.created_at, r.updated_at, r.owner_id, r.enc_key_version
 FROM resources r
 JOIN agent_grants g ON g.resource_id = r.id
-WHERE g.agent_id = $1 AND r.owner_id = $2
+WHERE g.agent_id = $1
 ORDER BY r.kind, r.label
 `
 
-type ListResourcesForAgentParams struct {
-	AgentID pgtype.UUID `json:"agent_id"`
-	OwnerID pgtype.UUID `json:"owner_id"`
-}
-
-func (q *Queries) ListResourcesForAgent(ctx context.Context, arg ListResourcesForAgentParams) ([]Resource, error) {
-	rows, err := q.db.Query(ctx, listResourcesForAgent, arg.AgentID, arg.OwnerID)
+func (q *Queries) ListResourcesForAgent(ctx context.Context, agentID pgtype.UUID) ([]Resource, error) {
+	rows, err := q.db.Query(ctx, listResourcesForAgent, agentID)
 	if err != nil {
 		return nil, err
 	}

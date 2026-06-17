@@ -236,7 +236,7 @@ type Querier interface {
 	ListProjects(ctx context.Context, ownerID pgtype.UUID) ([]Project, error)
 	ListResources(ctx context.Context, ownerID pgtype.UUID) ([]Resource, error)
 	ListResourcesByKind(ctx context.Context, arg ListResourcesByKindParams) ([]Resource, error)
-	ListResourcesForAgent(ctx context.Context, arg ListResourcesForAgentParams) ([]Resource, error)
+	ListResourcesForAgent(ctx context.Context, agentID pgtype.UUID) ([]Resource, error)
 	ListRunLog(ctx context.Context, arg ListRunLogParams) ([]RunLog, error)
 	ListRunLogByWpRef(ctx context.Context, arg ListRunLogByWpRefParams) ([]RunLog, error)
 	ListSkillSummaries(ctx context.Context, ownerID pgtype.UUID) ([]ListSkillSummariesRow, error)

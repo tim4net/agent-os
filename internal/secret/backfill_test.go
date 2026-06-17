@@ -7,6 +7,7 @@ import (
 	"time"
 	"fmt"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/stretchr/testify/require"
 	"github.com/tim4net/agent-os/internal/db"
 )
@@ -49,7 +50,7 @@ func TestBackfill_Idempotent(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify migrated
-	migratedRes, err := queries.GetResource(ctx, res.ID)
+	migratedRes, err := queries.GetResource(ctx, db.GetResourceParams{ID: res.ID, OwnerID: pgtype.UUID{Bytes: defaultOwner, Valid: true}})
 	require.NoError(t, err)
 	require.Equal(t, int32(1), migratedRes.EncKeyVersion)
 

@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"regexp"
@@ -149,13 +148,12 @@ func (a *API) CreateResource(w http.ResponseWriter, r *http.Request) {
 	isSecret := req.Secret != ""
 	var encValue []byte
 	var last4 string
-	ownerID := [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}
 	if isSecret {
-		if !a.envelope.Enabled() {
+		if !a.cipher.Enabled() {
 			http.Error(w, "secret storage is disabled: set AOS_MASTER_KEY on the server", http.StatusServiceUnavailable)
 			return
 		}
-		ct, err := a.envelope.EncryptForOwner(r.Context(), ownerID, req.Secret)
+		ct, err := a.cipher.Encrypt(req.Secret)
 		if err != nil {
 			http.Error(w, "failed to encrypt secret", http.StatusInternalServerError)
 			return
@@ -254,11 +252,11 @@ func (a *API) UpdateResource(w http.ResponseWriter, r *http.Request) {
 			last4 = ""
 			status = "unset"
 		} else {
-			if !a.envelope.Enabled() {
+			if !a.cipher.Enabled() {
 				http.Error(w, "secret storage is disabled: set AOS_MASTER_KEY on the server", http.StatusServiceUnavailable)
 				return
 			}
-			ct, encErr := a.envelope.EncryptForOwner(r.Context(), cur.OwnerID.Bytes, *req.Secret)
+			ct, encErr := a.cipher.Encrypt(*req.Secret)
 			if encErr != nil {
 				http.Error(w, "failed to encrypt secret", http.StatusInternalServerError)
 				return
