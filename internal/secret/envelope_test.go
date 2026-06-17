@@ -72,6 +72,77 @@ func TestEnvelope_PerUserIsolation(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestOwnerLRU_BoundedEviction is the negative test for the Hermes security
+// blocker (unbounded DEK cache): it proves the cache NEVER grows beyond its
+// configured max. Inserting one more entry than the cap evicts the
+// least-recently-used entry rather than growing the map.
+func TestOwnerLRU_BoundedEviction(t *testing.T) {
+	c := newOwnerLRU(3)
+
+	mk := func(b byte) *Cipher {
+		key := make([]byte, 32)
+		key[0] = b
+		cph, err := NewCipher(key)
+		require.NoError(t, err)
+		return cph
+	}
+
+	k1 := [16]byte{1}
+	k2 := [16]byte{2}
+	k3 := [16]byte{3}
+	k4 := [16]byte{4}
+
+	c.store(k1, mk(0x10))
+	c.store(k2, mk(0x20))
+	c.store(k3, mk(0x30))
+	require.Equal(t, 3, c.len(), "at cap, no eviction yet")
+
+	// k4 overflows the cap → LRU (k1) must be evicted, NOT grown to 4.
+	c.store(k4, mk(0x40))
+	require.Equal(t, 3, c.len(), "must not exceed max")
+
+	_, ok := c.load(k1)
+	require.False(t, ok, "k1 (LRU) must have been evicted")
+
+	for _, k := range [][16]byte{k2, k3, k4} {
+		got, ok := c.load(k)
+		require.True(t, ok, "recent entries must remain cached")
+		require.NotNil(t, got)
+	}
+}
+
+// TestOwnerLRU_RecencyPromotion verifies LRU ordering: loading k1 after k2/k3
+// were stored promotes k1, so when the next eviction happens k2 (now LRU) is
+// dropped instead of k1.
+func TestOwnerLRU_RecencyPromotion(t *testing.T) {
+	c := newOwnerLRU(3)
+
+	mk := func(b byte) *Cipher {
+		key := make([]byte, 32)
+		key[0] = b
+		cph, err := NewCipher(key)
+		require.NoError(t, err)
+		return cph
+	}
+
+	k1, k2, k3, k4 := [16]byte{1}, [16]byte{2}, [16]byte{3}, [16]byte{4}
+	c.store(k1, mk(1))
+	c.store(k2, mk(2))
+	c.store(k3, mk(3))
+
+	// Touch k1 so it is no longer the LRU; k2 becomes the LRU.
+	_, ok := c.load(k1)
+	require.True(t, ok)
+
+	c.store(k4, mk(4)) // evicts LRU == k2
+
+	require.Equal(t, 3, c.len())
+	_, ok = c.load(k2)
+	require.False(t, ok, "k2 was LRU after k1 promotion and must be evicted")
+	_, ok = c.load(k1)
+	require.True(t, ok, "k1 was promoted and must survive")
+}
+
 func TestEnvelope_NoMasterKey(t *testing.T) {
 	queries, cleanup := setupTestDB(t)
 	defer cleanup()

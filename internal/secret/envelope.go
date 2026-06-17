@@ -1,6 +1,7 @@
 package secret
 
 import (
+	"container/list"
 	"context"
 	"crypto/rand"
 	"fmt"
@@ -11,16 +12,92 @@ import (
 	"github.com/tim4net/agent-os/internal/db"
 )
 
+// defaultOwnerCacheMax bounds the number of per-owner DEK ciphers held in
+// memory at once. Each entry is a 16-byte key + an AES-256 *Cipher (~negligible),
+// so this is a safety ceiling against memory-exhaustion via an unbounded set of
+// distinct owner IDs rather than a tight resource limit. A miss after eviction
+// simply re-loads the wrapped DEK from the database and re-caches it.
+const defaultOwnerCacheMax = 1024
+
+// cacheEntry is one element of the LRU list.
+type cacheEntry struct {
+	key    [16]byte
+	cipher *Cipher
+}
+
+// ownerLRU is a bounded, mutex-protected LRU cache of owner -> DEK cipher.
+//
+// It replaces the previous unbounded sync.Map, which grew without limit as new
+// owner IDs were seen — a memory-exhaustion vector flagged in the Hermes
+// security review. Once max entries is reached the least-recently-used entry is
+// evicted; a subsequent miss transparently re-loads the DEK from the database.
+type ownerLRU struct {
+	mu      sync.Mutex
+	max     int
+	ll      *list.List
+	entries map[[16]byte]*list.Element
+}
+
+func newOwnerLRU(max int) *ownerLRU {
+	if max < 1 {
+		max = 1
+	}
+	return &ownerLRU{
+		max:     max,
+		ll:      list.New(),
+		entries: make(map[[16]byte]*list.Element, max),
+	}
+}
+
+// load returns the cached cipher for key, marking it most-recently-used. The
+// second return is false on a miss.
+func (c *ownerLRU) load(key [16]byte) (*Cipher, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	el, ok := c.entries[key]
+	if !ok {
+		return nil, false
+	}
+	c.ll.MoveToFront(el)
+	return el.Value.(*cacheEntry).cipher, true
+}
+
+// store inserts or refreshes an entry, evicting the LRU entry if at capacity.
+func (c *ownerLRU) store(key [16]byte, cipher *Cipher) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if el, ok := c.entries[key]; ok {
+		el.Value.(*cacheEntry).cipher = cipher
+		c.ll.MoveToFront(el)
+		return
+	}
+	el := c.ll.PushFront(&cacheEntry{key: key, cipher: cipher})
+	c.entries[key] = el
+	if c.ll.Len() > c.max {
+		if oldest := c.ll.Back(); oldest != nil {
+			c.ll.Remove(oldest)
+			delete(c.entries, oldest.Value.(*cacheEntry).key)
+		}
+	}
+}
+
+func (c *ownerLRU) len() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.ll.Len()
+}
+
 type EnvelopeCipher struct {
 	kek     *Cipher
 	queries *db.Queries
-	cache   sync.Map // map[[16]byte]*Cipher
+	cache   *ownerLRU
 }
 
 func NewEnvelopeCipher(kek *Cipher, queries *db.Queries) *EnvelopeCipher {
 	return &EnvelopeCipher{
 		kek:     kek,
 		queries: queries,
+		cache:   newOwnerLRU(defaultOwnerCacheMax),
 	}
 }
 
@@ -33,7 +110,7 @@ func (e *EnvelopeCipher) EnsureOwnerKey(ctx context.Context, ownerID [16]byte) e
 		return ErrNoKey
 	}
 
-	if _, ok := e.cache.Load(ownerID); ok {
+	if _, ok := e.cache.load(ownerID); ok {
 		return nil
 	}
 
@@ -49,7 +126,7 @@ func (e *EnvelopeCipher) EnsureOwnerKey(ctx context.Context, ownerID [16]byte) e
 		if err != nil {
 			return err
 		}
-		e.cache.Store(ownerID, cipher)
+		e.cache.store(ownerID, cipher)
 		return nil
 	}
 
@@ -84,7 +161,7 @@ func (e *EnvelopeCipher) EnsureOwnerKey(ctx context.Context, ownerID [16]byte) e
 		if err != nil {
 			return err
 		}
-		e.cache.Store(ownerID, cipher)
+		e.cache.store(ownerID, cipher)
 		return nil
 	}
 
@@ -92,7 +169,7 @@ func (e *EnvelopeCipher) EnsureOwnerKey(ctx context.Context, ownerID [16]byte) e
 	if err != nil {
 		return err
 	}
-	e.cache.Store(ownerID, cipher)
+	e.cache.store(ownerID, cipher)
 	return nil
 }
 
@@ -101,8 +178,8 @@ func (e *EnvelopeCipher) getOwnerCipher(ctx context.Context, ownerID [16]byte) (
 		return nil, ErrNoKey
 	}
 
-	if val, ok := e.cache.Load(ownerID); ok {
-		return val.(*Cipher), nil
+	if c, ok := e.cache.load(ownerID); ok {
+		return c, nil
 	}
 
 	err := e.EnsureOwnerKey(ctx, ownerID)
@@ -110,8 +187,8 @@ func (e *EnvelopeCipher) getOwnerCipher(ctx context.Context, ownerID [16]byte) (
 		return nil, err
 	}
 
-	if val, ok := e.cache.Load(ownerID); ok {
-		return val.(*Cipher), nil
+	if c, ok := e.cache.load(ownerID); ok {
+		return c, nil
 	}
 	return nil, fmt.Errorf("secret: key not found after ensure")
 }
