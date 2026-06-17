@@ -82,6 +82,7 @@ type Querier interface {
 	CreateSubtask(ctx context.Context, arg CreateSubtaskParams) (Task, error)
 	CreateTask(ctx context.Context, arg CreateTaskParams) (Task, error)
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
+	CreateUserKey(ctx context.Context, arg CreateUserKeyParams) (UserKey, error)
 	CreateWorkflow(ctx context.Context, arg CreateWorkflowParams) (Workflow, error)
 	CreateWorkflowRun(ctx context.Context, arg CreateWorkflowRunParams) (WorkflowRun, error)
 	DeleteAgent(ctx context.Context, id pgtype.UUID) error
@@ -180,6 +181,7 @@ type Querier interface {
 	GetTrackerProjects(ctx context.Context, arg GetTrackerProjectsParams) ([]Project, error)
 	GetUserByID(ctx context.Context, id pgtype.UUID) (User, error)
 	GetUserByLogin(ctx context.Context, login string) (User, error)
+	GetUserKey(ctx context.Context, userID pgtype.UUID) (UserKey, error)
 	GetWorkEventByEventID(ctx context.Context, eventID pgtype.UUID) (WorkEvent, error)
 	GetWorkEventsBySession(ctx context.Context, arg GetWorkEventsBySessionParams) ([]WorkEvent, error)
 	// All events in one group (drill-down). Matches the same 5-part key as ListWorkUnits,
@@ -222,6 +224,7 @@ type Querier interface {
 	ListHostLiveness(ctx context.Context, arg ListHostLivenessParams) ([]HostLiveness, error)
 	// List all (including revoked) keys for a tenant, newest first.
 	ListIngestKeysByTenant(ctx context.Context, tenant string) ([]IngestKey, error)
+	ListLegacyResources(ctx context.Context) ([]Resource, error)
 	ListMemoryIndex(ctx context.Context) ([]MemoryIndex, error)
 	ListMessages(ctx context.Context, conversationID pgtype.UUID) ([]Message, error)
 	ListOrchestratorWorkUnits(ctx context.Context) ([]WorkUnit, error)
@@ -288,6 +291,7 @@ type Querier interface {
 	UpdatePipelineItem(ctx context.Context, arg UpdatePipelineItemParams) (PipelineItem, error)
 	UpdateProjectTracker(ctx context.Context, arg UpdateProjectTrackerParams) (Project, error)
 	UpdateResource(ctx context.Context, arg UpdateResourceParams) (Resource, error)
+	UpdateResourceEncryption(ctx context.Context, arg UpdateResourceEncryptionParams) error
 	UpdateSkill(ctx context.Context, arg UpdateSkillParams) (Skill, error)
 	UpdateTask(ctx context.Context, arg UpdateTaskParams) (Task, error)
 	UpdateWorkflow(ctx context.Context, arg UpdateWorkflowParams) (Workflow, error)

@@ -44,6 +44,7 @@ func main() {
 		nil,                 // bus
 		nil,                 // feed
 		nil,                 // cipher
+		nil,                 // envelope
 		"",                  // litellmURL
 		"",                  // artifactsPath
 		"",                  // obsidianPath

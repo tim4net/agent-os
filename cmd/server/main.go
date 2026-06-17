@@ -154,6 +154,14 @@ func main() {
 		slog.Warn("secret encryption DISABLED — set AOS_MASTER_KEY to enable encrypted API-key storage")
 	}
 
+	envelope := secret.NewEnvelopeCipher(cipher, queries)
+	if cipher != nil {
+		if err := secret.RunBackfill(ctx, envelope, queries, slog.Default()); err != nil {
+			slog.Error("failed to run secret backfill", "error", err)
+			os.Exit(1)
+		}
+	}
+
 	providerKeys := api.ProviderKeys{
 		Hermes:     cfg.HermesAPIKey,
 		Anthropic:  cfg.AnthropicAPIKey,
@@ -164,7 +172,7 @@ func main() {
 		ZAI:        cfg.ZAIAPIKey,
 		OpenRouter: cfg.OpenRouterAPIKey,
 	}
-	a := api.NewAPI(queries, pool, harness.DefaultRegistry, bus, feed, cipher, cfg.LiteLLMURL, cfg.ArtifactsPath, cfg.ObsidianPath, cfg.HermesSkillsPath, apiKeys, providerKeys, cfg.LLMModel)
+	a := api.NewAPI(queries, pool, harness.DefaultRegistry, bus, feed, cipher, envelope, cfg.LiteLLMURL, cfg.ArtifactsPath, cfg.ObsidianPath, cfg.HermesSkillsPath, apiKeys, providerKeys, cfg.LLMModel)
 	r.Mount("/api", a.Router())
 
 	// Start background title worker (hourly re-summarization of active conversations)

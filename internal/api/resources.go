@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"regexp"
@@ -92,7 +93,7 @@ func (a *API) ListResources(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"resources":       toResourceViews(rows),
-		"secrets_enabled": a.cipher.Enabled(),
+		"secrets_enabled": a.envelope.Enabled(),
 	})
 }
 
@@ -130,12 +131,13 @@ func (a *API) CreateResource(w http.ResponseWriter, r *http.Request) {
 	isSecret := req.Secret != ""
 	var encValue []byte
 	var last4 string
+	ownerID := [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}
 	if isSecret {
-		if !a.cipher.Enabled() {
+		if !a.envelope.Enabled() {
 			http.Error(w, "secret storage is disabled: set AOS_MASTER_KEY on the server", http.StatusServiceUnavailable)
 			return
 		}
-		ct, err := a.cipher.Encrypt(req.Secret)
+		ct, err := a.envelope.EncryptForOwner(r.Context(), ownerID, req.Secret)
 		if err != nil {
 			http.Error(w, "failed to encrypt secret", http.StatusInternalServerError)
 			return
@@ -160,9 +162,10 @@ func (a *API) CreateResource(w http.ResponseWriter, r *http.Request) {
 		Provider: req.Provider,
 		IsSecret: isSecret,
 		EncValue: encValue,
-		Config:   config,
-		Last4:    last4,
-		Status:   status,
+		Config:        config,
+		Last4:         last4,
+		Status:        status,
+		EncKeyVersion: 1,
 	})
 	if err != nil {
 		if strings.Contains(err.Error(), "duplicate key") {
@@ -226,11 +229,11 @@ func (a *API) UpdateResource(w http.ResponseWriter, r *http.Request) {
 			last4 = ""
 			status = "unset"
 		} else {
-			if !a.cipher.Enabled() {
+			if !a.envelope.Enabled() {
 				http.Error(w, "secret storage is disabled: set AOS_MASTER_KEY on the server", http.StatusServiceUnavailable)
 				return
 			}
-			ct, encErr := a.cipher.Encrypt(*req.Secret)
+			ct, encErr := a.envelope.EncryptForOwner(r.Context(), cur.OwnerID.Bytes, *req.Secret)
 			if encErr != nil {
 				http.Error(w, "failed to encrypt secret", http.StatusInternalServerError)
 				return
@@ -249,9 +252,10 @@ func (a *API) UpdateResource(w http.ResponseWriter, r *http.Request) {
 		IsSecret:  isSecret,
 		EncValue:  encValue,
 		EncConfig: cur.EncConfig,
-		Config:    config,
-		Last4:     last4,
-		Status:    status,
+		Config:        config,
+		Last4:         last4,
+		Status:        status,
+		EncKeyVersion: 1,
 	})
 	if err != nil {
 		http.Error(w, "failed to update resource: "+err.Error(), http.StatusInternalServerError)
@@ -279,11 +283,14 @@ func (a *API) DeleteResource(w http.ResponseWriter, r *http.Request) {
 
 // resolveResourceSecret returns the decrypted secret string for a resource, or
 // "" if unset / undecryptable. Internal use only (never serialized).
-func (a *API) resolveResourceSecret(res db.Resource) string {
-	if len(res.EncValue) == 0 || !a.cipher.Enabled() {
+func (a *API) resolveResourceSecret(ctx context.Context, res db.Resource) string {
+	if len(res.EncValue) == 0 || !a.envelope.Enabled() {
 		return ""
 	}
-	pt, err := a.cipher.Decrypt(res.EncValue)
+	if !res.OwnerID.Valid {
+		return ""
+	}
+	pt, err := a.envelope.DecryptForOwner(ctx, res.OwnerID.Bytes, res.EncValue)
 	if err != nil {
 		return ""
 	}

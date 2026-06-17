@@ -12,22 +12,23 @@ import (
 )
 
 const createResource = `-- name: CreateResource :one
-INSERT INTO resources (slug, kind, label, provider, is_secret, enc_value, enc_config, config, last4, status)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-RETURNING id, slug, kind, label, provider, is_secret, enc_value, enc_config, config, last4, status, created_at, updated_at, owner_id
+INSERT INTO resources (slug, kind, label, provider, is_secret, enc_value, enc_config, config, last4, status, enc_key_version)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+RETURNING id, slug, kind, label, provider, is_secret, enc_value, enc_config, config, last4, status, created_at, updated_at, owner_id, enc_key_version
 `
 
 type CreateResourceParams struct {
-	Slug      string `json:"slug"`
-	Kind      string `json:"kind"`
-	Label     string `json:"label"`
-	Provider  string `json:"provider"`
-	IsSecret  bool   `json:"is_secret"`
-	EncValue  []byte `json:"enc_value"`
-	EncConfig []byte `json:"enc_config"`
-	Config    []byte `json:"config"`
-	Last4     string `json:"last4"`
-	Status    string `json:"status"`
+	Slug          string `json:"slug"`
+	Kind          string `json:"kind"`
+	Label         string `json:"label"`
+	Provider      string `json:"provider"`
+	IsSecret      bool   `json:"is_secret"`
+	EncValue      []byte `json:"enc_value"`
+	EncConfig     []byte `json:"enc_config"`
+	Config        []byte `json:"config"`
+	Last4         string `json:"last4"`
+	Status        string `json:"status"`
+	EncKeyVersion int32  `json:"enc_key_version"`
 }
 
 func (q *Queries) CreateResource(ctx context.Context, arg CreateResourceParams) (Resource, error) {
@@ -42,6 +43,7 @@ func (q *Queries) CreateResource(ctx context.Context, arg CreateResourceParams) 
 		arg.Config,
 		arg.Last4,
 		arg.Status,
+		arg.EncKeyVersion,
 	)
 	var i Resource
 	err := row.Scan(
@@ -59,6 +61,7 @@ func (q *Queries) CreateResource(ctx context.Context, arg CreateResourceParams) 
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.OwnerID,
+		&i.EncKeyVersion,
 	)
 	return i, err
 }
@@ -73,7 +76,7 @@ func (q *Queries) DeleteResource(ctx context.Context, id pgtype.UUID) error {
 }
 
 const getResource = `-- name: GetResource :one
-SELECT id, slug, kind, label, provider, is_secret, enc_value, enc_config, config, last4, status, created_at, updated_at, owner_id
+SELECT id, slug, kind, label, provider, is_secret, enc_value, enc_config, config, last4, status, created_at, updated_at, owner_id, enc_key_version
 FROM resources WHERE id = $1
 `
 
@@ -95,12 +98,13 @@ func (q *Queries) GetResource(ctx context.Context, id pgtype.UUID) (Resource, er
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.OwnerID,
+		&i.EncKeyVersion,
 	)
 	return i, err
 }
 
 const getResourceBySlug = `-- name: GetResourceBySlug :one
-SELECT id, slug, kind, label, provider, is_secret, enc_value, enc_config, config, last4, status, created_at, updated_at, owner_id
+SELECT id, slug, kind, label, provider, is_secret, enc_value, enc_config, config, last4, status, created_at, updated_at, owner_id, enc_key_version
 FROM resources WHERE slug = $1
 `
 
@@ -122,6 +126,7 @@ func (q *Queries) GetResourceBySlug(ctx context.Context, slug string) (Resource,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.OwnerID,
+		&i.EncKeyVersion,
 	)
 	return i, err
 }
@@ -249,7 +254,7 @@ func (q *Queries) ListGrantsForResource(ctx context.Context, resourceID pgtype.U
 }
 
 const listResources = `-- name: ListResources :many
-SELECT id, slug, kind, label, provider, is_secret, enc_value, enc_config, config, last4, status, created_at, updated_at, owner_id
+SELECT id, slug, kind, label, provider, is_secret, enc_value, enc_config, config, last4, status, created_at, updated_at, owner_id, enc_key_version
 FROM resources ORDER BY kind, label, slug
 `
 
@@ -277,6 +282,7 @@ func (q *Queries) ListResources(ctx context.Context) ([]Resource, error) {
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.OwnerID,
+			&i.EncKeyVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -289,7 +295,7 @@ func (q *Queries) ListResources(ctx context.Context) ([]Resource, error) {
 }
 
 const listResourcesByKind = `-- name: ListResourcesByKind :many
-SELECT id, slug, kind, label, provider, is_secret, enc_value, enc_config, config, last4, status, created_at, updated_at, owner_id
+SELECT id, slug, kind, label, provider, is_secret, enc_value, enc_config, config, last4, status, created_at, updated_at, owner_id, enc_key_version
 FROM resources WHERE kind = $1 ORDER BY label, slug
 `
 
@@ -317,6 +323,7 @@ func (q *Queries) ListResourcesByKind(ctx context.Context, kind string) ([]Resou
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.OwnerID,
+			&i.EncKeyVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -329,7 +336,7 @@ func (q *Queries) ListResourcesByKind(ctx context.Context, kind string) ([]Resou
 }
 
 const listResourcesForAgent = `-- name: ListResourcesForAgent :many
-SELECT r.id, r.slug, r.kind, r.label, r.provider, r.is_secret, r.enc_value, r.enc_config, r.config, r.last4, r.status, r.created_at, r.updated_at, r.owner_id
+SELECT r.id, r.slug, r.kind, r.label, r.provider, r.is_secret, r.enc_value, r.enc_config, r.config, r.last4, r.status, r.created_at, r.updated_at, r.owner_id, r.enc_key_version
 FROM resources r
 JOIN agent_grants g ON g.resource_id = r.id
 WHERE g.agent_id = $1
@@ -360,6 +367,7 @@ func (q *Queries) ListResourcesForAgent(ctx context.Context, agentID pgtype.UUID
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.OwnerID,
+			&i.EncKeyVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -387,21 +395,22 @@ func (q *Queries) RevokeResource(ctx context.Context, arg RevokeResourceParams) 
 
 const updateResource = `-- name: UpdateResource :one
 UPDATE resources
-SET label = $2, provider = $3, is_secret = $4, enc_value = $5, enc_config = $6, config = $7, last4 = $8, status = $9, updated_at = NOW()
+SET label = $2, provider = $3, is_secret = $4, enc_value = $5, enc_config = $6, config = $7, last4 = $8, status = $9, enc_key_version = $10, updated_at = NOW()
 WHERE id = $1
-RETURNING id, slug, kind, label, provider, is_secret, enc_value, enc_config, config, last4, status, created_at, updated_at, owner_id
+RETURNING id, slug, kind, label, provider, is_secret, enc_value, enc_config, config, last4, status, created_at, updated_at, owner_id, enc_key_version
 `
 
 type UpdateResourceParams struct {
-	ID        pgtype.UUID `json:"id"`
-	Label     string      `json:"label"`
-	Provider  string      `json:"provider"`
-	IsSecret  bool        `json:"is_secret"`
-	EncValue  []byte      `json:"enc_value"`
-	EncConfig []byte      `json:"enc_config"`
-	Config    []byte      `json:"config"`
-	Last4     string      `json:"last4"`
-	Status    string      `json:"status"`
+	ID            pgtype.UUID `json:"id"`
+	Label         string      `json:"label"`
+	Provider      string      `json:"provider"`
+	IsSecret      bool        `json:"is_secret"`
+	EncValue      []byte      `json:"enc_value"`
+	EncConfig     []byte      `json:"enc_config"`
+	Config        []byte      `json:"config"`
+	Last4         string      `json:"last4"`
+	Status        string      `json:"status"`
+	EncKeyVersion int32       `json:"enc_key_version"`
 }
 
 func (q *Queries) UpdateResource(ctx context.Context, arg UpdateResourceParams) (Resource, error) {
@@ -415,6 +424,7 @@ func (q *Queries) UpdateResource(ctx context.Context, arg UpdateResourceParams) 
 		arg.Config,
 		arg.Last4,
 		arg.Status,
+		arg.EncKeyVersion,
 	)
 	var i Resource
 	err := row.Scan(
@@ -432,6 +442,7 @@ func (q *Queries) UpdateResource(ctx context.Context, arg UpdateResourceParams) 
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.OwnerID,
+		&i.EncKeyVersion,
 	)
 	return i, err
 }
