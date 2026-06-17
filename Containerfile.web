@@ -7,12 +7,18 @@ RUN npm run build
 
 FROM nginx:alpine
 COPY --from=builder /app/dist /usr/share/nginx/html
-# SPA fallback — all routes serve index.html
+# SPA fallback + cache policy — all routes serve index.html
+#   /            → no-cache (browser always revalidates the SPA shell)
+#   /assets/     → 1 year immutable (Vite hashes filenames, safe for long cache)
 RUN echo 'server { \
     listen 80; \
     root /usr/share/nginx/html; \
     location / { \
         try_files $uri $uri/ /index.html; \
+        add_header Cache-Control "no-cache"; \
+    } \
+    location /assets/ { \
+        add_header Cache-Control "public, max-age=31536000, immutable"; \
     } \
     location /api/ { \
         proxy_pass http://agent-os-api:8080; \
