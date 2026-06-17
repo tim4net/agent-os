@@ -36,6 +36,7 @@ type API struct {
 	artifacts        *ArtifactAPI
 	memory           *MemoryAPI
 	studio           *StudioAPI
+	mailLimiter      *mailLimiter
 }
 
 // NewAPI creates a new API instance with the given dependencies.
@@ -220,6 +221,8 @@ func (a *API) Router() http.Handler {
 			r.Get("/grants", a.ListAgentGrants)
 			r.Put("/grants/{resourceId}", a.GrantAgentResource)
 			r.Delete("/grants/{resourceId}", a.RevokeAgentResource)
+			// Agent-to-agent mailbox (WP-101, issue #112).
+			r.Mount("/mail", a.MailRoutes())
 		})
 	})
 

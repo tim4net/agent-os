@@ -54,6 +54,94 @@ func (ns NullControlMode) Value() (driver.Value, error) {
 	return string(ns.ControlMode), nil
 }
 
+type MailPriority string
+
+const (
+	MailPriorityLow    MailPriority = "low"
+	MailPriorityNormal MailPriority = "normal"
+	MailPriorityHigh   MailPriority = "high"
+	MailPriorityUrgent MailPriority = "urgent"
+)
+
+func (e *MailPriority) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = MailPriority(s)
+	case string:
+		*e = MailPriority(s)
+	default:
+		return fmt.Errorf("unsupported scan type for MailPriority: %T", src)
+	}
+	return nil
+}
+
+type NullMailPriority struct {
+	MailPriority MailPriority `json:"mail_priority"`
+	Valid        bool         `json:"valid"` // Valid is true if MailPriority is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullMailPriority) Scan(value interface{}) error {
+	if value == nil {
+		ns.MailPriority, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.MailPriority.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullMailPriority) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.MailPriority), nil
+}
+
+type MailStatus string
+
+const (
+	MailStatusQueued    MailStatus = "queued"
+	MailStatusDelivered MailStatus = "delivered"
+	MailStatusRead      MailStatus = "read"
+	MailStatusExpired   MailStatus = "expired"
+)
+
+func (e *MailStatus) Scan(src interface{}) error {
+	switch s := src.(type) {
+	case []byte:
+		*e = MailStatus(s)
+	case string:
+		*e = MailStatus(s)
+	default:
+		return fmt.Errorf("unsupported scan type for MailStatus: %T", src)
+	}
+	return nil
+}
+
+type NullMailStatus struct {
+	MailStatus MailStatus `json:"mail_status"`
+	Valid      bool       `json:"valid"` // Valid is true if MailStatus is not NULL
+}
+
+// Scan implements the Scanner interface.
+func (ns *NullMailStatus) Scan(value interface{}) error {
+	if value == nil {
+		ns.MailStatus, ns.Valid = "", false
+		return nil
+	}
+	ns.Valid = true
+	return ns.MailStatus.Scan(value)
+}
+
+// Value implements the driver Valuer interface.
+func (ns NullMailStatus) Value() (driver.Value, error) {
+	if !ns.Valid {
+		return nil, nil
+	}
+	return string(ns.MailStatus), nil
+}
+
 type WorkUnitStatus string
 
 const (
@@ -123,6 +211,22 @@ type AgentGrant struct {
 	Scope      string             `json:"scope"`
 	GrantedAt  pgtype.Timestamptz `json:"granted_at"`
 	OwnerID    pgtype.UUID        `json:"owner_id"`
+}
+
+type AgentMail struct {
+	ID          int64              `json:"id"`
+	SenderID    pgtype.UUID        `json:"sender_id"`
+	RecipientID pgtype.UUID        `json:"recipient_id"`
+	Subject     string             `json:"subject"`
+	Body        string             `json:"body"`
+	Priority    MailPriority       `json:"priority"`
+	Status      MailStatus         `json:"status"`
+	ReplyToID   pgtype.Int8        `json:"reply_to_id"`
+	Metadata    []byte             `json:"metadata"`
+	ContentType string             `json:"content_type"`
+	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
+	ReadAt      pgtype.Timestamptz `json:"read_at"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
 type AppInstance struct {
