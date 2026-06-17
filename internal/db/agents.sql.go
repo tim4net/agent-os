@@ -161,6 +161,38 @@ func (q *Queries) GetAgentByName(ctx context.Context, name string) (Agent, error
 	return i, err
 }
 
+const getAgentByNameAndOwner = `-- name: GetAgentByNameAndOwner :one
+SELECT id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id FROM agents WHERE name = $1 AND owner_id = $2
+`
+
+type GetAgentByNameAndOwnerParams struct {
+	Name    string      `json:"name"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) GetAgentByNameAndOwner(ctx context.Context, arg GetAgentByNameAndOwnerParams) (Agent, error) {
+	row := q.db.QueryRow(ctx, getAgentByNameAndOwner, arg.Name, arg.OwnerID)
+	var i Agent
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.DisplayName,
+		&i.Harness,
+		&i.BaseUrl,
+		&i.Status,
+		&i.Metadata,
+		&i.LastSeen,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Role,
+		&i.SystemPrompt,
+		&i.Persona,
+		&i.Visible,
+		&i.OwnerID,
+	)
+	return i, err
+}
+
 const listAgents = `-- name: ListAgents :many
 SELECT id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id FROM agents ORDER BY created_at
 `
@@ -239,6 +271,47 @@ func (q *Queries) ListVisibleAgents(ctx context.Context) ([]Agent, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const renameAgent = `-- name: RenameAgent :one
+UPDATE agents SET name = $2, display_name = $3, updated_at = NOW()
+WHERE id = $1 AND owner_id = $4
+RETURNING id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id
+`
+
+type RenameAgentParams struct {
+	ID          pgtype.UUID `json:"id"`
+	Name        string      `json:"name"`
+	DisplayName string      `json:"display_name"`
+	OwnerID     pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) RenameAgent(ctx context.Context, arg RenameAgentParams) (Agent, error) {
+	row := q.db.QueryRow(ctx, renameAgent,
+		arg.ID,
+		arg.Name,
+		arg.DisplayName,
+		arg.OwnerID,
+	)
+	var i Agent
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.DisplayName,
+		&i.Harness,
+		&i.BaseUrl,
+		&i.Status,
+		&i.Metadata,
+		&i.LastSeen,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Role,
+		&i.SystemPrompt,
+		&i.Persona,
+		&i.Visible,
+		&i.OwnerID,
+	)
+	return i, err
 }
 
 const updateAgent = `-- name: UpdateAgent :one

@@ -355,3 +355,57 @@ func TestAgentRename_PreservesConfig(t *testing.T) {
 		t.Errorf("config not preserved after rename; got %s", configRec.Body.String())
 	}
 }
+
+// TestAgentRename_DBFailure verifies that a rename request returns an error
+// (not 200) when the database is unavailable (negative test requested by
+// coverage-hawk).
+func TestAgentRename_DBFailure(t *testing.T) {
+	api := newTestAPIForRename(t)
+	agent := createTestAgent(t, api, "db-fail-agent")
+
+	// Close the pool so all subsequent queries fail.
+	api.pool.Close()
+
+	patchBody, _ := json.Marshal(map[string]string{"name": "should-fail"})
+	rec := httptest.NewRecorder()
+	api.Router().ServeHTTP(rec, httptest.NewRequest(http.MethodPatch,
+		"/agents/"+agentIDStr(t, agent), bytes.NewReader(patchBody)))
+
+	if rec.Code == http.StatusOK {
+		t.Errorf("expected non-200 status on DB failure, got %d", rec.Code)
+	}
+}
+
+// TestAgentRename_ConcurrentSameName verifies that two agents renamed to the
+// same name concurrently cannot both succeed — the duplicate check or unique
+// constraint prevents it (negative test requested by coverage-hawk).
+func TestAgentRename_ConcurrentSameName(t *testing.T) {
+	api := newTestAPIForRename(t)
+	agentA := createTestAgent(t, api, "concurrent-a")
+	agentB := createTestAgent(t, api, "concurrent-b")
+
+	targetName := "shared-target"
+
+	doRename := func(agentID string) int {
+		patchBody, _ := json.Marshal(map[string]string{"name": targetName})
+		rec := httptest.NewRecorder()
+		api.Router().ServeHTTP(rec, httptest.NewRequest(http.MethodPatch,
+			"/agents/"+agentID, bytes.NewReader(patchBody)))
+		return rec.Code
+	}
+
+	// Fire two renames concurrently.
+	type result struct{ code int }
+	ch := make(chan result, 2)
+	go func() { ch <- result{doRename(agentIDStr(t, agentA))} }()
+	go func() { ch <- result{doRename(agentIDStr(t, agentB))} }()
+
+	r1 := <-ch
+	r2 := <-ch
+
+	// At least one must NOT be 200 — both agents can't have the same name.
+	if r1.code == http.StatusOK && r2.code == http.StatusOK {
+		t.Errorf("both concurrent renames to %q succeeded — expected at least one failure; codes: %d, %d",
+			targetName, r1.code, r2.code)
+	}
+}

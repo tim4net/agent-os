@@ -51,6 +51,8 @@ func (r *Registry) Get(name string) (Harness, error) {
 	fn, ok := r.factories[name]
 	if !ok {
 		// Collect registered names so the caller can see what IS available.
+		// This sort only runs on the error path (unknown harness), which is
+		// infrequent — no need to cache sorted keys.
 		registered := make([]string, 0, len(r.factories))
 		for k := range r.factories {
 			registered = append(registered, k)

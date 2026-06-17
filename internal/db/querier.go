@@ -109,6 +109,7 @@ type Querier interface {
 	FailWorkUnit(ctx context.Context, arg FailWorkUnitParams) (WorkUnit, error)
 	GetAgent(ctx context.Context, id pgtype.UUID) (Agent, error)
 	GetAgentByName(ctx context.Context, name string) (Agent, error)
+	GetAgentByNameAndOwner(ctx context.Context, arg GetAgentByNameAndOwnerParams) (Agent, error)
 	// Fetches a single app instance by ID.
 	GetAppInstance(ctx context.Context, id pgtype.UUID) (AppInstance, error)
 	GetArtifact(ctx context.Context, id pgtype.UUID) (Artifact, error)
@@ -264,6 +265,7 @@ type Querier interface {
 	// Sets status to 'down' — this is a definitive signal, not a probe.
 	MarkInstanceDownByServerStopped(ctx context.Context, arg MarkInstanceDownByServerStoppedParams) error
 	RecurringFindings(ctx context.Context, dollar_1 interface{}) ([]RecurringFindingsRow, error)
+	RenameAgent(ctx context.Context, arg RenameAgentParams) (Agent, error)
 	RequeueWorkUnit(ctx context.Context, id int64) (WorkUnit, error)
 	// Revoke an ingest key by setting revoked_at to now.
 	RevokeIngestKey(ctx context.Context, id int64) error
