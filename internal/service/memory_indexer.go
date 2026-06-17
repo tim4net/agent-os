@@ -50,14 +50,19 @@ func NewMemoryIndexer(queries *db.Queries, bus *EventBus, obsidianPath string) *
 		bus:                 bus,
 		obsidianPath:        obsidianPath,
 		stopCh:              make(chan struct{}),
-		projectPathMappings: DefaultProjectPathMappings,
+		// Copy defensively so a later mutation of the package-level
+		// DefaultProjectPathMappings cannot race with concurrent DeriveProjectID
+		// reads (which iterate this slice under the read lock).
+		projectPathMappings: append([]ProjectPathMapping(nil), DefaultProjectPathMappings...),
 		slugToID:            make(map[string]pgtype.UUID),
 	}
 }
 
-// WithProjectPathMappings sets the path-prefix → slug mapping table.
+// WithProjectPathMappings sets the path-prefix → slug mapping table. The slice
+// is copied so external mutation of the caller's slice cannot affect the
+// indexer after this call returns.
 func (mi *MemoryIndexer) WithProjectPathMappings(mappings []ProjectPathMapping) *MemoryIndexer {
-	mi.projectPathMappings = mappings
+	mi.projectPathMappings = append([]ProjectPathMapping(nil), mappings...)
 	return mi
 }
 
@@ -99,13 +104,23 @@ func (mi *MemoryIndexer) RefreshProjectCache(ctx context.Context) {
 
 // refreshProjectCache loads all projects from the database and builds the
 // slug → id lookup map. Called at the start of each index cycle.
+//
+// Concurrency invariant: the map is built into a LOCAL variable entirely
+// outside the lock, then atomically swapped in under the write lock. This
+// guarantees concurrent DeriveProjectID readers never observe a half-built map.
 func (mi *MemoryIndexer) refreshProjectCache(ctx context.Context) {
 	projects, err := mi.queries.ListProjects(ctx)
 	if err != nil {
-		slog.Warn("memory-indexer: failed to load projects", "error", err)
+		// The previously cached slug→id map is retained (last-good-cache
+		// strategy) so indexing can continue with stale-but-usable project
+		// tags. Logged at Error so a persistent connection failure is not
+		// buried in the logs.
+		slog.Error("memory-indexer: failed to load projects; retaining previous cache",
+			"error", err)
 		return
 	}
 
+	// Build the complete map outside the lock, then swap atomically.
 	m := make(map[string]pgtype.UUID, len(projects))
 	for _, p := range projects {
 		m[p.Slug] = p.ID

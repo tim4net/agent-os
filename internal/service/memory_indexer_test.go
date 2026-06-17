@@ -171,3 +171,50 @@ func TestDeriveProjectID_CustomMappings(t *testing.T) {
 		t.Fatalf("custom mappings should replace defaults; got %v for old prefix", got)
 	}
 }
+
+// TestWithProjectPathMappings_DefensiveCopy proves WithProjectPathMappings
+// copies the caller's slice, so later mutation of that slice cannot leak into
+// the indexer and race with concurrent DeriveProjectID reads.
+func TestWithProjectPathMappings_DefensiveCopy(t *testing.T) {
+	mappings := []ProjectPathMapping{
+		{PathPrefix: "work/employer", Slug: "dayjob"},
+	}
+	mi := (&MemoryIndexer{}).WithProjectPathMappings(mappings)
+
+	// Mutate the caller's slice AFTER handoff: both an element change and an
+	// append (which may re-allocate the caller's backing array).
+	mappings[0].Slug = "tampered"
+	mappings = append(mappings, ProjectPathMapping{PathPrefix: "evil", Slug: "evil"})
+
+	if len(mi.projectPathMappings) != 1 {
+		t.Fatalf("defensive copy failed: indexer has %d mappings, want 1 (append must not leak)", len(mi.projectPathMappings))
+	}
+	if mi.projectPathMappings[0].Slug != "dayjob" {
+		t.Fatalf("defensive copy failed: indexer slug mutated to %q, want dayjob", mi.projectPathMappings[0].Slug)
+	}
+}
+
+// TestNewMemoryIndexer_DefaultMappingsDefensiveCopy proves NewMemoryIndexer
+// copies the package-level DefaultProjectPathMappings rather than aliasing it,
+// so a runtime mutation of either cannot affect the other.
+func TestNewMemoryIndexer_DefaultMappingsDefensiveCopy(t *testing.T) {
+	mi := NewMemoryIndexer(nil, nil, "")
+	if len(mi.projectPathMappings) != len(DefaultProjectPathMappings) {
+		t.Fatalf("indexer mappings len = %d, want %d", len(mi.projectPathMappings), len(DefaultProjectPathMappings))
+	}
+	if len(mi.projectPathMappings) == 0 {
+		t.Fatal("DefaultProjectPathMappings is empty; cannot verify copy")
+	}
+
+	// Mutate one element of the indexer's slice. If NewMemoryIndexer had
+	// aliased the global, this would corrupt DefaultProjectPathMappings.
+	idx := 0
+	orig := DefaultProjectPathMappings[idx].Slug
+	mi.projectPathMappings[idx].Slug = orig + "-tampered"
+	if DefaultProjectPathMappings[idx].Slug != orig {
+		t.Fatalf("NewMemoryIndexer aliased DefaultProjectPathMappings: mutating indexer changed global %q -> %q",
+			orig, DefaultProjectPathMappings[idx].Slug)
+	}
+	// Restore to keep the package global pristine for other tests.
+	mi.projectPathMappings[idx].Slug = orig
+}
