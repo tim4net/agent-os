@@ -25,6 +25,16 @@ type DelegateRequest struct {
 	SystemPrompt  string `json:"system_prompt,omitempty"`
 }
 
+// Bounds on delegation inputs. These prevent unbounded payloads from being
+// persisted to the DB and forwarded to the target agent's LLM harness. The
+// message limit is generous (an agent task description) while still capping
+// abuse; the model/system-prompt limits are conservative.
+const (
+	maxDelegateMessageLen      = 32 * 1024 // 32 KiB
+	maxDelegateModelLen        = 256
+	maxDelegateSystemPromptLen = 8 * 1024 // 8 KiB
+)
+
 // DelegateResponse is the full result of a delegation.
 type DelegateResponse struct {
 	Delegation DelegationResponse `json:"delegation"`
@@ -56,6 +66,19 @@ func (a *API) DelegateToAgent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "target_agent_id and message are required", http.StatusBadRequest)
 		return
 	}
+	// Bound input sizes so callers cannot persist unbounded payloads or force
+	// arbitrarily large LLM calls. (Note: this is not about SQL/SSE injection —
+	// messages are stored via sqlc parameterized queries and SSE events are
+	// json.Marshal'd, which escapes control chars — but a length cap is still
+	// good hygiene and prevents trivial resource-exhaustion abuse.)
+	if len(req.Message) > maxDelegateMessageLen {
+		http.Error(w, "message exceeds maximum length", http.StatusRequestEntityTooLarge)
+		return
+	}
+	if len(req.SystemPrompt) > maxDelegateSystemPromptLen || len(req.Model) > maxDelegateModelLen {
+		http.Error(w, "system_prompt or model exceeds maximum length", http.StatusRequestEntityTooLarge)
+		return
+	}
 
 	var targetID pgtype.UUID
 	if err := targetID.Scan(req.TargetAgentID); err != nil {
@@ -84,9 +107,9 @@ func (a *API) DelegateToAgent(w http.ResponseWriter, r *http.Request) {
 
 	// Create delegation record (status=running)
 	meta, _ := json.Marshal(map[string]string{
-		"target_agent_id":  targetID.String(),
+		"target_agent_id":   targetID.String(),
 		"source_agent_name": sourceAgent.Name,
-		"type":             "agent-to-agent",
+		"type":              "agent-to-agent",
 	})
 
 	deg, err := a.queries.CreateDelegation(r.Context(), db.CreateDelegationParams{
@@ -103,13 +126,7 @@ func (a *API) DelegateToAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Broadcast SSE event
-	a.bus.PublishTyped("delegation_created", map[string]any{
-		"id":               deg.ID.String(),
-		"parent_agent_id":  deg.ParentAgentID.String(),
-		"child_agent_name": deg.ChildAgentName,
-		"task_goal":        deg.TaskGoal,
-		"status":           deg.Status,
-	})
+	a.broadcastDelegation("delegation_created", deg)
 
 	// Execute the delegation via the target agent's harness.
 	// Use a detached context since LLM calls can take 60-300s.
@@ -205,18 +222,27 @@ func (a *API) DelegateToAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Broadcast completion SSE event
-	a.bus.PublishTyped("delegation_updated", map[string]any{
-		"id":               updatedDeg.ID.String(),
-		"parent_agent_id":  updatedDeg.ParentAgentID.String(),
-		"child_agent_name": updatedDeg.ChildAgentName,
-		"task_goal":        updatedDeg.TaskGoal,
-		"status":           updatedDeg.Status,
-	})
+	a.broadcastDelegation("delegation_updated", updatedDeg)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(DelegateResponse{
 		Delegation: delegationToResponse(updatedDeg),
 		Response:   responseText,
+	})
+}
+
+// broadcastDelegation publishes a delegation lifecycle event over SSE. The
+// payload is json.Marshal'd by EventBus.ToJSON before being written to the
+// event-stream, so control characters/newlines in any field are escaped —
+// there is no SSE framing-injection surface here. Extracted so all three
+// lifecycle events (created/updated/failed) share one definition.
+func (a *API) broadcastDelegation(eventType string, deg db.Delegation) {
+	a.bus.PublishTyped(eventType, map[string]any{
+		"id":               deg.ID.String(),
+		"parent_agent_id":  deg.ParentAgentID.String(),
+		"child_agent_name": deg.ChildAgentName,
+		"task_goal":        deg.TaskGoal,
+		"status":           deg.Status,
 	})
 }
 
@@ -233,11 +259,6 @@ func (a *API) failDelegation(ctx context.Context, deg db.Delegation, errMsg stri
 			"delegation_id", deg.ID.String(), "error", err)
 	}
 
-	a.bus.PublishTyped("delegation_updated", map[string]any{
-		"id":               deg.ID.String(),
-		"parent_agent_id":  deg.ParentAgentID.String(),
-		"child_agent_name": deg.ChildAgentName,
-		"task_goal":        deg.TaskGoal,
-		"status":           "failed",
-	})
+	deg.Status = "failed"
+	a.broadcastDelegation("delegation_updated", deg)
 }
