@@ -116,6 +116,7 @@ type ChatRequest struct {
 	Model          string `json:"model"`
 	ConversationID string `json:"conversation_id"`
 	SystemPrompt   string `json:"system_prompt"`
+	ProjectID      string `json:"project_id,omitempty"`
 }
 
 // conversationMeta is the structured metadata stored in conversations.metadata.
@@ -326,9 +327,17 @@ func (a *API) ChatWithAgent(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		// Legacy path: build full message history for raw LLM chat
+		// Resolve optional project_id from request for RAG scoping.
+		var projectID pgtype.UUID
+		if req.ProjectID != "" {
+			if err := projectID.Scan(req.ProjectID); err != nil {
+				slog.Warn("RAG: invalid project_id in chat request", "project_id", req.ProjectID, "error", err)
+			}
+		}
+
 		// RAG: search memory_index for relevant context using the user's message
 		systemPrompt := req.SystemPrompt
-		if ragCtx := a.searchMemoryForContext(req.Message); ragCtx != nil {
+		if ragCtx := a.searchMemoryForContext(req.Message, projectID); ragCtx != nil {
 			if systemPrompt == "" {
 				systemPrompt = ragCtx.SystemBlock
 			} else {
@@ -508,7 +517,8 @@ type RAGContext struct {
 // given query and returns a formatted context block suitable for injection
 // into the system prompt. Returns nil if no results are found.
 // Uses a separate context with a 10s timeout to avoid Chi timeout pitfalls.
-func (a *API) searchMemoryForContext(query string) *RAGContext {
+// projectID is optional (zero-value = search all projects).
+func (a *API) searchMemoryForContext(query string, projectID pgtype.UUID) *RAGContext {
 	if query == "" {
 		return nil
 	}
@@ -519,6 +529,7 @@ func (a *API) searchMemoryForContext(query string) *RAGContext {
 	results, err := a.queries.SearchMemory(ctx, db.SearchMemoryParams{
 		WebsearchToTsquery: query,
 		Limit:              3,
+		ProjectID:          projectID,
 	})
 	if err != nil {
 		slog.Warn("RAG: memory search failed", "error", err)
