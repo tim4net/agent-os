@@ -119,17 +119,43 @@ healthy() {
   done
   return 1
 }
+# Compare the running container's image ID against the :latest image ID.
+# Returns 0 if they match (deploy took effect), 1 if the container is stale.
+# Never calls fail() directly — a mismatch falls through to the rollback path
+# so the previous good image is restored instead of leaving a broken deploy.
+verify_running_image() {
+  local svc="$1"
+  local img="$2"
+  local cname
+  cname="$(podman ps --filter "name=${svc%.service}" --format '{{.Names}}' | head -1)"
+  if [ -z "$cname" ]; then
+    log "verify_running_image: running container for $svc not found"
+    return 1
+  fi
+  local running_id latest_id
+  running_id="$(podman inspect "$cname" --format '{{.Image}}')"
+  latest_id="$(podman inspect "$img:latest" --format '{{.Id}}')"
+  if [ "$running_id" != "$latest_id" ]; then
+    log "verify_running_image: $svc running image ($running_id) != $img:latest ($latest_id) — stale container"
+    return 1
+  fi
+  log "verified $svc running image == $img:latest"
+  return 0
+}
 
 log "restarting stack"
 restart_stack
 if healthy 25; then
-  log "HEALTHY at $DEPLOY_SHA (migrations +$applied) — deploy OK"
-  # prune candidate tags (latest now points at the same image id)
-  podman rmi "$API_IMG:candidate" "$WEB_IMG:candidate" 2>/dev/null || true
-  # prune dangling images to prevent disk accumulation (22GB+ recurrence)
-  podman image prune -f 2>/dev/null || true
-  echo "DEPLOY_OK sha=$DEPLOY_SHA migrations=$applied"
-  exit 0
+  log "HEALTHY at $DEPLOY_SHA (migrations +$applied) — verifying running images"
+  if verify_running_image "$API_SVC" "$API_IMG" && verify_running_image "$WEB_SVC" "$WEB_IMG"; then
+    # prune candidate tags (latest now points at the same image id)
+    podman rmi "$API_IMG:candidate" "$WEB_IMG:candidate" 2>/dev/null || true
+    # prune dangling images to prevent disk accumulation
+    podman image prune -f 2>/dev/null || true
+    echo "DEPLOY_OK sha=$DEPLOY_SHA migrations=$applied"
+    exit 0
+  fi
+  log "running image verification FAILED — proceeding to rollback"
 fi
 
 # ---------- 6. failure -> roll back ----------
