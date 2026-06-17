@@ -102,6 +102,9 @@ func (af *ActivityFeed) summarize(event Event) string {
 	case "memory_indexed":
 		filePath, _ := payload["file_path"].(string)
 		return "Memory indexed: " + filePath
+	case "agent_renamed":
+		name, _ := payload["agent_name"].(string)
+		return "Agent renamed to " + name
 	case "delegation_created":
 		child, _ := payload["child_agent_name"].(string)
 		goal, _ := payload["task_goal"].(string)

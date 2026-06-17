@@ -913,3 +913,7 @@ func (o *OpenClawHarness) Close() error {
 	o.httpClient.CloseIdleConnections()
 	return nil
 }
+
+func init() {
+	Register("openclaw", NewOpenClawHarness)
+}

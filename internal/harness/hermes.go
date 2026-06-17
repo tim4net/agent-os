@@ -553,3 +553,7 @@ func (h *HermesHarness) Close() error {
 	h.httpClient.CloseIdleConnections()
 	return nil
 }
+
+func init() {
+	Register("hermes", NewHermesHarness)
+}

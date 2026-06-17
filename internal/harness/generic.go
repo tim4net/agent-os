@@ -89,3 +89,7 @@ func (g *GenericHarness) Close() error {
 	g.httpClient.CloseIdleConnections()
 	return nil
 }
+
+func init() {
+	Register("generic", NewGenericHarness)
+}
