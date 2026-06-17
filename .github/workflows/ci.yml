@@ -84,8 +84,13 @@ jobs:
       # ── Postgres 17 via podman ───────────────────────────────────────
       - name: Start Postgres 17 (podman)
         run: |
-          # Kill any prior CI container to avoid port clashes
-          podman rm -f aos-ci-pg 2>/dev/null || true
+          # Fail fast with a clear error if podman is unavailable.
+          command -v podman >/dev/null 2>&1 || { echo "::error::podman not found on PATH"; exit 1; }
+          # Kill any prior CI/test container bound to 127.0.0.1:55434 to avoid
+          # pasta "Address already in use" errors. Multiple container names have
+          # accumulated across debugging sessions; remove them all. `|| true`
+          # tolerates a missing podman binary or non-existent containers.
+          podman rm -f aos-ci-pg aos-test-pg aos-ci-pg-repro 2>/dev/null || true
           podman run -d \
             --name aos-ci-pg \
             -e POSTGRES_USER="$POSTGRES_USER" \
