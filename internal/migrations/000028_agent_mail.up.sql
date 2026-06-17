@@ -1,4 +1,4 @@
--- Migration 027: agent-to-agent messaging (WP-101, issue #112).
+-- Migration 028: agent-to-agent messaging (WP-101, issue #112).
 --
 -- Asynchronous agent-to-agent messaging with persistent delivery, priority
 -- queues, read tracking, and reply threading. This extends the existing

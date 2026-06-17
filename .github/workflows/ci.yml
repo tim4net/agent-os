@@ -86,11 +86,28 @@ jobs:
         run: |
           # Fail fast with a clear error if podman is unavailable.
           command -v podman >/dev/null 2>&1 || { echo "::error::podman not found on PATH"; exit 1; }
-          # Kill any prior CI/test container bound to 127.0.0.1:55434 to avoid
-          # pasta "Address already in use" errors. Multiple container names have
-          # accumulated across debugging sessions; remove them all. `|| true`
+          # Kill any prior CI/test container bound to 127.0.0.1:$PGPORT to avoid
+          # pasta "Address already in use" errors. Hardcoded names keep
+          # accumulating across debugging sessions (aos-ci-pg, aos-test-pg,
+          # aos-ci-pg-repro, aos-roux-pg, ...). Remove the known names AND sweep
+          # any other container still holding the CI port by name. `|| true`
           # tolerates a missing podman binary or non-existent containers.
           podman rm -f aos-ci-pg aos-test-pg aos-ci-pg-repro 2>/dev/null || true
+          for c in $(podman ps -a --format '{{.Names}} {{.Ports}}' \
+                       | grep -F ":${PGPORT}->" | awk '{print $1}'); do
+            echo "removing leftover container holding port ${PGPORT}: $c"
+            podman rm -f "$c" 2>/dev/null || true
+          done
+          # Wait briefly for pasta to release the port after container removal
+          # (pasta's port-forward is torn down asynchronously; an immediate
+          # `podman run` can still hit "Address already in use").
+          if command -v ss >/dev/null 2>&1; then
+            for i in $(seq 1 15); do
+              ss -ltn 2>/dev/null | grep -q ":${PGPORT} " || break
+              echo "port ${PGPORT} still held, waiting... (${i}/15)"
+              sleep 1
+            done
+          fi
           podman run -d \
             --name aos-ci-pg \
             -e POSTGRES_USER="$POSTGRES_USER" \
