@@ -49,6 +49,7 @@ type Querier interface {
 	CountFindingsByWpRef(ctx context.Context, wpRef string) (int64, error)
 	// Counts liveness records matching the tenant filter.
 	CountHostLiveness(ctx context.Context, tenant string) (int64, error)
+	CountMailbox(ctx context.Context, arg CountMailboxParams) (int64, error)
 	CountRunLog(ctx context.Context) (int64, error)
 	CountRunLogByWpRef(ctx context.Context, wpRef string) (int64, error)
 	// Counts distinct (harness, session_id) pairs that have at least one
@@ -61,6 +62,7 @@ type Querier interface {
 	CountSubtasks(ctx context.Context, parentTaskID pgtype.UUID) (int64, error)
 	CountTrackerItemsByProject(ctx context.Context, arg CountTrackerItemsByProjectParams) (int64, error)
 	CountTrackerItemsByTenant(ctx context.Context, tenant string) (int64, error)
+	CountUnread(ctx context.Context, recipientID pgtype.UUID) (int64, error)
 	// Consistent with ListWorkUnits grouping (same key + same tenant filter) so Total matches.
 	CountWorkUnits(ctx context.Context, tenant string) (int64, error)
 	CountWorkUnitsByStatus(ctx context.Context) ([]CountWorkUnitsByStatusRow, error)
@@ -107,6 +109,8 @@ type Querier interface {
 	EnsureAgent(ctx context.Context, arg EnsureAgentParams) (Agent, error)
 	// Idempotent resolution used by the ingest project resolver (contract §1).
 	EnsureProjectBySlug(ctx context.Context, arg EnsureProjectBySlugParams) (Project, error)
+	ExpireMail(ctx context.Context) error
+	ExpireMailByID(ctx context.Context, arg ExpireMailByIDParams) (AgentMail, error)
 	FailWorkUnit(ctx context.Context, arg FailWorkUnitParams) (WorkUnit, error)
 	GetAgent(ctx context.Context, id pgtype.UUID) (Agent, error)
 	GetAgentByName(ctx context.Context, name string) (Agent, error)
@@ -158,6 +162,9 @@ type Querier interface {
 	// Returns pgx.ErrNoRows if no start/heartbeat exists.
 	GetLatestHeartbeat(ctx context.Context, arg GetLatestHeartbeatParams) (pgtype.Timestamptz, error)
 	GetLatestWorkflowRun(ctx context.Context, workflowID pgtype.UUID) (WorkflowRun, error)
+	GetMail(ctx context.Context, arg GetMailParams) (AgentMail, error)
+	GetMailThread(ctx context.Context, arg GetMailThreadParams) ([]AgentMail, error)
+	GetMailbox(ctx context.Context, arg GetMailboxParams) ([]AgentMail, error)
 	GetMemoryByPath(ctx context.Context, filePath string) (MemoryIndex, error)
 	GetPipelineItem(ctx context.Context, id pgtype.UUID) (PipelineItem, error)
 	GetProject(ctx context.Context, id pgtype.UUID) (Project, error)
@@ -267,6 +274,7 @@ type Querier interface {
 	// Called when a server.stopped work-event arrives (contract §4).
 	// Sets status to 'down' — this is a definitive signal, not a probe.
 	MarkInstanceDownByServerStopped(ctx context.Context, arg MarkInstanceDownByServerStoppedParams) error
+	MarkMailRead(ctx context.Context, arg MarkMailReadParams) (AgentMail, error)
 	RecurringFindings(ctx context.Context, dollar_1 interface{}) ([]RecurringFindingsRow, error)
 	RenameAgent(ctx context.Context, arg RenameAgentParams) (Agent, error)
 	RequeueWorkUnit(ctx context.Context, id int64) (WorkUnit, error)
@@ -274,6 +282,11 @@ type Querier interface {
 	RevokeIngestKey(ctx context.Context, id int64) error
 	RevokeResource(ctx context.Context, arg RevokeResourceParams) error
 	SearchMemory(ctx context.Context, arg SearchMemoryParams) ([]MemoryIndex, error)
+	// agent_mail.sql — agent-to-agent messaging (WP-101, issue #112).
+	// All inbox reads are scoped by recipient_id (an agent only ever sees its own
+	// mail). Expired mail (expires_at in the past) is excluded from inbox listings
+	// and unread counts so the absence is observable without a background sweeper.
+	SendMail(ctx context.Context, arg SendMailParams) (AgentMail, error)
 	SetControlMode(ctx context.Context, mode ControlMode) (ControlState, error)
 	UpdateAgent(ctx context.Context, arg UpdateAgentParams) (Agent, error)
 	UpdateAgentConfig(ctx context.Context, arg UpdateAgentConfigParams) (Agent, error)

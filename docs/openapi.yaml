@@ -250,6 +250,117 @@ paths:
         '400': { description: Bad request }
         '404': { description: Not found }
         '500': { description: Server error }
+  /api/agents/{id}/mail/inbox:
+    get:
+      tags: [agents]
+      operationId: get_ListInbox
+      summary: List Inbox
+      description: Handler ListInbox in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/agents/{id}/mail/inbox/{mailId}:
+    delete:
+      tags: [agents]
+      operationId: delete_DeleteInboxMessage
+      summary: Delete Inbox Message
+      description: Handler DeleteInboxMessage in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: mailId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+    get:
+      tags: [agents]
+      operationId: get_GetInboxMessage
+      summary: Get Inbox Message
+      description: Handler GetInboxMessage in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: mailId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/agents/{id}/mail/inbox/{mailId}/read:
+    post:
+      tags: [agents]
+      operationId: post_MarkInboxRead
+      summary: Mark Inbox Read
+      description: Handler MarkInboxRead in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: mailId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/agents/{id}/mail/inbox/{mailId}/reply:
+    post:
+      tags: [agents]
+      operationId: post_ReplyInboxMessage
+      summary: Reply Inbox Message
+      description: Handler ReplyInboxMessage in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: mailId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/agents/{id}/mail/send:
+    post:
+      tags: [agents]
+      operationId: post_SendMail
+      summary: Send Mail
+      description: Handler SendMail in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
   /api/agents/{id}/models:
     get:
       tags: [agents]
