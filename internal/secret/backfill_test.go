@@ -26,6 +26,8 @@ func TestBackfill_Idempotent(t *testing.T) {
 	ct, err := kek.Encrypt(plaintext)
 	require.NoError(t, err)
 
+	defaultOwner := [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}
+
 	// Create legacy resource (enc_key_version defaults to 0 based on DB migrations, but we added it to CreateResourceParams)
 	res, err := queries.CreateResource(ctx, db.CreateResourceParams{
 		Slug:          fmt.Sprintf("test-legacy-bf-%d", time.Now().UnixNano()),
@@ -38,10 +40,9 @@ func TestBackfill_Idempotent(t *testing.T) {
 		Last4:         Last4(plaintext),
 		Status:        "active",
 		EncKeyVersion: 0,
+		OwnerID:       pgtype.UUID{Bytes: defaultOwner, Valid: true},
 	})
 	require.NoError(t, err)
-
-	defaultOwner := [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}
 
 	env := NewEnvelopeCipher(kek, queries)
 

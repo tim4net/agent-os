@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -16,6 +17,14 @@ import (
 	"github.com/tim4net/agent-os/internal/secret"
 	"github.com/tim4net/agent-os/internal/service"
 )
+
+// renameReq creates an HTTP request with the seed owner-0 identity injected,
+// mirroring what IdentityMiddleware does for real requests. All agent CRUD
+// handlers require owner_id from context — without it they return 401.
+func renameReq(method, path string, body io.Reader) *http.Request {
+	req := httptest.NewRequest(method, path, body)
+	return req.WithContext(withTestOwner(req.Context()))
+}
 
 // TestRegistry_UnknownKind verifies that Get() on an unknown kind returns an
 // error that mentions the kind and lists registered kinds (AC2).
@@ -130,7 +139,7 @@ func createTestAgent(t *testing.T, api *API, name string) agentView {
 		Name: name, DisplayName: name, Harness: "generic", BaseURL: "http://test",
 	})
 	rec := httptest.NewRecorder()
-	api.Router().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/agents", bytes.NewReader(body)))
+	api.Router().ServeHTTP(rec, renameReq(http.MethodPost, "/agents", bytes.NewReader(body)))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create agent status = %d, body=%s", rec.Code, rec.Body.String())
 	}
@@ -160,7 +169,7 @@ func TestAgentRename_HappyPath(t *testing.T) {
 	// Rename
 	patchBody, _ := json.Marshal(map[string]string{"name": "renamed-agent"})
 	rec := httptest.NewRecorder()
-	api.Router().ServeHTTP(rec, httptest.NewRequest(http.MethodPatch,
+	api.Router().ServeHTTP(rec, renameReq(http.MethodPatch,
 		"/agents/"+agentIDStr(t, agent), bytes.NewReader(patchBody)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("rename status = %d, want 200, body=%s", rec.Code, rec.Body.String())
@@ -176,7 +185,7 @@ func TestAgentRename_HappyPath(t *testing.T) {
 
 	// Verify via GET
 	getRec := httptest.NewRecorder()
-	api.Router().ServeHTTP(getRec, httptest.NewRequest(http.MethodGet,
+	api.Router().ServeHTTP(getRec, renameReq(http.MethodGet,
 		"/agents/"+agentIDStr(t, agent), nil))
 	if getRec.Code != http.StatusOK {
 		t.Fatalf("GET after rename status = %d", getRec.Code)
@@ -230,7 +239,7 @@ func TestAgentRename_Validation(t *testing.T) {
 
 			patchBody, _ := json.Marshal(map[string]string{"name": tt.patchName})
 			rec := httptest.NewRecorder()
-			api.Router().ServeHTTP(rec, httptest.NewRequest(http.MethodPatch,
+			api.Router().ServeHTTP(rec, renameReq(http.MethodPatch,
 				"/agents/"+agentID, bytes.NewReader(patchBody)))
 
 			if rec.Code != tt.wantStatus {
@@ -270,7 +279,7 @@ func TestAgentRename_WrongOwner404(t *testing.T) {
 	// Try to rename as seed owner → should 404
 	patchBody, _ := json.Marshal(map[string]string{"name": "hijacked"})
 	rec := httptest.NewRecorder()
-	api.Router().ServeHTTP(rec, httptest.NewRequest(http.MethodPatch,
+	api.Router().ServeHTTP(rec, renameReq(http.MethodPatch,
 		"/agents/"+agentID, bytes.NewReader(patchBody)))
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("wrong-owner rename status = %d, want 404, body=%s", rec.Code, rec.Body.String())
@@ -284,7 +293,7 @@ func TestAgentRename_EmitsActivity(t *testing.T) {
 
 	patchBody, _ := json.Marshal(map[string]string{"name": "post-rename"})
 	rec := httptest.NewRecorder()
-	api.Router().ServeHTTP(rec, httptest.NewRequest(http.MethodPatch,
+	api.Router().ServeHTTP(rec, renameReq(http.MethodPatch,
 		"/agents/"+agentIDStr(t, agent), bytes.NewReader(patchBody)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("rename status = %d, want 200", rec.Code)
@@ -323,7 +332,7 @@ func TestAgentRename_PreservesConfig(t *testing.T) {
 		"system_prompt": "You are helpful",
 	})
 	rec := httptest.NewRecorder()
-	api.Router().ServeHTTP(rec, httptest.NewRequest(http.MethodPatch,
+	api.Router().ServeHTTP(rec, renameReq(http.MethodPatch,
 		"/agents/"+agentIDStr(t, agent), bytes.NewReader(configBody)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("set config status = %d", rec.Code)
@@ -332,7 +341,7 @@ func TestAgentRename_PreservesConfig(t *testing.T) {
 	// Now rename only (name-only PATCH)
 	patchBody, _ := json.Marshal(map[string]string{"name": "renamed-config-agent"})
 	rec2 := httptest.NewRecorder()
-	api.Router().ServeHTTP(rec2, httptest.NewRequest(http.MethodPatch,
+	api.Router().ServeHTTP(rec2, renameReq(http.MethodPatch,
 		"/agents/"+agentIDStr(t, agent), bytes.NewReader(patchBody)))
 	if rec2.Code != http.StatusOK {
 		t.Fatalf("rename status = %d, body=%s", rec2.Code, rec2.Body.String())
@@ -346,7 +355,7 @@ func TestAgentRename_PreservesConfig(t *testing.T) {
 
 	// Verify config is preserved
 	configRec := httptest.NewRecorder()
-	api.Router().ServeHTTP(configRec, httptest.NewRequest(http.MethodGet,
+	api.Router().ServeHTTP(configRec, renameReq(http.MethodGet,
 		"/agents/"+agentIDStr(t, agent)+"/config", nil))
 	if configRec.Code != http.StatusOK {
 		t.Fatalf("get config status = %d", configRec.Code)
@@ -368,7 +377,7 @@ func TestAgentRename_DBFailure(t *testing.T) {
 
 	patchBody, _ := json.Marshal(map[string]string{"name": "should-fail"})
 	rec := httptest.NewRecorder()
-	api.Router().ServeHTTP(rec, httptest.NewRequest(http.MethodPatch,
+	api.Router().ServeHTTP(rec, renameReq(http.MethodPatch,
 		"/agents/"+agentIDStr(t, agent), bytes.NewReader(patchBody)))
 
 	if rec.Code == http.StatusOK {
@@ -389,7 +398,7 @@ func TestAgentRename_ConcurrentSameName(t *testing.T) {
 	doRename := func(agentID string) int {
 		patchBody, _ := json.Marshal(map[string]string{"name": targetName})
 		rec := httptest.NewRecorder()
-		api.Router().ServeHTTP(rec, httptest.NewRequest(http.MethodPatch,
+		api.Router().ServeHTTP(rec, renameReq(http.MethodPatch,
 			"/agents/"+agentID, bytes.NewReader(patchBody)))
 		return rec.Code
 	}
