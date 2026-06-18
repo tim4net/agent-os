@@ -107,6 +107,12 @@ promote "$API_IMG"
 promote "$WEB_IMG"
 
 # ---------- 5. restart services + health check ----------
+# restart_stack stops then starts the quadlet-managed services via systemd.
+# systemd already performs a GRACEFUL shutdown: it sends SIGTERM and waits
+# TimeoutStopSec (default 90s) before SIGKILL, giving containers time to flush
+# and release locks. We intentionally do NOT call `podman stop` directly here —
+# that would bypass the quadlet's own service unit and desync systemd's view of
+# the service state.
 restart_stack() {
   systemctl --user restart "$WEB_SVC" "$API_SVC"
 }
@@ -119,22 +125,66 @@ healthy() {
   done
   return 1
 }
+# Compare the running container's image ID against the :latest image ID.
+# Returns 0 if they match (deploy took effect), 1 if the container is stale.
+# Never calls fail() directly — a mismatch falls through to the rollback path
+# so the previous good image is restored instead of leaving a broken deploy.
+verify_running_image() {
+  local svc="$1"
+  local img="$2"
+  local short="${svc%.service}"
+  local matches
+  matches="$(podman ps --filter "name=${short}" --format '{{.Names}}')"
+  if [ -z "$matches" ]; then
+    log "verify_running_image: running container for $svc not found"
+    return 1
+  fi
+  # Guard against ambiguous matches. The name filter is a substring match, so
+  # "agent-os-api" can also match "agent-os-api-sidecar". If more than one
+  # container matches we refuse to verify rather than guessing (head -1) which
+  # one is the service we actually deployed — a wrong guess would silently pass
+  # a stale container.
+  local count
+  count="$(printf '%s\n' "$matches" | grep -c .)"
+  if [ "$count" -gt 1 ]; then
+    log "verify_running_image: $count containers match '$short' — ambiguous, refusing to verify"
+    return 1
+  fi
+  local cname="$matches"
+  local running_id latest_id
+  running_id="$(podman inspect "$cname" --format '{{.Image}}')"
+  latest_id="$(podman inspect "$img:latest" --format '{{.Id}}')"
+  if [ "$running_id" != "$latest_id" ]; then
+    log "verify_running_image: $svc running image ($running_id) != $img:latest ($latest_id) — stale container"
+    return 1
+  fi
+  log "verified $svc running image == $img:latest"
+  return 0
+}
 
 log "restarting stack"
 restart_stack
 if healthy 25; then
-  log "HEALTHY at $DEPLOY_SHA (migrations +$applied) — deploy OK"
-  # prune candidate tags (latest now points at the same image id)
-  podman rmi "$API_IMG:candidate" "$WEB_IMG:candidate" 2>/dev/null || true
-  # prune dangling images to prevent disk accumulation (22GB+ recurrence)
-  podman image prune -f 2>/dev/null || true
-  echo "DEPLOY_OK sha=$DEPLOY_SHA migrations=$applied"
-  exit 0
+  log "HEALTHY at $DEPLOY_SHA (migrations +$applied) — verifying running images"
+  if verify_running_image "$API_SVC" "$API_IMG" && verify_running_image "$WEB_SVC" "$WEB_IMG"; then
+    # prune candidate tags (latest now points at the same image id)
+    podman rmi "$API_IMG:candidate" "$WEB_IMG:candidate" 2>/dev/null || true
+    # prune dangling images to prevent disk accumulation
+    podman image prune -f 2>/dev/null || true
+    echo "DEPLOY_OK sha=$DEPLOY_SHA migrations=$applied"
+    exit 0
+  fi
+  log "running image verification FAILED — proceeding to rollback"
 fi
 
 # ---------- 6. failure -> roll back ----------
 log "health check FAILED — rolling back images"
 rollback_imgs
+# Clean up the failed :candidate images so they don't accumulate on disk.
+# The success path prunes candidates after verification; the rollback path
+# previously leaked them.
+podman rmi "$API_IMG:candidate" "$WEB_IMG:candidate" 2>/dev/null || true
+podman image prune -f 2>/dev/null || true
 restart_stack
 if healthy 20; then
   fail "deploy of $DEPLOY_SHA failed health check; rolled back to previous images (stack healthy again)"
