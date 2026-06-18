@@ -48,6 +48,16 @@ FROM agent_grants g WHERE g.resource_id = $1 AND g.owner_id = $2;
 -- name: ListAllGrants :many
 SELECT id, agent_id, resource_id, scope, granted_at, owner_id FROM agent_grants WHERE owner_id = $1;
 
+-- ListResourcesForAgent filters ONLY by agent_id and intentionally does NOT
+-- re-check owner_id. Cross-owner isolation is enforced one layer up, at
+-- GRANT CREATION: GrantAgentResource (internal/api/resources.go) validates that
+-- BOTH the agent and the resource belong to the calling owner via the
+-- owner-scoped GetAgent/GetResource lookups before it inserts an agent_grants
+-- row, so every grant is inherently intra-owner.
+--
+-- DO NOT reuse this query from any code path that creates grants without that
+-- ownership check — doing so would silently leak another owner's (possibly
+-- secret) resources. Regression guard: TestGrantCrossOwnerIsolation.
 -- name: ListResourcesForAgent :many
 SELECT r.id, r.slug, r.kind, r.label, r.provider, r.is_secret, r.enc_value, r.enc_config, r.config, r.last4, r.status, r.created_at, r.updated_at, r.owner_id, r.enc_key_version
 FROM resources r
