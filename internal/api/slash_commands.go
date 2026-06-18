@@ -43,6 +43,12 @@ func (a *API) HandleSlashCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	// Parse the slash command
 	parts := strings.SplitN(command, " ", 2)
 	cmd := parts[0]
@@ -56,22 +62,22 @@ func (a *API) HandleSlashCommand(w http.ResponseWriter, r *http.Request) {
 
 	switch cmd {
 	case "/new":
-		result, err = a.slashNew(r.Context(), req.AgentID, args)
+		result, err = a.slashNew(r.Context(), ownerID, req.AgentID, args)
 	case "/clear":
-		result, err = a.slashClear(r.Context(), req.ConversationID)
+		result, err = a.slashClear(r.Context(), ownerID, req.ConversationID)
 	case "/compact":
-		result, err = a.slashCompact(r.Context(), req.ConversationID)
+		result, err = a.slashCompact(r.Context(), ownerID, req.ConversationID)
 	case "/compress":
 		// Alias for /compact
-		result, err = a.slashCompact(r.Context(), req.ConversationID)
+		result, err = a.slashCompact(r.Context(), ownerID, req.ConversationID)
 	case "/retry":
-		result, err = a.slashRetry(r.Context(), req.AgentID, req.ConversationID)
+		result, err = a.slashRetry(r.Context(), ownerID, req.AgentID, req.ConversationID)
 	case "/undo":
-		result, err = a.slashUndo(r.Context(), req.ConversationID)
+		result, err = a.slashUndo(r.Context(), ownerID, req.ConversationID)
 	case "/history":
-		result, err = a.slashHistory(r.Context(), req.ConversationID)
+		result, err = a.slashHistory(r.Context(), ownerID, req.ConversationID)
 	case "/title":
-		result, err = a.slashTitle(r.Context(), req.ConversationID, args)
+		result, err = a.slashTitle(r.Context(), ownerID, req.ConversationID, args)
 	case "/stop":
 		// Stop is handled client-side (abort the fetch), but acknowledge
 		result = &SlashCommandResult{
@@ -79,7 +85,7 @@ func (a *API) HandleSlashCommand(w http.ResponseWriter, r *http.Request) {
 			Message: "Streaming stopped",
 		}
 	case "/save":
-		result, err = a.slashSave(r.Context(), req.ConversationID)
+		result, err = a.slashSave(r.Context(), ownerID, req.ConversationID)
 	default:
 		// Forward unknown slash commands to the agent as chat messages.
 		// The agent (Hermes, OpenClaw, etc.) handles its own slash commands.
@@ -103,7 +109,7 @@ func (a *API) HandleSlashCommand(w http.ResponseWriter, r *http.Request) {
 }
 
 // slashNew creates a new conversation and returns its ID.
-func (a *API) slashNew(ctx context.Context, agentIDStr string, title string) (*SlashCommandResult, error) {
+func (a *API) slashNew(ctx context.Context, ownerID pgtype.UUID, agentIDStr string, title string) (*SlashCommandResult, error) {
 	if agentIDStr == "" {
 		return nil, fmt.Errorf("agent_id is required for /new")
 	}
@@ -123,6 +129,7 @@ func (a *API) slashNew(ctx context.Context, agentIDStr string, title string) (*S
 	}
 
 	conv, err := a.queries.CreateConversation(ctx, db.CreateConversationParams{
+		OwnerID:  ownerID,
 		AgentID:  agentID,
 		Title:    titleText,
 		Metadata: []byte("{}"),
@@ -141,7 +148,7 @@ func (a *API) slashNew(ctx context.Context, agentIDStr string, title string) (*S
 }
 
 // slashClear deletes all messages in the current conversation.
-func (a *API) slashClear(ctx context.Context, convIDStr string) (*SlashCommandResult, error) {
+func (a *API) slashClear(ctx context.Context, ownerID pgtype.UUID, convIDStr string) (*SlashCommandResult, error) {
 	if convIDStr == "" {
 		return nil, fmt.Errorf("conversation_id is required for /clear")
 	}
@@ -152,13 +159,13 @@ func (a *API) slashClear(ctx context.Context, convIDStr string) (*SlashCommandRe
 	}
 
 	// Verify conversation exists
-	_, err := a.queries.GetConversation(ctx, convID)
+	_, err := a.queries.GetConversation(ctx, db.GetConversationParams{ID: convID, OwnerID: ownerID})
 	if err != nil {
 		return nil, fmt.Errorf("conversation not found: %w", err)
 	}
 
 	// Delete all messages in the conversation
-	deleted, err := a.queries.DeleteMessagesByConversation(ctx, convID)
+	deleted, err := a.queries.DeleteMessagesByConversation(ctx, db.DeleteMessagesByConversationParams{ConversationID: convID, OwnerID: ownerID})
 	if err != nil {
 		return nil, fmt.Errorf("failed to clear messages: %w", err)
 	}
@@ -174,7 +181,7 @@ func (a *API) slashClear(ctx context.Context, convIDStr string) (*SlashCommandRe
 }
 
 // slashCompact summarizes the conversation and replaces old messages with a summary.
-func (a *API) slashCompact(ctx context.Context, convIDStr string) (*SlashCommandResult, error) {
+func (a *API) slashCompact(ctx context.Context, ownerID pgtype.UUID, convIDStr string) (*SlashCommandResult, error) {
 	if convIDStr == "" {
 		return nil, fmt.Errorf("conversation_id is required for /compact")
 	}
@@ -185,7 +192,7 @@ func (a *API) slashCompact(ctx context.Context, convIDStr string) (*SlashCommand
 	}
 
 	// Get all messages in the conversation
-	messages, err := a.queries.ListMessages(ctx, convID)
+	messages, err := a.queries.ListMessages(ctx, db.ListMessagesParams{ConversationID: convID, OwnerID: ownerID})
 	if err != nil {
 		return nil, fmt.Errorf("failed to load messages: %w", err)
 	}
@@ -215,13 +222,14 @@ func (a *API) slashCompact(ctx context.Context, convIDStr string) (*SlashCommand
 	}
 
 	// Delete old messages
-	deleted, err := a.queries.DeleteMessagesByConversation(ctx, convID)
+	deleted, err := a.queries.DeleteMessagesByConversation(ctx, db.DeleteMessagesByConversationParams{ConversationID: convID, OwnerID: ownerID})
 	if err != nil {
 		return nil, fmt.Errorf("failed to clear old messages: %w", err)
 	}
 
 	// Insert the summary as a system message
 	_, err = a.queries.CreateMessage(ctx, db.CreateMessageParams{
+		OwnerID:        ownerID,
 		ConversationID: convID,
 		Role:           "system",
 		Content:        fmt.Sprintf("[Conversation Summary]\n%s", summary),
@@ -243,7 +251,7 @@ func (a *API) slashCompact(ctx context.Context, convIDStr string) (*SlashCommand
 }
 
 // slashRetry re-sends the last user message (removes last assistant reply, returns the user text).
-func (a *API) slashRetry(ctx context.Context, agentIDStr, convIDStr string) (*SlashCommandResult, error) {
+func (a *API) slashRetry(ctx context.Context, ownerID pgtype.UUID, agentIDStr, convIDStr string) (*SlashCommandResult, error) {
 	if convIDStr == "" {
 		return nil, fmt.Errorf("conversation_id is required for /retry")
 	}
@@ -254,13 +262,13 @@ func (a *API) slashRetry(ctx context.Context, agentIDStr, convIDStr string) (*Sl
 	}
 
 	// Get the last user message
-	lastMsg, err := a.queries.GetLastUserMessage(ctx, convID)
+	lastMsg, err := a.queries.GetLastUserMessage(ctx, db.GetLastUserMessageParams{ConversationID: convID, OwnerID: ownerID})
 	if err != nil {
 		return nil, fmt.Errorf("no user message to retry: %w", err)
 	}
 
 	// Delete the last exchange (user + assistant)
-	deleted, err := a.queries.DeleteLastExchange(ctx, convID)
+	deleted, err := a.queries.DeleteLastExchange(ctx, db.DeleteLastExchangeParams{ConversationID: convID, OwnerID: ownerID})
 	if err != nil {
 		return nil, fmt.Errorf("failed to remove last exchange: %w", err)
 	}
@@ -277,7 +285,7 @@ func (a *API) slashRetry(ctx context.Context, agentIDStr, convIDStr string) (*Sl
 }
 
 // slashUndo removes the last user/assistant exchange.
-func (a *API) slashUndo(ctx context.Context, convIDStr string) (*SlashCommandResult, error) {
+func (a *API) slashUndo(ctx context.Context, ownerID pgtype.UUID, convIDStr string) (*SlashCommandResult, error) {
 	if convIDStr == "" {
 		return nil, fmt.Errorf("conversation_id is required for /undo")
 	}
@@ -287,7 +295,7 @@ func (a *API) slashUndo(ctx context.Context, convIDStr string) (*SlashCommandRes
 		return nil, fmt.Errorf("invalid conversation_id: %w", err)
 	}
 
-	deleted, err := a.queries.DeleteLastExchange(ctx, convID)
+	deleted, err := a.queries.DeleteLastExchange(ctx, db.DeleteLastExchangeParams{ConversationID: convID, OwnerID: ownerID})
 	if err != nil {
 		return nil, fmt.Errorf("failed to undo: %w", err)
 	}
@@ -303,7 +311,7 @@ func (a *API) slashUndo(ctx context.Context, convIDStr string) (*SlashCommandRes
 }
 
 // slashHistory returns the conversation messages as structured data.
-func (a *API) slashHistory(ctx context.Context, convIDStr string) (*SlashCommandResult, error) {
+func (a *API) slashHistory(ctx context.Context, ownerID pgtype.UUID, convIDStr string) (*SlashCommandResult, error) {
 	if convIDStr == "" {
 		return nil, fmt.Errorf("conversation_id is required for /history")
 	}
@@ -313,7 +321,7 @@ func (a *API) slashHistory(ctx context.Context, convIDStr string) (*SlashCommand
 		return nil, fmt.Errorf("invalid conversation_id: %w", err)
 	}
 
-	messages, err := a.queries.ListMessages(ctx, convID)
+	messages, err := a.queries.ListMessages(ctx, db.ListMessagesParams{ConversationID: convID, OwnerID: ownerID})
 	if err != nil {
 		return nil, fmt.Errorf("failed to load history: %w", err)
 	}
@@ -341,7 +349,7 @@ func (a *API) slashHistory(ctx context.Context, convIDStr string) (*SlashCommand
 }
 
 // slashTitle sets the conversation title.
-func (a *API) slashTitle(ctx context.Context, convIDStr, title string) (*SlashCommandResult, error) {
+func (a *API) slashTitle(ctx context.Context, ownerID pgtype.UUID, convIDStr, title string) (*SlashCommandResult, error) {
 	if convIDStr == "" {
 		return nil, fmt.Errorf("conversation_id is required for /title")
 	}
@@ -355,8 +363,9 @@ func (a *API) slashTitle(ctx context.Context, convIDStr, title string) (*SlashCo
 	}
 
 	conv, err := a.queries.UpdateConversation(ctx, db.UpdateConversationParams{
-		ID:    convID,
-		Title: pgtype.Text{String: title, Valid: true},
+		ID:      convID,
+		OwnerID: ownerID,
+		Title:   pgtype.Text{String: title, Valid: true},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to update title: %w", err)
@@ -373,7 +382,7 @@ func (a *API) slashTitle(ctx context.Context, convIDStr, title string) (*SlashCo
 }
 
 // slashSave exports the conversation to Obsidian.
-func (a *API) slashSave(ctx context.Context, convIDStr string) (*SlashCommandResult, error) {
+func (a *API) slashSave(ctx context.Context, ownerID pgtype.UUID, convIDStr string) (*SlashCommandResult, error) {
 	if convIDStr == "" {
 		return nil, fmt.Errorf("conversation_id is required for /save")
 	}
@@ -383,12 +392,12 @@ func (a *API) slashSave(ctx context.Context, convIDStr string) (*SlashCommandRes
 		return nil, fmt.Errorf("invalid conversation_id: %w", err)
 	}
 
-	conv, err := a.queries.GetConversation(ctx, convID)
+	conv, err := a.queries.GetConversation(ctx, db.GetConversationParams{ID: convID, OwnerID: ownerID})
 	if err != nil {
 		return nil, fmt.Errorf("conversation not found: %w", err)
 	}
 
-	messages, err := a.queries.ListMessages(ctx, convID)
+	messages, err := a.queries.ListMessages(ctx, db.ListMessagesParams{ConversationID: convID, OwnerID: ownerID})
 	if err != nil {
 		return nil, fmt.Errorf("failed to load messages: %w", err)
 	}

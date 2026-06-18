@@ -33,8 +33,14 @@ type DiscoveredAgent struct {
 
 // DiscoverAgents handles GET /api/agents/discover
 func (a *API) DiscoverAgents(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	// Get currently registered agents
-	registered, err := a.queries.ListAgents(r.Context())
+	registered, err := a.queries.ListAgents(r.Context(), ownerID)
 	if err != nil {
 		slog.Error("failed to list agents for discovery", "error", err)
 		http.Error(w, "failed to list agents", http.StatusInternalServerError)
@@ -74,8 +80,14 @@ func (a *API) DiscoverAgents(w http.ResponseWriter, r *http.Request) {
 
 // AutoRegisterAgents handles POST /api/agents/auto-register
 func (a *API) AutoRegisterAgents(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	// Get currently registered agents
-	registered, err := a.queries.ListAgents(r.Context())
+	registered, err := a.queries.ListAgents(r.Context(), ownerID)
 	if err != nil {
 		slog.Error("failed to list agents for auto-register", "error", err)
 		http.Error(w, "failed to list agents", http.StatusInternalServerError)
@@ -94,6 +106,7 @@ func (a *API) AutoRegisterAgents(w http.ResponseWriter, r *http.Request) {
 		}
 
 		agent, err := a.queries.EnsureAgent(r.Context(), db.EnsureAgentParams{
+			OwnerID:     ownerID,
 			Name:        ka.Hostname,
 			DisplayName: ka.DisplayName,
 			Harness:     ka.Harness,
@@ -102,7 +115,10 @@ func (a *API) AutoRegisterAgents(w http.ResponseWriter, r *http.Request) {
 		})
 		if err != nil {
 			// err == pgx.ErrNoRows means agent was created by a concurrent request — fetch it.
-			existing, getErr := a.queries.GetAgentByName(r.Context(), ka.Hostname)
+			existing, getErr := a.queries.GetAgentByName(r.Context(), db.GetAgentByNameParams{
+				Name:    ka.Hostname,
+				OwnerID: ownerID,
+			})
 			if getErr != nil {
 				slog.Error("failed to auto-register agent", "hostname", ka.Hostname, "error", err)
 				continue

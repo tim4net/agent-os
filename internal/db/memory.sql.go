@@ -12,20 +12,30 @@ import (
 )
 
 const deleteMemory = `-- name: DeleteMemory :exec
-DELETE FROM memory_index WHERE file_path = $1
+DELETE FROM memory_index WHERE file_path = $1 AND owner_id = $2
 `
 
-func (q *Queries) DeleteMemory(ctx context.Context, filePath string) error {
-	_, err := q.db.Exec(ctx, deleteMemory, filePath)
+type DeleteMemoryParams struct {
+	FilePath string      `json:"file_path"`
+	OwnerID  pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) DeleteMemory(ctx context.Context, arg DeleteMemoryParams) error {
+	_, err := q.db.Exec(ctx, deleteMemory, arg.FilePath, arg.OwnerID)
 	return err
 }
 
 const getMemoryByPath = `-- name: GetMemoryByPath :one
-SELECT id, file_path, title, content, tags, last_indexed, owner_id, project_id FROM memory_index WHERE file_path = $1
+SELECT id, file_path, title, content, tags, last_indexed, owner_id, project_id FROM memory_index WHERE file_path = $1 AND owner_id = $2
 `
 
-func (q *Queries) GetMemoryByPath(ctx context.Context, filePath string) (MemoryIndex, error) {
-	row := q.db.QueryRow(ctx, getMemoryByPath, filePath)
+type GetMemoryByPathParams struct {
+	FilePath string      `json:"file_path"`
+	OwnerID  pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) GetMemoryByPath(ctx context.Context, arg GetMemoryByPathParams) (MemoryIndex, error) {
+	row := q.db.QueryRow(ctx, getMemoryByPath, arg.FilePath, arg.OwnerID)
 	var i MemoryIndex
 	err := row.Scan(
 		&i.ID,
@@ -41,11 +51,11 @@ func (q *Queries) GetMemoryByPath(ctx context.Context, filePath string) (MemoryI
 }
 
 const listMemoryIndex = `-- name: ListMemoryIndex :many
-SELECT id, file_path, title, content, tags, last_indexed, owner_id, project_id FROM memory_index ORDER BY last_indexed DESC
+SELECT id, file_path, title, content, tags, last_indexed, owner_id, project_id FROM memory_index WHERE owner_id = $1 ORDER BY last_indexed DESC
 `
 
-func (q *Queries) ListMemoryIndex(ctx context.Context) ([]MemoryIndex, error) {
-	rows, err := q.db.Query(ctx, listMemoryIndex)
+func (q *Queries) ListMemoryIndex(ctx context.Context, ownerID pgtype.UUID) ([]MemoryIndex, error) {
+	rows, err := q.db.Query(ctx, listMemoryIndex, ownerID)
 	if err != nil {
 		return nil, err
 	}
@@ -75,20 +85,27 @@ func (q *Queries) ListMemoryIndex(ctx context.Context) ([]MemoryIndex, error) {
 
 const searchMemory = `-- name: SearchMemory :many
 SELECT id, file_path, title, content, tags, last_indexed, owner_id, project_id FROM memory_index
-WHERE to_tsvector('english', coalesce(content, '')) @@ websearch_to_tsquery('english', $1)
-  AND (project_id = $3 OR $3 IS NULL)
-ORDER BY ts_rank(to_tsvector('english', coalesce(content, '')), websearch_to_tsquery('english', $1)) DESC
-LIMIT $2
+WHERE owner_id = $1
+  AND to_tsvector('english', coalesce(content, '')) @@ websearch_to_tsquery('english', $2)
+  AND (project_id = $4 OR $4 IS NULL)
+ORDER BY ts_rank(to_tsvector('english', coalesce(content, '')), websearch_to_tsquery('english', $2)) DESC
+LIMIT $3
 `
 
 type SearchMemoryParams struct {
+	OwnerID            pgtype.UUID `json:"owner_id"`
 	WebsearchToTsquery string      `json:"websearch_to_tsquery"`
 	Limit              int32       `json:"limit"`
 	ProjectID          pgtype.UUID `json:"project_id"`
 }
 
 func (q *Queries) SearchMemory(ctx context.Context, arg SearchMemoryParams) ([]MemoryIndex, error) {
-	rows, err := q.db.Query(ctx, searchMemory, arg.WebsearchToTsquery, arg.Limit, arg.ProjectID)
+	rows, err := q.db.Query(ctx, searchMemory,
+		arg.OwnerID,
+		arg.WebsearchToTsquery,
+		arg.Limit,
+		arg.ProjectID,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -117,8 +134,8 @@ func (q *Queries) SearchMemory(ctx context.Context, arg SearchMemoryParams) ([]M
 }
 
 const upsertMemory = `-- name: UpsertMemory :one
-INSERT INTO memory_index (file_path, title, content, tags, project_id)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO memory_index (owner_id, file_path, title, content, tags, project_id)
+VALUES ($1, $2, $3, $4, $5, $6)
 ON CONFLICT (file_path) DO UPDATE SET
     title = EXCLUDED.title,
     content = EXCLUDED.content,
@@ -129,6 +146,7 @@ RETURNING id, file_path, title, content, tags, last_indexed, owner_id, project_i
 `
 
 type UpsertMemoryParams struct {
+	OwnerID   pgtype.UUID `json:"owner_id"`
 	FilePath  string      `json:"file_path"`
 	Title     pgtype.Text `json:"title"`
 	Content   pgtype.Text `json:"content"`
@@ -138,6 +156,7 @@ type UpsertMemoryParams struct {
 
 func (q *Queries) UpsertMemory(ctx context.Context, arg UpsertMemoryParams) (MemoryIndex, error) {
 	row := q.db.QueryRow(ctx, upsertMemory,
+		arg.OwnerID,
 		arg.FilePath,
 		arg.Title,
 		arg.Content,

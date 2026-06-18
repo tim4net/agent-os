@@ -71,7 +71,7 @@ func seedHostLiveness(t *testing.T, pool *pgxpool.Pool, host string, pid int32, 
 	_, err := pool.Exec(ctx,
 		`INSERT INTO host_liveness (host, pid, session_id, harness, cwd, tenant, alive)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7)
-		 ON CONFLICT (host, pid) DO UPDATE SET alive = EXCLUDED.alive, seen_at = NOW()`,
+		 ON CONFLICT (host, pid) DO UPDATE SET alive = EXCLUDED.alive, seen_at = NOW(), tenant = EXCLUDED.tenant, session_id = EXCLUDED.session_id, harness = EXCLUDED.harness, cwd = EXCLUDED.cwd`,
 		host, pid, sessionID, harness, cwd, tenant, alive,
 	)
 	if err != nil {
@@ -107,6 +107,7 @@ func TestHTTPHostLiveness_PostNew_Returns200(t *testing.T) {
 
 	bodyBytes, _ := json.Marshal(body)
 	req := httptest.NewRequest("POST", "/", bytes.NewReader(bodyBytes))
+	req = req.WithContext(withTestOwner(req.Context()))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	a.HostLivenessRoutes().ServeHTTP(rec, req)
@@ -148,6 +149,7 @@ func TestHTTPHostLiveness_PostMissingHost_Returns400(t *testing.T) {
 	}
 	bodyBytes, _ := json.Marshal(body)
 	req := httptest.NewRequest("POST", "/", bytes.NewReader(bodyBytes))
+	req = req.WithContext(withTestOwner(req.Context()))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	a.HostLivenessRoutes().ServeHTTP(rec, req)
@@ -173,6 +175,7 @@ func TestHTTPHostLiveness_PostInvalidPID_Returns400(t *testing.T) {
 	}
 	bodyBytes, _ := json.Marshal(body)
 	req := httptest.NewRequest("POST", "/", bytes.NewReader(bodyBytes))
+	req = req.WithContext(withTestOwner(req.Context()))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	a.HostLivenessRoutes().ServeHTTP(rec, req)
@@ -192,6 +195,7 @@ func TestHTTPHostLiveness_PostBadJSON_Returns400(t *testing.T) {
 	ensureHostLivenessTable(t, pool)
 
 	req := httptest.NewRequest("POST", "/", strings.NewReader("not json"))
+	req = req.WithContext(withTestOwner(req.Context()))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	a.HostLivenessRoutes().ServeHTTP(rec, req)
@@ -224,6 +228,7 @@ func TestHTTPHostLiveness_PostUpsert_UpdatesExisting(t *testing.T) {
 	}
 	bodyBytes, _ := json.Marshal(body)
 	req := httptest.NewRequest("POST", "/", bytes.NewReader(bodyBytes))
+	req = req.WithContext(withTestOwner(req.Context()))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	a.HostLivenessRoutes().ServeHTTP(rec, req)
@@ -254,6 +259,7 @@ func TestHTTPHostLiveness_ListEmpty_Returns200(t *testing.T) {
 
 	tenant := hostLivenessTestTenant(t, "list-empty")
 	req := httptest.NewRequest("GET", "/?tenant="+tenant, nil)
+	req = req.WithContext(withTestOwner(req.Context()))
 	rec := httptest.NewRecorder()
 	a.HostLivenessRoutes().ServeHTTP(rec, req)
 
@@ -287,6 +293,7 @@ func TestHTTPHostLiveness_ListWithSeededData(t *testing.T) {
 	seedHostLiveness(t, pool, "host-b", 1002, "sess-b", "hermes", "/work/b", tenant, false)
 
 	req := httptest.NewRequest("GET", "/?tenant="+tenant, nil)
+	req = req.WithContext(withTestOwner(req.Context()))
 	rec := httptest.NewRecorder()
 	a.HostLivenessRoutes().ServeHTTP(rec, req)
 
@@ -320,6 +327,7 @@ func TestHTTPHostLiveness_TenantIsolation(t *testing.T) {
 
 	// Query tenantA → only tenantA records
 	req := httptest.NewRequest("GET", "/?tenant="+tenantA, nil)
+	req = req.WithContext(withTestOwner(req.Context()))
 	rec := httptest.NewRecorder()
 	a.HostLivenessRoutes().ServeHTTP(rec, req)
 
@@ -356,6 +364,7 @@ func TestHTTPHostLiveness_ListPagination(t *testing.T) {
 
 	// Page 1: limit=2, offset=0
 	req := httptest.NewRequest("GET", "/?tenant="+tenant+"&limit=2&offset=0", nil)
+	req = req.WithContext(withTestOwner(req.Context()))
 	rec := httptest.NewRecorder()
 	a.HostLivenessRoutes().ServeHTTP(rec, req)
 
@@ -379,6 +388,7 @@ func TestHTTPHostLiveness_ListPagination(t *testing.T) {
 
 	// Page 2: limit=2, offset=2
 	req2 := httptest.NewRequest("GET", "/?tenant="+tenant+"&limit=2&offset=2", nil)
+	req2 = req2.WithContext(withTestOwner(req2.Context()))
 	rec2 := httptest.NewRecorder()
 	a.HostLivenessRoutes().ServeHTTP(rec2, req2)
 
@@ -428,6 +438,7 @@ func postLivenessReport(t *testing.T, a *API, req LivenessReportRequest) HostLiv
 	t.Helper()
 	bodyBytes, _ := json.Marshal(req)
 	httpReq := httptest.NewRequest("POST", "/", bytes.NewReader(bodyBytes))
+	httpReq = httpReq.WithContext(withTestOwner(httpReq.Context()))
 	httpReq.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	a.HostLivenessRoutes().ServeHTTP(rec, httpReq)
@@ -449,6 +460,7 @@ func postLivenessReport(t *testing.T, a *API, req LivenessReportRequest) HostLiv
 func queryBoundedSessionLiveness(t *testing.T, queries *db.Queries, harness, sessionID, tenant string) bool {
 	t.Helper()
 	alive, err := queries.GetBoundedSessionHostLiveness(context.Background(), db.GetBoundedSessionHostLivenessParams{
+		OwnerID:   testOwnerID(),
 		Harness:   harness,
 		SessionID: sessionID,
 		Tenant:    tenant,

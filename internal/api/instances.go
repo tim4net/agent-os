@@ -106,6 +106,12 @@ func appInstanceToResponse(inst db.AppInstance) InstanceResponse {
 // ListInstances handles GET /api/instances?tenant=...&limit=50&offset=0
 // Tenant is required — empty tenant is rejected with 400 (ADR-002).
 func (a *API) ListInstances(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	tenant := r.URL.Query().Get("tenant")
 	if tenant == "" {
 		writeError(w, http.StatusBadRequest, "tenant query parameter is required")
@@ -132,9 +138,10 @@ func (a *API) ListInstances(w http.ResponseWriter, r *http.Request) {
 	}
 
 	instances, err := a.queries.ListAppInstances(r.Context(), db.ListAppInstancesParams{
-		Tenant: tenant,
-		Lim:    int32(limit),
-		Off:    int32(offset),
+		Tenant:  tenant,
+		OwnerID: ownerID,
+		Lim:     int32(limit),
+		Off:     int32(offset),
 	})
 	if err != nil {
 		slog.Default().Error("instances: list failed", "error", err)
@@ -142,7 +149,7 @@ func (a *API) ListInstances(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	total, err := a.queries.CountAppInstances(r.Context(), tenant)
+	total, err := a.queries.CountAppInstances(r.Context(), db.CountAppInstancesParams{Tenant: tenant, OwnerID: ownerID})
 	if err != nil {
 		slog.Default().Error("instances: count failed", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to count instances")
@@ -164,6 +171,12 @@ func (a *API) ListInstances(w http.ResponseWriter, r *http.Request) {
 
 // GetInstance handles GET /api/instances/{id}
 func (a *API) GetInstance(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	idStr := chi.URLParam(r, "id")
 	var id pgtype.UUID
 	if err := id.Scan(idStr); err != nil {
@@ -171,7 +184,7 @@ func (a *API) GetInstance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	inst, err := a.queries.GetAppInstance(r.Context(), id)
+	inst, err := a.queries.GetAppInstance(r.Context(), db.GetAppInstanceParams{ID: id, OwnerID: ownerID})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			writeError(w, http.StatusNotFound, "instance not found")
@@ -188,6 +201,12 @@ func (a *API) GetInstance(w http.ResponseWriter, r *http.Request) {
 // CreateInstance handles POST /api/instances (manual add)
 // Body: JSON with harness, host, label, health_url, tenant, and optional branch/sha/cwd/pid.
 func (a *API) CreateInstance(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	var req struct {
 		Harness   string  `json:"harness"`
 		Host      string  `json:"host"`
@@ -241,6 +260,7 @@ func (a *API) CreateInstance(w http.ResponseWriter, r *http.Request) {
 	}
 
 	inst, err := a.queries.UpsertAppInstanceByHostURL(r.Context(), db.UpsertAppInstanceByHostURLParams{
+		OwnerID:   ownerID,
 		Harness:   req.Harness,
 		Host:      req.Host,
 		Label:     req.Label,
@@ -265,6 +285,12 @@ func (a *API) CreateInstance(w http.ResponseWriter, r *http.Request) {
 // Performs a real HTTP health probe against the instance's health_url.
 // Updates the instance status based on the probe result.
 func (a *API) ProbeInstance(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	idStr := chi.URLParam(r, "id")
 	var id pgtype.UUID
 	if err := id.Scan(idStr); err != nil {
@@ -272,7 +298,7 @@ func (a *API) ProbeInstance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	inst, err := a.queries.GetAppInstance(r.Context(), id)
+	inst, err := a.queries.GetAppInstance(r.Context(), db.GetAppInstanceParams{ID: id, OwnerID: ownerID})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			writeError(w, http.StatusNotFound, "instance not found")
@@ -295,6 +321,7 @@ func (a *API) ProbeInstance(w http.ResponseWriter, r *http.Request) {
 	// Update the instance status in the DB from the probe result
 	err = a.queries.UpdateInstanceProbeStatus(r.Context(), db.UpdateInstanceProbeStatusParams{
 		ID:           id,
+		OwnerID:      ownerID,
 		Status:       string(result.Status),
 		LastProbedAt: pgtype.Timestamptz{Time: result.ProbedAt, Valid: true},
 	})

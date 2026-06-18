@@ -48,7 +48,9 @@ func TestAgentAuthTokenEncryptedAtRestAndNeverLeaks(t *testing.T) {
 		BaseURL: "http://claw:2222", AuthToken: token,
 	})
 	rec := httptest.NewRecorder()
-	a.Router().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/agents", bytes.NewReader(body)))
+	req := httptest.NewRequest(http.MethodPost, "/agents", bytes.NewReader(body))
+	req = req.WithContext(withTestOwner(req.Context()))
+	a.Router().ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create status = %d, body=%s", rec.Code, rec.Body.String())
 	}
@@ -75,7 +77,9 @@ func TestAgentAuthTokenEncryptedAtRestAndNeverLeaks(t *testing.T) {
 
 	// LIST response must not leak the token.
 	listRec := httptest.NewRecorder()
-	a.Router().ServeHTTP(listRec, httptest.NewRequest(http.MethodGet, "/agents/", nil))
+	reqList := httptest.NewRequest(http.MethodGet, "/agents/", nil)
+	reqList = reqList.WithContext(withTestOwner(reqList.Context()))
+	a.Router().ServeHTTP(listRec, reqList)
 	if strings.Contains(listRec.Body.String(), token) {
 		t.Fatalf("list response leaked auth token: %s", listRec.Body.String())
 	}
@@ -84,7 +88,7 @@ func TestAgentAuthTokenEncryptedAtRestAndNeverLeaks(t *testing.T) {
 	}
 
 	// But buildHarnessConfig must decrypt it back for actual use.
-	ag, err := a.queries.GetAgentByName(context.Background(), "my-claw")
+	ag, err := a.queries.GetAgentByName(context.Background(), db.GetAgentByNameParams{Name: "my-claw", OwnerID: owner0UUID})
 	if err != nil {
 		t.Fatalf("GetAgentByName: %v", err)
 	}
@@ -101,7 +105,9 @@ func TestCreateAgentRejectsUnknownHarness(t *testing.T) {
 		Name: "x", DisplayName: "X", Harness: "not-a-harness", BaseURL: "http://x",
 	})
 	rec := httptest.NewRecorder()
-	a.Router().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/agents", bytes.NewReader(body)))
+	reqUnk := httptest.NewRequest(http.MethodPost, "/agents", bytes.NewReader(body))
+	reqUnk = reqUnk.WithContext(withTestOwner(reqUnk.Context()))
+	a.Router().ServeHTTP(rec, reqUnk)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("unknown harness status = %d, want 400", rec.Code)
 	}
@@ -112,14 +118,18 @@ func TestDeleteAgentLifecycle(t *testing.T) {
 	a := newTestAPIForAgents(t)
 	// missing id -> 404
 	missRec := httptest.NewRecorder()
-	a.Router().ServeHTTP(missRec, httptest.NewRequest(http.MethodDelete, "/agents/00000000-0000-0000-0000-000000000000", nil))
+	reqMiss := httptest.NewRequest(http.MethodDelete, "/agents/00000000-0000-0000-0000-000000000000", nil)
+	reqMiss = reqMiss.WithContext(withTestOwner(reqMiss.Context()))
+	a.Router().ServeHTTP(missRec, reqMiss)
 	if missRec.Code != http.StatusNotFound {
 		t.Fatalf("delete missing status = %d, want 404", missRec.Code)
 	}
 	// create then delete -> 204
 	body, _ := json.Marshal(CreateAgentRequest{Name: "tmp", DisplayName: "Tmp", Harness: "generic", BaseURL: "http://t"})
 	cRec := httptest.NewRecorder()
-	a.Router().ServeHTTP(cRec, httptest.NewRequest(http.MethodPost, "/agents", bytes.NewReader(body)))
+	reqCr := httptest.NewRequest(http.MethodPost, "/agents", bytes.NewReader(body))
+	reqCr = reqCr.WithContext(withTestOwner(reqCr.Context()))
+	a.Router().ServeHTTP(cRec, reqCr)
 	if cRec.Code != http.StatusCreated {
 		t.Fatalf("create status = %d", cRec.Code)
 	}
@@ -130,7 +140,9 @@ func TestDeleteAgentLifecycle(t *testing.T) {
 	idStr, _ := json.Marshal(created.ID)
 	id := strings.Trim(string(idStr), "\"")
 	dRec := httptest.NewRecorder()
-	a.Router().ServeHTTP(dRec, httptest.NewRequest(http.MethodDelete, "/agents/"+id, nil))
+	reqDel := httptest.NewRequest(http.MethodDelete, "/agents/"+id, nil)
+	reqDel = reqDel.WithContext(withTestOwner(reqDel.Context()))
+	a.Router().ServeHTTP(dRec, reqDel)
 	if dRec.Code != http.StatusNoContent {
 		t.Fatalf("delete status = %d, want 204 (id=%s)", dRec.Code, id)
 	}

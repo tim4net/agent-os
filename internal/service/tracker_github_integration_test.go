@@ -97,7 +97,7 @@ func TestIntegrationGitHub_SyncRoundTrip(t *testing.T) {
 		client:   srv.Client(),
 		baseURL:  srv.URL,
 		log:      log,
-	}, log)
+	}, log).WithOwnerID(owner0UUID)
 
 	// Sync.
 	ctx := context.Background()
@@ -169,7 +169,7 @@ func TestIntegrationGitHub_SyncIdempotency(t *testing.T) {
 		client:   srv.Client(),
 		baseURL:  srv.URL,
 		log:      log,
-	}, log)
+	}, log).WithOwnerID(owner0UUID)
 
 	ctx := context.Background()
 
@@ -230,7 +230,7 @@ func TestIntegrationGitHub_TenantIsolation(t *testing.T) {
 	defer srvA.Close()
 	src := NewGitHubSourceWithClient(queries, &GitHubClient{
 		apiToken: "test-token", client: srvA.Client(), baseURL: srvA.URL, log: log,
-	}, log)
+	}, log).WithOwnerID(owner0UUID)
 
 	_, err := src.Sync(context.Background(), projectID, tenantA)
 	if err != nil {

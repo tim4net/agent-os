@@ -2,8 +2,9 @@
 -- Upserts a host-liveness report keyed on (host, pid).
 -- This is the liveness *feed* (WP-N); session-state derivation is a
 -- separate consumer concern (WP-J / follow-on WPs).
-INSERT INTO host_liveness (host, pid, session_id, harness, cwd, tenant, alive)
+INSERT INTO host_liveness (owner_id, host, pid, session_id, harness, cwd, tenant, alive)
 VALUES (
+    sqlc.arg('owner_id'),
     sqlc.arg('host'),
     sqlc.arg('pid'),
     sqlc.arg('session_id'),
@@ -27,13 +28,15 @@ RETURNING *;
 -- Optional tenant filter: returns rows only for matching tenant (or all if empty).
 SELECT * FROM host_liveness
 WHERE host = sqlc.arg('host') AND pid = sqlc.arg('pid')
-AND (sqlc.arg('tenant')::text = '' OR tenant = sqlc.arg('tenant')::text);
+AND (sqlc.arg('tenant')::text = '' OR tenant = sqlc.arg('tenant')::text)
+AND owner_id = sqlc.arg('owner_id');
 
 -- name: ListHostLiveness :many
 -- Lists all liveness records for a tenant, ordered by seen_at DESC.
 -- Returns all if tenant is empty.
 SELECT * FROM host_liveness
 WHERE (sqlc.arg('tenant')::text = '' OR tenant = sqlc.arg('tenant')::text)
+AND owner_id = sqlc.arg('owner_id')
 ORDER BY seen_at DESC
 LIMIT sqlc.arg('lim')::int
 OFFSET sqlc.arg('off')::int;
@@ -65,10 +68,11 @@ FROM (
     LIMIT 1
 ) sess
 LEFT JOIN host_liveness hl
-    ON hl.host = sess.host AND hl.pid = sess.pid AND hl.tenant = sqlc.arg('tenant');
+    ON hl.host = sess.host AND hl.pid = sess.pid AND hl.tenant = sqlc.arg('tenant')
+    AND hl.owner_id = sqlc.arg('owner_id');
 
 -- name: CountHostLiveness :one
 -- Counts liveness records matching the tenant filter.
 SELECT COUNT(*)::bigint FROM host_liveness
-WHERE (sqlc.arg('tenant')::text = '' OR tenant = sqlc.arg('tenant')::text);
-
+WHERE (sqlc.arg('tenant')::text = '' OR tenant = sqlc.arg('tenant')::text)
+AND owner_id = sqlc.arg('owner_id');

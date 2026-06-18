@@ -12,12 +12,13 @@ import (
 )
 
 const createGoal = `-- name: CreateGoal :one
-INSERT INTO goals (title, description, status, progress, target_date, metadata)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO goals (owner_id, title, description, status, progress, target_date, metadata)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 RETURNING id, title, description, status, progress, target_date, metadata, created_at, updated_at, owner_id
 `
 
 type CreateGoalParams struct {
+	OwnerID     pgtype.UUID   `json:"owner_id"`
 	Title       string        `json:"title"`
 	Description pgtype.Text   `json:"description"`
 	Status      string        `json:"status"`
@@ -28,6 +29,7 @@ type CreateGoalParams struct {
 
 func (q *Queries) CreateGoal(ctx context.Context, arg CreateGoalParams) (Goal, error) {
 	row := q.db.QueryRow(ctx, createGoal,
+		arg.OwnerID,
 		arg.Title,
 		arg.Description,
 		arg.Status,
@@ -52,20 +54,30 @@ func (q *Queries) CreateGoal(ctx context.Context, arg CreateGoalParams) (Goal, e
 }
 
 const deleteGoal = `-- name: DeleteGoal :exec
-DELETE FROM goals WHERE id = $1
+DELETE FROM goals WHERE id = $1 AND owner_id = $2
 `
 
-func (q *Queries) DeleteGoal(ctx context.Context, id pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteGoal, id)
+type DeleteGoalParams struct {
+	ID      pgtype.UUID `json:"id"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) DeleteGoal(ctx context.Context, arg DeleteGoalParams) error {
+	_, err := q.db.Exec(ctx, deleteGoal, arg.ID, arg.OwnerID)
 	return err
 }
 
 const getGoal = `-- name: GetGoal :one
-SELECT id, title, description, status, progress, target_date, metadata, created_at, updated_at, owner_id FROM goals WHERE id = $1
+SELECT id, title, description, status, progress, target_date, metadata, created_at, updated_at, owner_id FROM goals WHERE id = $1 AND owner_id = $2
 `
 
-func (q *Queries) GetGoal(ctx context.Context, id pgtype.UUID) (Goal, error) {
-	row := q.db.QueryRow(ctx, getGoal, id)
+type GetGoalParams struct {
+	ID      pgtype.UUID `json:"id"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) GetGoal(ctx context.Context, arg GetGoalParams) (Goal, error) {
+	row := q.db.QueryRow(ctx, getGoal, arg.ID, arg.OwnerID)
 	var i Goal
 	err := row.Scan(
 		&i.ID,
@@ -83,11 +95,11 @@ func (q *Queries) GetGoal(ctx context.Context, id pgtype.UUID) (Goal, error) {
 }
 
 const listGoals = `-- name: ListGoals :many
-SELECT id, title, description, status, progress, target_date, metadata, created_at, updated_at, owner_id FROM goals ORDER BY created_at DESC
+SELECT id, title, description, status, progress, target_date, metadata, created_at, updated_at, owner_id FROM goals WHERE owner_id = $1 ORDER BY created_at DESC
 `
 
-func (q *Queries) ListGoals(ctx context.Context) ([]Goal, error) {
-	rows, err := q.db.Query(ctx, listGoals)
+func (q *Queries) ListGoals(ctx context.Context, ownerID pgtype.UUID) ([]Goal, error) {
+	rows, err := q.db.Query(ctx, listGoals, ownerID)
 	if err != nil {
 		return nil, err
 	}
@@ -119,7 +131,7 @@ func (q *Queries) ListGoals(ctx context.Context) ([]Goal, error) {
 
 const updateGoal = `-- name: UpdateGoal :one
 UPDATE goals SET title = $2, description = $3, status = $4, progress = $5, target_date = $6, metadata = $7, updated_at = NOW()
-WHERE id = $1
+WHERE id = $1 AND owner_id = $8
 RETURNING id, title, description, status, progress, target_date, metadata, created_at, updated_at, owner_id
 `
 
@@ -131,6 +143,7 @@ type UpdateGoalParams struct {
 	Progress    pgtype.Float4 `json:"progress"`
 	TargetDate  pgtype.Date   `json:"target_date"`
 	Metadata    []byte        `json:"metadata"`
+	OwnerID     pgtype.UUID   `json:"owner_id"`
 }
 
 func (q *Queries) UpdateGoal(ctx context.Context, arg UpdateGoalParams) (Goal, error) {
@@ -142,6 +155,7 @@ func (q *Queries) UpdateGoal(ctx context.Context, arg UpdateGoalParams) (Goal, e
 		arg.Progress,
 		arg.TargetDate,
 		arg.Metadata,
+		arg.OwnerID,
 	)
 	var i Goal
 	err := row.Scan(

@@ -14,18 +14,24 @@ import (
 const countAppInstances = `-- name: CountAppInstances :one
 SELECT COUNT(*)::bigint FROM app_instances
 WHERE ($1::text = '' OR tenant = $1::text)
+  AND owner_id = $2
 `
 
+type CountAppInstancesParams struct {
+	Tenant  string      `json:"tenant"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+}
+
 // Counts app instances matching the tenant filter (for pagination total).
-func (q *Queries) CountAppInstances(ctx context.Context, tenant string) (int64, error) {
-	row := q.db.QueryRow(ctx, countAppInstances, tenant)
+func (q *Queries) CountAppInstances(ctx context.Context, arg CountAppInstancesParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countAppInstances, arg.Tenant, arg.OwnerID)
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err
 }
 
 const createAppInstance = `-- name: CreateAppInstance :one
-INSERT INTO app_instances (harness, session_id, host, pid, label, health_url, branch, sha, cwd, tenant, status)
+INSERT INTO app_instances (owner_id, harness, session_id, host, pid, label, health_url, branch, sha, cwd, tenant, status)
 VALUES (
     $1,
     $2,
@@ -37,12 +43,14 @@ VALUES (
     $8,
     $9,
     $10,
-    $11
+    $11,
+    $12
 )
 RETURNING id, harness, session_id, host, pid, label, health_url, branch, sha, cwd, tenant, status, last_probed_at, last_heartbeat, created_at, updated_at, owner_id
 `
 
 type CreateAppInstanceParams struct {
+	OwnerID   pgtype.UUID `json:"owner_id"`
 	Harness   string      `json:"harness"`
 	SessionID string      `json:"session_id"`
 	Host      string      `json:"host"`
@@ -59,6 +67,7 @@ type CreateAppInstanceParams struct {
 // Inserts a new app instance. Returns the created row.
 func (q *Queries) CreateAppInstance(ctx context.Context, arg CreateAppInstanceParams) (AppInstance, error) {
 	row := q.db.QueryRow(ctx, createAppInstance,
+		arg.OwnerID,
 		arg.Harness,
 		arg.SessionID,
 		arg.Host,
@@ -95,22 +104,32 @@ func (q *Queries) CreateAppInstance(ctx context.Context, arg CreateAppInstancePa
 }
 
 const deleteAppInstance = `-- name: DeleteAppInstance :exec
-DELETE FROM app_instances WHERE id = $1
+DELETE FROM app_instances WHERE id = $1 AND owner_id = $2
 `
 
+type DeleteAppInstanceParams struct {
+	ID      pgtype.UUID `json:"id"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+}
+
 // Deletes an app instance by ID.
-func (q *Queries) DeleteAppInstance(ctx context.Context, id pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteAppInstance, id)
+func (q *Queries) DeleteAppInstance(ctx context.Context, arg DeleteAppInstanceParams) error {
+	_, err := q.db.Exec(ctx, deleteAppInstance, arg.ID, arg.OwnerID)
 	return err
 }
 
 const getAppInstance = `-- name: GetAppInstance :one
-SELECT id, harness, session_id, host, pid, label, health_url, branch, sha, cwd, tenant, status, last_probed_at, last_heartbeat, created_at, updated_at, owner_id FROM app_instances WHERE id = $1
+SELECT id, harness, session_id, host, pid, label, health_url, branch, sha, cwd, tenant, status, last_probed_at, last_heartbeat, created_at, updated_at, owner_id FROM app_instances WHERE id = $1 AND owner_id = $2
 `
 
+type GetAppInstanceParams struct {
+	ID      pgtype.UUID `json:"id"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+}
+
 // Fetches a single app instance by ID.
-func (q *Queries) GetAppInstance(ctx context.Context, id pgtype.UUID) (AppInstance, error) {
-	row := q.db.QueryRow(ctx, getAppInstance, id)
+func (q *Queries) GetAppInstance(ctx context.Context, arg GetAppInstanceParams) (AppInstance, error) {
+	row := q.db.QueryRow(ctx, getAppInstance, arg.ID, arg.OwnerID)
 	var i AppInstance
 	err := row.Scan(
 		&i.ID,
@@ -137,25 +156,32 @@ func (q *Queries) GetAppInstance(ctx context.Context, id pgtype.UUID) (AppInstan
 const listAppInstances = `-- name: ListAppInstances :many
 SELECT id, harness, session_id, host, pid, label, health_url, branch, sha, cwd, tenant, status, last_probed_at, last_heartbeat, created_at, updated_at, owner_id FROM app_instances
 WHERE ($1::text = '' OR tenant = $1::text)
+  AND owner_id = $2
 ORDER BY
     CASE WHEN status = 'up' THEN 0 ELSE 1 END,
     last_probed_at DESC NULLS LAST,
     created_at DESC
-LIMIT $3::int
-OFFSET $2::int
+LIMIT $4::int
+OFFSET $3::int
 `
 
 type ListAppInstancesParams struct {
-	Tenant string `json:"tenant"`
-	Off    int32  `json:"off"`
-	Lim    int32  `json:"lim"`
+	Tenant  string      `json:"tenant"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+	Off     int32       `json:"off"`
+	Lim     int32       `json:"lim"`
 }
 
 // Lists app instances scoped to a tenant. Returns all if tenant is empty.
 // Supports pagination with limit/offset.
 // Orders by last_probed_at DESC NULLS LAST (never-probed instances at end).
 func (q *Queries) ListAppInstances(ctx context.Context, arg ListAppInstancesParams) ([]AppInstance, error) {
-	rows, err := q.db.Query(ctx, listAppInstances, arg.Tenant, arg.Off, arg.Lim)
+	rows, err := q.db.Query(ctx, listAppInstances,
+		arg.Tenant,
+		arg.OwnerID,
+		arg.Off,
+		arg.Lim,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -198,19 +224,21 @@ SET status    = 'down',
     updated_at = NOW()
 WHERE host  = $1
   AND tenant = $2
+  AND owner_id = $3
   AND health_url IS NOT NULL
   AND health_url != ''
 `
 
 type MarkInstanceDownByServerStoppedParams struct {
-	Host   string `json:"host"`
-	Tenant string `json:"tenant"`
+	Host    string      `json:"host"`
+	Tenant  string      `json:"tenant"`
+	OwnerID pgtype.UUID `json:"owner_id"`
 }
 
 // Called when a server.stopped work-event arrives (contract §4).
 // Sets status to 'down' — this is a definitive signal, not a probe.
 func (q *Queries) MarkInstanceDownByServerStopped(ctx context.Context, arg MarkInstanceDownByServerStoppedParams) error {
-	_, err := q.db.Exec(ctx, markInstanceDownByServerStopped, arg.Host, arg.Tenant)
+	_, err := q.db.Exec(ctx, markInstanceDownByServerStopped, arg.Host, arg.Tenant, arg.OwnerID)
 	return err
 }
 
@@ -218,12 +246,17 @@ const updateInstanceDown = `-- name: UpdateInstanceDown :exec
 UPDATE app_instances
 SET status    = 'down',
     updated_at = NOW()
-WHERE id = $1
+WHERE id = $1 AND owner_id = $2
 `
 
+type UpdateInstanceDownParams struct {
+	ID      pgtype.UUID `json:"id"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+}
+
 // Marks an instance as 'down' (from server.stopped event or probe failure).
-func (q *Queries) UpdateInstanceDown(ctx context.Context, id pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, updateInstanceDown, id)
+func (q *Queries) UpdateInstanceDown(ctx context.Context, arg UpdateInstanceDownParams) error {
+	_, err := q.db.Exec(ctx, updateInstanceDown, arg.ID, arg.OwnerID)
 	return err
 }
 
@@ -232,24 +265,30 @@ UPDATE app_instances
 SET status        = $1,
     last_probed_at = $2,
     updated_at     = NOW()
-WHERE id = $3
+WHERE id = $3 AND owner_id = $4
 `
 
 type UpdateInstanceProbeStatusParams struct {
 	Status       string             `json:"status"`
 	LastProbedAt pgtype.Timestamptz `json:"last_probed_at"`
 	ID           pgtype.UUID        `json:"id"`
+	OwnerID      pgtype.UUID        `json:"owner_id"`
 }
 
 // Updates the status and last_probed_at of an instance after a probe.
 // This is the ONLY way status changes — never set from a work-event.
 func (q *Queries) UpdateInstanceProbeStatus(ctx context.Context, arg UpdateInstanceProbeStatusParams) error {
-	_, err := q.db.Exec(ctx, updateInstanceProbeStatus, arg.Status, arg.LastProbedAt, arg.ID)
+	_, err := q.db.Exec(ctx, updateInstanceProbeStatus,
+		arg.Status,
+		arg.LastProbedAt,
+		arg.ID,
+		arg.OwnerID,
+	)
 	return err
 }
 
 const upsertAppInstanceByHostURL = `-- name: UpsertAppInstanceByHostURL :one
-INSERT INTO app_instances (harness, session_id, host, pid, label, health_url, branch, sha, cwd, tenant, status)
+INSERT INTO app_instances (owner_id, harness, session_id, host, pid, label, health_url, branch, sha, cwd, tenant, status)
 VALUES (
     $1,
     $2,
@@ -261,6 +300,7 @@ VALUES (
     $8,
     $9,
     $10,
+    $11,
     'unknown'
 )
 ON CONFLICT (host, health_url, tenant)
@@ -278,6 +318,7 @@ RETURNING id, harness, session_id, host, pid, label, health_url, branch, sha, cw
 `
 
 type UpsertAppInstanceByHostURLParams struct {
+	OwnerID   pgtype.UUID `json:"owner_id"`
 	Harness   string      `json:"harness"`
 	SessionID string      `json:"session_id"`
 	Host      string      `json:"host"`
@@ -296,6 +337,7 @@ type UpsertAppInstanceByHostURLParams struct {
 // Does NOT change status — only a real probe updates status (anti-fake-status rule).
 func (q *Queries) UpsertAppInstanceByHostURL(ctx context.Context, arg UpsertAppInstanceByHostURLParams) (AppInstance, error) {
 	row := q.db.QueryRow(ctx, upsertAppInstanceByHostURL,
+		arg.OwnerID,
 		arg.Harness,
 		arg.SessionID,
 		arg.Host,
@@ -331,7 +373,7 @@ func (q *Queries) UpsertAppInstanceByHostURL(ctx context.Context, arg UpsertAppI
 }
 
 const upsertAppInstanceOnServerStarted = `-- name: UpsertAppInstanceOnServerStarted :one
-INSERT INTO app_instances (harness, session_id, host, pid, label, health_url, branch, sha, cwd, tenant, status)
+INSERT INTO app_instances (owner_id, harness, session_id, host, pid, label, health_url, branch, sha, cwd, tenant, status)
 VALUES (
     $1,
     $2,
@@ -343,6 +385,7 @@ VALUES (
     $8,
     $9,
     $10,
+    $11,
     'unknown'
 )
 ON CONFLICT (host, health_url, tenant)
@@ -362,6 +405,7 @@ RETURNING id, harness, session_id, host, pid, label, health_url, branch, sha, cw
 `
 
 type UpsertAppInstanceOnServerStartedParams struct {
+	OwnerID   pgtype.UUID `json:"owner_id"`
 	Harness   string      `json:"harness"`
 	SessionID string      `json:"session_id"`
 	Host      string      `json:"host"`
@@ -379,6 +423,7 @@ type UpsertAppInstanceOnServerStartedParams struct {
 // Status is set to 'unknown' only on creation (needs a real probe to go 'up').
 func (q *Queries) UpsertAppInstanceOnServerStarted(ctx context.Context, arg UpsertAppInstanceOnServerStartedParams) (AppInstance, error) {
 	row := q.db.QueryRow(ctx, upsertAppInstanceOnServerStarted,
+		arg.OwnerID,
 		arg.Harness,
 		arg.SessionID,
 		arg.Host,

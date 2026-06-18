@@ -12,27 +12,33 @@ import (
 )
 
 const countTrackerItemsByProject = `-- name: CountTrackerItemsByProject :one
-SELECT COUNT(*) FROM tracker_items WHERE project_id = $1 AND tenant = $2
+SELECT COUNT(*) FROM tracker_items WHERE project_id = $1 AND tenant = $2 AND owner_id = $3
 `
 
 type CountTrackerItemsByProjectParams struct {
 	ProjectID pgtype.UUID `json:"project_id"`
 	Tenant    string      `json:"tenant"`
+	OwnerID   pgtype.UUID `json:"owner_id"`
 }
 
 func (q *Queries) CountTrackerItemsByProject(ctx context.Context, arg CountTrackerItemsByProjectParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countTrackerItemsByProject, arg.ProjectID, arg.Tenant)
+	row := q.db.QueryRow(ctx, countTrackerItemsByProject, arg.ProjectID, arg.Tenant, arg.OwnerID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
 }
 
 const countTrackerItemsByTenant = `-- name: CountTrackerItemsByTenant :one
-SELECT COUNT(*) FROM tracker_items WHERE tenant = $1
+SELECT COUNT(*) FROM tracker_items WHERE tenant = $1 AND owner_id = $2
 `
 
-func (q *Queries) CountTrackerItemsByTenant(ctx context.Context, tenant string) (int64, error) {
-	row := q.db.QueryRow(ctx, countTrackerItemsByTenant, tenant)
+type CountTrackerItemsByTenantParams struct {
+	Tenant  string      `json:"tenant"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) CountTrackerItemsByTenant(ctx context.Context, arg CountTrackerItemsByTenantParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countTrackerItemsByTenant, arg.Tenant, arg.OwnerID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -40,16 +46,17 @@ func (q *Queries) CountTrackerItemsByTenant(ctx context.Context, tenant string) 
 
 const getTrackerItem = `-- name: GetTrackerItem :one
 SELECT id, project_id, external_ref, title, status, item_type, canonical_url, payload, tenant, synced_at, created_at, updated_at, owner_id FROM tracker_items
-WHERE project_id = $1 AND external_ref = $2
+WHERE project_id = $1 AND external_ref = $2 AND owner_id = $3
 `
 
 type GetTrackerItemParams struct {
 	ProjectID   pgtype.UUID `json:"project_id"`
 	ExternalRef string      `json:"external_ref"`
+	OwnerID     pgtype.UUID `json:"owner_id"`
 }
 
 func (q *Queries) GetTrackerItem(ctx context.Context, arg GetTrackerItemParams) (TrackerItem, error) {
-	row := q.db.QueryRow(ctx, getTrackerItem, arg.ProjectID, arg.ExternalRef)
+	row := q.db.QueryRow(ctx, getTrackerItem, arg.ProjectID, arg.ExternalRef, arg.OwnerID)
 	var i TrackerItem
 	err := row.Scan(
 		&i.ID,
@@ -70,17 +77,18 @@ func (q *Queries) GetTrackerItem(ctx context.Context, arg GetTrackerItemParams) 
 }
 
 const getTrackerProjects = `-- name: GetTrackerProjects :many
-SELECT id, slug, name, tenant, created_at, updated_at, tracker, external_ref, repo_url, owner_id FROM projects WHERE tracker = $1 AND tenant = $2
+SELECT id, slug, name, tenant, created_at, updated_at, tracker, external_ref, repo_url, owner_id FROM projects WHERE tracker = $1 AND tenant = $2 AND owner_id = $3
 `
 
 type GetTrackerProjectsParams struct {
-	Tracker string `json:"tracker"`
-	Tenant  string `json:"tenant"`
+	Tracker string      `json:"tracker"`
+	Tenant  string      `json:"tenant"`
+	OwnerID pgtype.UUID `json:"owner_id"`
 }
 
 // Returns all projects configured with a given tracker type, scoped to a tenant.
 func (q *Queries) GetTrackerProjects(ctx context.Context, arg GetTrackerProjectsParams) ([]Project, error) {
-	rows, err := q.db.Query(ctx, getTrackerProjects, arg.Tracker, arg.Tenant)
+	rows, err := q.db.Query(ctx, getTrackerProjects, arg.Tracker, arg.Tenant, arg.OwnerID)
 	if err != nil {
 		return nil, err
 	}
@@ -112,14 +120,15 @@ func (q *Queries) GetTrackerProjects(ctx context.Context, arg GetTrackerProjects
 
 const listTrackerItemsByProject = `-- name: ListTrackerItemsByProject :many
 SELECT id, project_id, external_ref, title, status, item_type, canonical_url, payload, tenant, synced_at, created_at, updated_at, owner_id FROM tracker_items
-WHERE project_id = $1 AND tenant = $2
+WHERE project_id = $1 AND tenant = $2 AND owner_id = $3
 ORDER BY synced_at DESC
-LIMIT $3 OFFSET $4
+LIMIT $4 OFFSET $5
 `
 
 type ListTrackerItemsByProjectParams struct {
 	ProjectID pgtype.UUID `json:"project_id"`
 	Tenant    string      `json:"tenant"`
+	OwnerID   pgtype.UUID `json:"owner_id"`
 	Limit     int32       `json:"limit"`
 	Offset    int32       `json:"offset"`
 }
@@ -128,6 +137,7 @@ func (q *Queries) ListTrackerItemsByProject(ctx context.Context, arg ListTracker
 	rows, err := q.db.Query(ctx, listTrackerItemsByProject,
 		arg.ProjectID,
 		arg.Tenant,
+		arg.OwnerID,
 		arg.Limit,
 		arg.Offset,
 	)
@@ -165,19 +175,25 @@ func (q *Queries) ListTrackerItemsByProject(ctx context.Context, arg ListTracker
 
 const listTrackerItemsByTenant = `-- name: ListTrackerItemsByTenant :many
 SELECT id, project_id, external_ref, title, status, item_type, canonical_url, payload, tenant, synced_at, created_at, updated_at, owner_id FROM tracker_items
-WHERE tenant = $1
+WHERE tenant = $1 AND owner_id = $2
 ORDER BY synced_at DESC
-LIMIT $2 OFFSET $3
+LIMIT $3 OFFSET $4
 `
 
 type ListTrackerItemsByTenantParams struct {
-	Tenant string `json:"tenant"`
-	Limit  int32  `json:"limit"`
-	Offset int32  `json:"offset"`
+	Tenant  string      `json:"tenant"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+	Limit   int32       `json:"limit"`
+	Offset  int32       `json:"offset"`
 }
 
 func (q *Queries) ListTrackerItemsByTenant(ctx context.Context, arg ListTrackerItemsByTenantParams) ([]TrackerItem, error) {
-	rows, err := q.db.Query(ctx, listTrackerItemsByTenant, arg.Tenant, arg.Limit, arg.Offset)
+	rows, err := q.db.Query(ctx, listTrackerItemsByTenant,
+		arg.Tenant,
+		arg.OwnerID,
+		arg.Limit,
+		arg.Offset,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -212,9 +228,9 @@ func (q *Queries) ListTrackerItemsByTenant(ctx context.Context, arg ListTrackerI
 
 const upsertTrackerItem = `-- name: UpsertTrackerItem :one
 INSERT INTO tracker_items (
-    project_id, external_ref, title, status, item_type, canonical_url, payload, tenant, synced_at
+    owner_id, project_id, external_ref, title, status, item_type, canonical_url, payload, tenant, synced_at
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, NOW()
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, NOW()
 ) ON CONFLICT (project_id, external_ref) DO UPDATE SET
     title = EXCLUDED.title,
     status = EXCLUDED.status,
@@ -227,6 +243,7 @@ RETURNING id, project_id, external_ref, title, status, item_type, canonical_url,
 `
 
 type UpsertTrackerItemParams struct {
+	OwnerID      pgtype.UUID `json:"owner_id"`
 	ProjectID    pgtype.UUID `json:"project_id"`
 	ExternalRef  string      `json:"external_ref"`
 	Title        string      `json:"title"`
@@ -240,6 +257,7 @@ type UpsertTrackerItemParams struct {
 // Upsert a tracker item on (project_id, external_ref). Updates title/status/type/url/payload and bumps synced_at.
 func (q *Queries) UpsertTrackerItem(ctx context.Context, arg UpsertTrackerItemParams) (TrackerItem, error) {
 	row := q.db.QueryRow(ctx, upsertTrackerItem,
+		arg.OwnerID,
 		arg.ProjectID,
 		arg.ExternalRef,
 		arg.Title,

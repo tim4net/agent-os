@@ -110,7 +110,7 @@ func (a *API) buildHarnessConfig(ctx context.Context, agent db.Agent) map[string
 	for _, res := range granted {
 		switch res.Kind {
 		case "credential":
-			secret := a.resolveResourceSecret(ctx, res)
+			secret := a.resolveResourceSecret(res)
 			if secret == "" {
 				continue
 			}
@@ -139,7 +139,7 @@ func (a *API) buildHarnessConfig(ctx context.Context, agent db.Agent) map[string
 			for k, v := range cfg {
 				srv[k] = v
 			}
-			if secret := a.resolveResourceSecret(ctx, res); secret != "" {
+			if secret := a.resolveResourceSecret(res); secret != "" {
 				srv["auth_token"] = secret
 			}
 			mcpServers = append(mcpServers, srv)
@@ -154,7 +154,7 @@ func (a *API) buildHarnessConfig(ctx context.Context, agent db.Agent) map[string
 			for k, v := range cfg {
 				intg[k] = v
 			}
-			if secret := a.resolveResourceSecret(ctx, res); secret != "" {
+			if secret := a.resolveResourceSecret(res); secret != "" {
 				intg["token"] = secret
 			}
 			if config["integrations"] == nil {

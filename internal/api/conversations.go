@@ -19,6 +19,12 @@ import (
 
 // ExportConversation handles POST /api/conversations/:id/export
 func (a *API) ExportConversation(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	idStr := chi.URLParam(r, "id")
 
 	var convID pgtype.UUID
@@ -28,14 +34,14 @@ func (a *API) ExportConversation(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get conversation
-	conv, err := a.queries.GetConversation(r.Context(), convID)
+	conv, err := a.queries.GetConversation(r.Context(), db.GetConversationParams{ID: convID, OwnerID: ownerID})
 	if err != nil {
 		http.Error(w, "conversation not found", http.StatusNotFound)
 		return
 	}
 
 	// Get messages
-	messages, err := a.queries.ListMessages(r.Context(), convID)
+	messages, err := a.queries.ListMessages(r.Context(), db.ListMessagesParams{ConversationID: convID, OwnerID: ownerID})
 	if err != nil {
 		http.Error(w, "failed to list messages", http.StatusInternalServerError)
 		return
@@ -43,7 +49,7 @@ func (a *API) ExportConversation(w http.ResponseWriter, r *http.Request) {
 
 	// Get agent name
 	agentName := "unknown"
-	agent, err := a.queries.GetAgent(r.Context(), conv.AgentID)
+	agent, err := a.queries.GetAgent(r.Context(), db.GetAgentParams{ID: conv.AgentID, OwnerID: ownerID})
 	if err == nil {
 		agentName = agent.DisplayName
 	}
@@ -109,6 +115,12 @@ func (a *API) ExportConversation(w http.ResponseWriter, r *http.Request) {
 
 // GetArtifactNotes handles GET /api/artifacts/:id/notes
 func (a *API) GetArtifactNotes(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	idStr := chi.URLParam(r, "id")
 
 	var id pgtype.UUID
@@ -117,7 +129,7 @@ func (a *API) GetArtifactNotes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	artifact, err := a.queries.GetArtifact(r.Context(), id)
+	artifact, err := a.queries.GetArtifact(r.Context(), db.GetArtifactParams{ID: id, OwnerID: ownerID})
 	if err != nil {
 		http.Error(w, "artifact not found", http.StatusNotFound)
 		return
@@ -138,8 +150,9 @@ func (a *API) GetArtifactNotes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	results, err := a.queries.SearchMemory(r.Context(), db.SearchMemoryParams{
+		OwnerID:            ownerID,
 		WebsearchToTsquery: searchTerm,
-		Limit:          20,
+		Limit:              20,
 	})
 	if err != nil {
 		slog.Error("failed to search memory for artifact notes", "error", err)
@@ -157,6 +170,12 @@ func (a *API) GetArtifactNotes(w http.ResponseWriter, r *http.Request) {
 
 // GetTaskNotes handles GET /api/tasks/:id/notes
 func (a *API) GetTaskNotes(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	idStr := chi.URLParam(r, "id")
 
 	var id pgtype.UUID
@@ -165,7 +184,7 @@ func (a *API) GetTaskNotes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	task, err := a.queries.GetTask(r.Context(), id)
+	task, err := a.queries.GetTask(r.Context(), db.GetTaskParams{ID: id, OwnerID: ownerID})
 	if err != nil {
 		http.Error(w, "task not found", http.StatusNotFound)
 		return
@@ -179,8 +198,9 @@ func (a *API) GetTaskNotes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	results, err := a.queries.SearchMemory(r.Context(), db.SearchMemoryParams{
+		OwnerID:            ownerID,
 		WebsearchToTsquery: searchTerm,
-		Limit:          20,
+		Limit:              20,
 	})
 	if err != nil {
 		slog.Error("failed to search memory for task notes", "error", err)

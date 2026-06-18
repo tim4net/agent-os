@@ -31,6 +31,18 @@ var DefaultProjectPathMappings = []ProjectPathMapping{
 	{PathPrefix: "projects/agent-os", Slug: "agent-os"},
 }
 
+// systemOwnerUUIDBytes holds the raw bytes of the seed user UUID
+// 00000000-0000-0000-0000-000000000001 (migration 024). The memory indexer is
+// a system-level background service with no per-request owner context; until
+// multi-tenant indexing is added in a later slice, all indexed memory is
+// attributed to owner-0 (the system seed).
+var systemOwnerUUIDBytes = [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}
+
+// systemOwnerUUID returns the system seed owner UUID used by background services.
+func systemOwnerUUID() pgtype.UUID {
+	return pgtype.UUID{Bytes: systemOwnerUUIDBytes, Valid: true}
+}
+
 // MemoryIndexer walks the Obsidian vault periodically and indexes .md files.
 type MemoryIndexer struct {
 	queries             *db.Queries
@@ -109,7 +121,7 @@ func (mi *MemoryIndexer) RefreshProjectCache(ctx context.Context) {
 // outside the lock, then atomically swapped in under the write lock. This
 // guarantees concurrent DeriveProjectID readers never observe a half-built map.
 func (mi *MemoryIndexer) refreshProjectCache(ctx context.Context) {
-	projects, err := mi.queries.ListProjects(ctx)
+	projects, err := mi.queries.ListProjects(ctx, systemOwnerUUID())
 	if err != nil {
 		// The previously cached slug→id map is retained (last-good-cache
 		// strategy) so indexing can continue with stale-but-usable project
@@ -203,6 +215,7 @@ func (mi *MemoryIndexer) index(ctx context.Context) {
 
 		// Upsert into memory_index
 		_, err = mi.queries.UpsertMemory(ctx, db.UpsertMemoryParams{
+			OwnerID:   systemOwnerUUID(),
 			FilePath:  relPath,
 			Title:     pgtype.Text{String: title, Valid: title != ""},
 			Content:   pgtype.Text{String: plainText, Valid: plainText != ""},

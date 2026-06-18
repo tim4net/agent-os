@@ -12,12 +12,13 @@ import (
 )
 
 const createProject = `-- name: CreateProject :one
-INSERT INTO projects (slug, name, tenant, tracker, external_ref, repo_url)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO projects (owner_id, slug, name, tenant, tracker, external_ref, repo_url)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 RETURNING id, slug, name, tenant, created_at, updated_at, tracker, external_ref, repo_url, owner_id
 `
 
 type CreateProjectParams struct {
+	OwnerID     pgtype.UUID `json:"owner_id"`
 	Slug        string      `json:"slug"`
 	Name        string      `json:"name"`
 	Tenant      string      `json:"tenant"`
@@ -28,6 +29,7 @@ type CreateProjectParams struct {
 
 func (q *Queries) CreateProject(ctx context.Context, arg CreateProjectParams) (Project, error) {
 	row := q.db.QueryRow(ctx, createProject,
+		arg.OwnerID,
 		arg.Slug,
 		arg.Name,
 		arg.Tenant,
@@ -52,21 +54,27 @@ func (q *Queries) CreateProject(ctx context.Context, arg CreateProjectParams) (P
 }
 
 const ensureProjectBySlug = `-- name: EnsureProjectBySlug :one
-INSERT INTO projects (slug, name, tenant)
-VALUES ($1, $2, $3)
+INSERT INTO projects (owner_id, slug, name, tenant)
+VALUES ($1, $2, $3, $4)
 ON CONFLICT (slug) DO UPDATE SET updated_at = NOW()
 RETURNING id, slug, name, tenant, created_at, updated_at, tracker, external_ref, repo_url, owner_id
 `
 
 type EnsureProjectBySlugParams struct {
-	Slug   string `json:"slug"`
-	Name   string `json:"name"`
-	Tenant string `json:"tenant"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+	Slug    string      `json:"slug"`
+	Name    string      `json:"name"`
+	Tenant  string      `json:"tenant"`
 }
 
 // Idempotent resolution used by the ingest project resolver (contract §1).
 func (q *Queries) EnsureProjectBySlug(ctx context.Context, arg EnsureProjectBySlugParams) (Project, error) {
-	row := q.db.QueryRow(ctx, ensureProjectBySlug, arg.Slug, arg.Name, arg.Tenant)
+	row := q.db.QueryRow(ctx, ensureProjectBySlug,
+		arg.OwnerID,
+		arg.Slug,
+		arg.Name,
+		arg.Tenant,
+	)
 	var i Project
 	err := row.Scan(
 		&i.ID,
@@ -84,11 +92,16 @@ func (q *Queries) EnsureProjectBySlug(ctx context.Context, arg EnsureProjectBySl
 }
 
 const getProject = `-- name: GetProject :one
-SELECT id, slug, name, tenant, created_at, updated_at, tracker, external_ref, repo_url, owner_id FROM projects WHERE id = $1
+SELECT id, slug, name, tenant, created_at, updated_at, tracker, external_ref, repo_url, owner_id FROM projects WHERE id = $1 AND owner_id = $2
 `
 
-func (q *Queries) GetProject(ctx context.Context, id pgtype.UUID) (Project, error) {
-	row := q.db.QueryRow(ctx, getProject, id)
+type GetProjectParams struct {
+	ID      pgtype.UUID `json:"id"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) GetProject(ctx context.Context, arg GetProjectParams) (Project, error) {
+	row := q.db.QueryRow(ctx, getProject, arg.ID, arg.OwnerID)
 	var i Project
 	err := row.Scan(
 		&i.ID,
@@ -106,11 +119,16 @@ func (q *Queries) GetProject(ctx context.Context, id pgtype.UUID) (Project, erro
 }
 
 const getProjectBySlug = `-- name: GetProjectBySlug :one
-SELECT id, slug, name, tenant, created_at, updated_at, tracker, external_ref, repo_url, owner_id FROM projects WHERE slug = $1
+SELECT id, slug, name, tenant, created_at, updated_at, tracker, external_ref, repo_url, owner_id FROM projects WHERE slug = $1 AND owner_id = $2
 `
 
-func (q *Queries) GetProjectBySlug(ctx context.Context, slug string) (Project, error) {
-	row := q.db.QueryRow(ctx, getProjectBySlug, slug)
+type GetProjectBySlugParams struct {
+	Slug    string      `json:"slug"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) GetProjectBySlug(ctx context.Context, arg GetProjectBySlugParams) (Project, error) {
+	row := q.db.QueryRow(ctx, getProjectBySlug, arg.Slug, arg.OwnerID)
 	var i Project
 	err := row.Scan(
 		&i.ID,
@@ -128,11 +146,11 @@ func (q *Queries) GetProjectBySlug(ctx context.Context, slug string) (Project, e
 }
 
 const listProjects = `-- name: ListProjects :many
-SELECT id, slug, name, tenant, created_at, updated_at, tracker, external_ref, repo_url, owner_id FROM projects ORDER BY name
+SELECT id, slug, name, tenant, created_at, updated_at, tracker, external_ref, repo_url, owner_id FROM projects WHERE owner_id = $1 ORDER BY name
 `
 
-func (q *Queries) ListProjects(ctx context.Context) ([]Project, error) {
-	rows, err := q.db.Query(ctx, listProjects)
+func (q *Queries) ListProjects(ctx context.Context, ownerID pgtype.UUID) ([]Project, error) {
+	rows, err := q.db.Query(ctx, listProjects, ownerID)
 	if err != nil {
 		return nil, err
 	}
@@ -164,7 +182,7 @@ func (q *Queries) ListProjects(ctx context.Context) ([]Project, error) {
 
 const updateProjectTracker = `-- name: UpdateProjectTracker :one
 UPDATE projects SET tracker = $2, external_ref = $3, repo_url = $4, updated_at = NOW()
-WHERE id = $1
+WHERE id = $1 AND owner_id = $5
 RETURNING id, slug, name, tenant, created_at, updated_at, tracker, external_ref, repo_url, owner_id
 `
 
@@ -173,6 +191,7 @@ type UpdateProjectTrackerParams struct {
 	Tracker     string      `json:"tracker"`
 	ExternalRef pgtype.Text `json:"external_ref"`
 	RepoUrl     pgtype.Text `json:"repo_url"`
+	OwnerID     pgtype.UUID `json:"owner_id"`
 }
 
 func (q *Queries) UpdateProjectTracker(ctx context.Context, arg UpdateProjectTrackerParams) (Project, error) {
@@ -181,6 +200,7 @@ func (q *Queries) UpdateProjectTracker(ctx context.Context, arg UpdateProjectTra
 		arg.Tracker,
 		arg.ExternalRef,
 		arg.RepoUrl,
+		arg.OwnerID,
 	)
 	var i Project
 	err := row.Scan(

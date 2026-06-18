@@ -135,7 +135,7 @@ func (tw *TitleWorker) resummarizeOne(ctx context.Context, convID pgtype.UUID, a
 	jobCtx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
 	defer cancel()
 
-	msgs, err := tw.api.queries.ListMessages(jobCtx, convID)
+	msgs, err := tw.api.queries.ListMessages(jobCtx, db.ListMessagesParams{ConversationID: convID, OwnerID: pgtype.UUID{}})
 	if err != nil || len(msgs) == 0 {
 		return
 	}
@@ -170,14 +170,15 @@ func (tw *TitleWorker) resummarizeOne(ctx context.Context, convID pgtype.UUID, a
 	}
 
 	// Make unique per agent
-	uniqueTitle := tw.api.makeUniqueTitle(jobCtx, agentID, convID, summary)
+	uniqueTitle := tw.api.makeUniqueTitle(jobCtx, agentID, convID, summary, pgtype.UUID{})
 
 	var titleText pgtype.Text
 	titleText.String = uniqueTitle
 	titleText.Valid = true
 	if _, updateErr := tw.api.queries.UpdateConversation(jobCtx, db.UpdateConversationParams{
-		ID:    convID,
-		Title: titleText,
+		ID:      convID,
+		OwnerID: pgtype.UUID{},
+		Title:   titleText,
 	}); updateErr != nil {
 		slog.Warn("title worker: failed to update title", "conversation_id", convID.String(), "error", updateErr)
 	} else {

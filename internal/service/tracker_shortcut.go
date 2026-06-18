@@ -136,16 +136,17 @@ type TrackerQuerier interface {
 	ListTrackerItemsByProject(ctx context.Context, arg db.ListTrackerItemsByProjectParams) ([]db.TrackerItem, error)
 	ListTrackerItemsByTenant(ctx context.Context, arg db.ListTrackerItemsByTenantParams) ([]db.TrackerItem, error)
 	CountTrackerItemsByProject(ctx context.Context, arg db.CountTrackerItemsByProjectParams) (int64, error)
-	CountTrackerItemsByTenant(ctx context.Context, tenant string) (int64, error)
+	CountTrackerItemsByTenant(ctx context.Context, arg db.CountTrackerItemsByTenantParams) (int64, error)
 	GetTrackerProjects(ctx context.Context, arg db.GetTrackerProjectsParams) ([]db.Project, error)
 }
 
 // ShortcutSource implements TrackerSource + TrackerSyncer for Shortcut (WP-E).
 // Read-only: only GET calls to the Shortcut REST API. No writes.
 type ShortcutSource struct {
-	client *ShortcutClient
-	q      TrackerQuerier
-	log    *slog.Logger
+	client  *ShortcutClient
+	q       TrackerQuerier
+	log     *slog.Logger
+	ownerID pgtype.UUID
 }
 
 // NewShortcutSource creates a new Shortcut tracker source.
@@ -166,6 +167,12 @@ func NewShortcutSourceWithClient(q TrackerQuerier, client *ShortcutClient, log *
 	}
 }
 
+// WithOwnerID sets the owner ID for multi-tenant scoping (builder pattern).
+func (s *ShortcutSource) WithOwnerID(id pgtype.UUID) *ShortcutSource {
+	s.ownerID = id
+	return s
+}
+
 // List returns tracker items for a project from the DB (already synced), tenant-scoped.
 func (s *ShortcutSource) List(ctx context.Context, projectID pgtype.UUID, tenant string, limit, offset int) ([]TrackerItemEntry, error) {
 	if limit <= 0 {
@@ -181,6 +188,7 @@ func (s *ShortcutSource) List(ctx context.Context, projectID pgtype.UUID, tenant
 	rows, err := s.q.ListTrackerItemsByProject(ctx, db.ListTrackerItemsByProjectParams{
 		ProjectID: projectID,
 		Tenant:    tenant,
+		OwnerID:   s.ownerID,
 		Limit:     int32(limit),
 		Offset:    int32(offset),
 	})
@@ -200,6 +208,7 @@ func (s *ShortcutSource) Get(ctx context.Context, projectID pgtype.UUID, externa
 	row, err := s.q.GetTrackerItem(ctx, db.GetTrackerItemParams{
 		ProjectID:   projectID,
 		ExternalRef: externalRef,
+		OwnerID:     s.ownerID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("shortcut: get item: %w", err)
@@ -216,6 +225,7 @@ func (s *ShortcutSource) Sync(ctx context.Context, projectID pgtype.UUID, tenant
 	projects, err := s.q.GetTrackerProjects(ctx, db.GetTrackerProjectsParams{
 		Tracker: "shortcut",
 		Tenant:  tenant,
+		OwnerID: s.ownerID,
 	})
 	if err != nil {
 		return SyncResult{}, fmt.Errorf("shortcut: get projects: %w", err)
@@ -272,6 +282,7 @@ func (s *ShortcutSource) Sync(ctx context.Context, projectID pgtype.UUID, tenant
 		canonicalURL := pgtype.Text{String: story.AppURL, Valid: story.AppURL != ""}
 
 		_, err = s.q.UpsertTrackerItem(ctx, db.UpsertTrackerItemParams{
+			OwnerID:      s.ownerID,
 			ProjectID:    projectID,
 			ExternalRef:  externalRef,
 			Title:        story.Name,

@@ -25,6 +25,12 @@ func (a *API) WorkEventRoutes() http.Handler {
 
 // IngestWorkEvent handles POST /api/events/work — generic work-event ingestion.
 func (a *API) IngestWorkEvent(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized: no owner identity")
+		return
+	}
+
 	// Check X-AgentOS-Ingest-Key header
 	ingestKey := r.Header.Get("X-AgentOS-Ingest-Key")
 	if ingestKey == "" {
@@ -34,7 +40,7 @@ func (a *API) IngestWorkEvent(w http.ResponseWriter, r *http.Request) {
 
 	// Resolve tenant from ingest key via durable key store (WP-A2).
 	// The body tenant is NOT trusted — the server resolves it from the key.
-	resolvedTenant, err := service.ResolveTenantFromKeyDB(r.Context(), a.queries, ingestKey)
+	resolvedTenant, err := service.ResolveTenantFromKeyDB(r.Context(), a.queries, ingestKey, ownerID)
 	if err != nil {
 		if errors.Is(err, service.ErrInvalidIngestKey) {
 			writeError(w, http.StatusForbidden, "invalid ingest key")
@@ -101,7 +107,7 @@ func (a *API) IngestWorkEvent(w http.ResponseWriter, r *http.Request) {
 	svc := service.NewIngestService(a.queries, a.bus, slog.Default(), artifactsPath)
 
 	// Ingest
-	event, status, err := svc.Ingest(r.Context(), req)
+	event, status, err := svc.Ingest(r.Context(), req, ownerID)
 	if err != nil {
 		if ve, ok := err.(*service.ValidationError); ok {
 			writeError(w, ve.HTTPStatus, ve.Message)

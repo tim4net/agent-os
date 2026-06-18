@@ -33,7 +33,13 @@ func (a *API) GoalRoutes() http.Handler {
 
 // ListGoals handles GET /api/goals
 func (a *API) ListGoals(w http.ResponseWriter, r *http.Request) {
-	goals, err := a.queries.ListGoals(r.Context())
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
+	goals, err := a.queries.ListGoals(r.Context(), ownerID)
 	if err != nil {
 		http.Error(w, "failed to list goals: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -49,6 +55,12 @@ func (a *API) ListGoals(w http.ResponseWriter, r *http.Request) {
 
 // GetGoal handles GET /api/goals/{id}
 func (a *API) GetGoal(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	idStr := chi.URLParam(r, "id")
 
 	var id pgtype.UUID
@@ -57,7 +69,7 @@ func (a *API) GetGoal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	goal, err := a.queries.GetGoal(r.Context(), id)
+	goal, err := a.queries.GetGoal(r.Context(), db.GetGoalParams{ID: id, OwnerID: ownerID})
 	if err != nil {
 		http.Error(w, "goal not found", http.StatusNotFound)
 		return
@@ -77,6 +89,12 @@ type CreateGoalRequest struct {
 
 // CreateGoal handles POST /api/goals
 func (a *API) CreateGoal(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	var req CreateGoalRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -102,6 +120,7 @@ func (a *API) CreateGoal(w http.ResponseWriter, r *http.Request) {
 	}
 
 	goal, err := a.queries.CreateGoal(r.Context(), db.CreateGoalParams{
+		OwnerID:     ownerID,
 		Title:       req.Title,
 		Description: pgtypeText(req.Description),
 		Status:      status,
@@ -130,6 +149,12 @@ type UpdateGoalRequest struct {
 
 // UpdateGoal handles PUT /api/goals/{id}
 func (a *API) UpdateGoal(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	idStr := chi.URLParam(r, "id")
 
 	var id pgtype.UUID
@@ -145,7 +170,7 @@ func (a *API) UpdateGoal(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get existing goal to preserve fields
-	existing, err := a.queries.GetGoal(r.Context(), id)
+	existing, err := a.queries.GetGoal(r.Context(), db.GetGoalParams{ID: id, OwnerID: ownerID})
 	if err != nil {
 		http.Error(w, "goal not found", http.StatusNotFound)
 		return
@@ -181,6 +206,7 @@ func (a *API) UpdateGoal(w http.ResponseWriter, r *http.Request) {
 
 	goal, err := a.queries.UpdateGoal(r.Context(), db.UpdateGoalParams{
 		ID:          id,
+		OwnerID:     ownerID,
 		Title:       title,
 		Description: pgtypeText(description),
 		Status:      status,
@@ -199,6 +225,12 @@ func (a *API) UpdateGoal(w http.ResponseWriter, r *http.Request) {
 
 // DeleteGoal handles DELETE /api/goals/{id}
 func (a *API) DeleteGoal(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	idStr := chi.URLParam(r, "id")
 
 	var id pgtype.UUID
@@ -207,7 +239,7 @@ func (a *API) DeleteGoal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := a.queries.DeleteGoal(r.Context(), id); err != nil {
+	if err := a.queries.DeleteGoal(r.Context(), db.DeleteGoalParams{ID: id, OwnerID: ownerID}); err != nil {
 		http.Error(w, "failed to delete goal", http.StatusInternalServerError)
 		return
 	}
@@ -224,13 +256,19 @@ func (a *API) BreakdownGoal(w http.ResponseWriter, r *http.Request) {
 
 	idStr := chi.URLParam(r, "id")
 
+	ownerID, ok := OwnerIDFromContext(ctx)
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	var id pgtype.UUID
 	if err := id.Scan(idStr); err != nil {
 		http.Error(w, "invalid goal ID", http.StatusBadRequest)
 		return
 	}
 
-	goal, err := a.queries.GetGoal(ctx, id)
+	goal, err := a.queries.GetGoal(ctx, db.GetGoalParams{ID: id, OwnerID: ownerID})
 	if err != nil {
 		http.Error(w, "goal not found", http.StatusNotFound)
 		return
@@ -332,6 +370,7 @@ func (a *API) BreakdownGoal(w http.ResponseWriter, r *http.Request) {
 		}
 
 		task, err := a.queries.CreateTask(ctx, db.CreateTaskParams{
+			OwnerID:     ownerID,
 			Title:       t.Title,
 			Description: pgtypeText(t.Description),
 			Status:      "backlog",

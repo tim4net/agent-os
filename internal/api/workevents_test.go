@@ -110,6 +110,7 @@ func TestHTTPWorkEvent_MissingIngestKey_Returns403(t *testing.T) {
 
 	body := validWorkEventJSON(uuid.NewString())
 	req := httptest.NewRequest("POST", "/work", strings.NewReader(body))
+	req = req.WithContext(withTestOwner(req.Context()))
 	req.Header.Set("Content-Type", "application/json")
 	// Deliberately omit X-AgentOS-Ingest-Key
 
@@ -133,6 +134,7 @@ func TestHTTPWorkEvent_EmptyIngestKey_Returns403(t *testing.T) {
 
 	body := validWorkEventJSON(uuid.NewString())
 	req := httptest.NewRequest("POST", "/work", strings.NewReader(body))
+	req = req.WithContext(withTestOwner(req.Context()))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-AgentOS-Ingest-Key", "")
 
@@ -152,6 +154,7 @@ func TestHTTPWorkEvent_UnknownKeys_Returns400(t *testing.T) {
 	body := `{"schema":"agentos.work_event/v1","event_id":"` + uuid.NewString() + `","host":"h","harness":"hermes","kind":"session.start","session_id":"` + uuid.NewString() + `","ts":"` + time.Now().UTC().Format(time.RFC3339) + `","status":"running","liveness_mode":"supervised","made_up_key":true}`
 
 	req := httptest.NewRequest("POST", "/work", strings.NewReader(body))
+	req = req.WithContext(withTestOwner(req.Context()))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-AgentOS-Ingest-Key", "test-key")
 
@@ -174,6 +177,7 @@ func TestHTTPWorkEvent_InvalidJSON_Returns400(t *testing.T) {
 	seedTestIngestKey(t, pool)
 
 	req := httptest.NewRequest("POST", "/work", strings.NewReader("not json"))
+	req = req.WithContext(withTestOwner(req.Context()))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-AgentOS-Ingest-Key", "test-key")
 
@@ -199,6 +203,7 @@ func TestHTTPWorkEvent_ValidEvent_Returns201AndDBRow(t *testing.T) {
 	body := validWorkEventJSON(eventID)
 
 	req := httptest.NewRequest("POST", "/work", strings.NewReader(body))
+	req = req.WithContext(withTestOwner(req.Context()))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-AgentOS-Ingest-Key", "test-key")
 
@@ -227,7 +232,7 @@ func TestHTTPWorkEvent_ValidEvent_Returns201AndDBRow(t *testing.T) {
 	ctx := context.Background()
 	var pgEID pgtype.UUID
 	_ = pgEID.Scan(eventID)
-	row, err := a.queries.GetWorkEventByEventID(ctx, pgEID)
+	row, err := a.queries.GetWorkEventByEventID(ctx, db.GetWorkEventByEventIDParams{EventID: pgEID, OwnerID: owner0UUID})
 	if err != nil {
 		t.Fatalf("failed to query work_event from DB: %v", err)
 	}
@@ -256,6 +261,7 @@ func TestHTTPWorkEvent_DuplicateEventID_Returns202(t *testing.T) {
 
 	// First request → 201
 	req1 := httptest.NewRequest("POST", "/work", strings.NewReader(body))
+	req1 = req1.WithContext(withTestOwner(req1.Context()))
 	req1.Header.Set("Content-Type", "application/json")
 	req1.Header.Set("X-AgentOS-Ingest-Key", "test-key")
 
@@ -272,6 +278,7 @@ func TestHTTPWorkEvent_DuplicateEventID_Returns202(t *testing.T) {
 
 	// Second request with same event_id → 202
 	req2 := httptest.NewRequest("POST", "/work", strings.NewReader(body))
+	req2 = req2.WithContext(withTestOwner(req2.Context()))
 	req2.Header.Set("Content-Type", "application/json")
 	req2.Header.Set("X-AgentOS-Ingest-Key", "test-key")
 
@@ -332,6 +339,7 @@ func TestHTTPWorkEvent_ValidationError_Returns400(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest("POST", "/work", strings.NewReader(tt.body))
+			req = req.WithContext(withTestOwner(req.Context()))
 			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set("X-AgentOS-Ingest-Key", "test-key")
 
@@ -373,6 +381,7 @@ func TestHTTPWorkEvent_TenantOverriddenByKey(t *testing.T) {
 	body, _ := json.Marshal(req)
 
 	httpReq := httptest.NewRequest("POST", "/work", bytes.NewReader(body))
+	httpReq = httpReq.WithContext(withTestOwner(httpReq.Context()))
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("X-AgentOS-Ingest-Key", "test-key")
 
@@ -387,7 +396,7 @@ func TestHTTPWorkEvent_TenantOverriddenByKey(t *testing.T) {
 	ctx := context.Background()
 	var pgEID pgtype.UUID
 	_ = pgEID.Scan(eventID)
-	row, err := a.queries.GetWorkEventByEventID(ctx, pgEID)
+	row, err := a.queries.GetWorkEventByEventID(ctx, db.GetWorkEventByEventIDParams{EventID: pgEID, OwnerID: owner0UUID})
 	if err != nil {
 		t.Fatalf("failed to query event: %v", err)
 	}
@@ -404,6 +413,7 @@ func TestHTTPWorkEvent_WriteErrorLogsJSON(t *testing.T) {
 	seedTestIngestKey(t, pool)
 
 	req := httptest.NewRequest("POST", "/work", strings.NewReader("{}"))
+	req = req.WithContext(withTestOwner(req.Context()))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-AgentOS-Ingest-Key", "test-key")
 
@@ -472,6 +482,7 @@ func TestIngestKey_TenantBinding_AC1(t *testing.T) {
 	}`, eventID, uuid.NewString(), time.Now().UTC().Format(time.RFC3339))
 
 	req := httptest.NewRequest("POST", "/work", strings.NewReader(body))
+	req = req.WithContext(withTestOwner(req.Context()))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-AgentOS-Ingest-Key", rawKey)
 
@@ -485,7 +496,7 @@ func TestIngestKey_TenantBinding_AC1(t *testing.T) {
 	// Verify the persisted event has tenant="acme-corp" (from key), NOT "other-tenant" (from body).
 	var pgEID pgtype.UUID
 	_ = pgEID.Scan(eventID)
-	row, err := a.queries.GetWorkEventByEventID(ctx, pgEID)
+	row, err := a.queries.GetWorkEventByEventID(ctx, db.GetWorkEventByEventIDParams{EventID: pgEID, OwnerID: owner0UUID})
 	if err != nil {
 		t.Fatalf("failed to query event: %v", err)
 	}
@@ -530,6 +541,7 @@ func TestIngestKey_Revocation_AC2(t *testing.T) {
 	}`, eventID1, uuid.NewString(), time.Now().UTC().Format(time.RFC3339))
 
 	req1 := httptest.NewRequest("POST", "/work", strings.NewReader(body1))
+	req1 = req1.WithContext(withTestOwner(req1.Context()))
 	req1.Header.Set("Content-Type", "application/json")
 	req1.Header.Set("X-AgentOS-Ingest-Key", rawKey)
 
@@ -562,6 +574,7 @@ func TestIngestKey_Revocation_AC2(t *testing.T) {
 	}`, eventID2, uuid.NewString(), time.Now().UTC().Format(time.RFC3339))
 
 	req2 := httptest.NewRequest("POST", "/work", strings.NewReader(body2))
+	req2 = req2.WithContext(withTestOwner(req2.Context()))
 	req2.Header.Set("Content-Type", "application/json")
 	req2.Header.Set("X-AgentOS-Ingest-Key", rawKey)
 
@@ -604,8 +617,11 @@ func TestHTTPWorkEvent_DBFailure_Returns500(t *testing.T) {
 	eventID := uuid.NewString()
 	body := validWorkEventJSON(eventID)
 	req := httptest.NewRequest("POST", "/work", strings.NewReader(body))
+	req = req.WithContext(withTestOwner(req.Context()))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-AgentOS-Ingest-Key", "some-key")
+	// Inject owner identity (normally done by identity middleware).
+	req = req.WithContext(withTestOwner(req.Context()))
 
 	rec := httptest.NewRecorder()
 	a.WorkEventRoutes().ServeHTTP(rec, req)

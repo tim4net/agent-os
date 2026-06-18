@@ -12,12 +12,13 @@ import (
 )
 
 const createPipelineItem = `-- name: CreatePipelineItem :one
-INSERT INTO pipeline_items (type, title, status, content, metadata, agent_id)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO pipeline_items (owner_id, type, title, status, content, metadata, agent_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 RETURNING id, type, title, status, content, metadata, agent_id, created_at, updated_at, owner_id
 `
 
 type CreatePipelineItemParams struct {
+	OwnerID  pgtype.UUID `json:"owner_id"`
 	Type     string      `json:"type"`
 	Title    string      `json:"title"`
 	Status   string      `json:"status"`
@@ -28,6 +29,7 @@ type CreatePipelineItemParams struct {
 
 func (q *Queries) CreatePipelineItem(ctx context.Context, arg CreatePipelineItemParams) (PipelineItem, error) {
 	row := q.db.QueryRow(ctx, createPipelineItem,
+		arg.OwnerID,
 		arg.Type,
 		arg.Title,
 		arg.Status,
@@ -52,20 +54,30 @@ func (q *Queries) CreatePipelineItem(ctx context.Context, arg CreatePipelineItem
 }
 
 const deletePipelineItem = `-- name: DeletePipelineItem :exec
-DELETE FROM pipeline_items WHERE id = $1
+DELETE FROM pipeline_items WHERE id = $1 AND owner_id = $2
 `
 
-func (q *Queries) DeletePipelineItem(ctx context.Context, id pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deletePipelineItem, id)
+type DeletePipelineItemParams struct {
+	ID      pgtype.UUID `json:"id"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) DeletePipelineItem(ctx context.Context, arg DeletePipelineItemParams) error {
+	_, err := q.db.Exec(ctx, deletePipelineItem, arg.ID, arg.OwnerID)
 	return err
 }
 
 const getPipelineItem = `-- name: GetPipelineItem :one
-SELECT id, type, title, status, content, metadata, agent_id, created_at, updated_at, owner_id FROM pipeline_items WHERE id = $1
+SELECT id, type, title, status, content, metadata, agent_id, created_at, updated_at, owner_id FROM pipeline_items WHERE id = $1 AND owner_id = $2
 `
 
-func (q *Queries) GetPipelineItem(ctx context.Context, id pgtype.UUID) (PipelineItem, error) {
-	row := q.db.QueryRow(ctx, getPipelineItem, id)
+type GetPipelineItemParams struct {
+	ID      pgtype.UUID `json:"id"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) GetPipelineItem(ctx context.Context, arg GetPipelineItemParams) (PipelineItem, error) {
+	row := q.db.QueryRow(ctx, getPipelineItem, arg.ID, arg.OwnerID)
 	var i PipelineItem
 	err := row.Scan(
 		&i.ID,
@@ -84,18 +96,20 @@ func (q *Queries) GetPipelineItem(ctx context.Context, id pgtype.UUID) (Pipeline
 
 const listPipelineItems = `-- name: ListPipelineItems :many
 SELECT id, type, title, status, content, metadata, agent_id, created_at, updated_at, owner_id FROM pipeline_items
-WHERE ($1::text = '' OR status = $1)
-  AND ($2::text = '' OR type = $2)
+WHERE owner_id = $1
+  AND ($2::text = '' OR status = $2)
+  AND ($3::text = '' OR type = $3)
 ORDER BY created_at DESC
 `
 
 type ListPipelineItemsParams struct {
-	Column1 string `json:"column_1"`
-	Column2 string `json:"column_2"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+	Column2 string      `json:"column_2"`
+	Column3 string      `json:"column_3"`
 }
 
 func (q *Queries) ListPipelineItems(ctx context.Context, arg ListPipelineItemsParams) ([]PipelineItem, error) {
-	rows, err := q.db.Query(ctx, listPipelineItems, arg.Column1, arg.Column2)
+	rows, err := q.db.Query(ctx, listPipelineItems, arg.OwnerID, arg.Column2, arg.Column3)
 	if err != nil {
 		return nil, err
 	}
@@ -127,7 +141,7 @@ func (q *Queries) ListPipelineItems(ctx context.Context, arg ListPipelineItemsPa
 
 const updatePipelineItem = `-- name: UpdatePipelineItem :one
 UPDATE pipeline_items SET title = $2, status = $3, content = $4, metadata = $5, updated_at = NOW()
-WHERE id = $1
+WHERE id = $1 AND owner_id = $6
 RETURNING id, type, title, status, content, metadata, agent_id, created_at, updated_at, owner_id
 `
 
@@ -137,6 +151,7 @@ type UpdatePipelineItemParams struct {
 	Status   string      `json:"status"`
 	Content  pgtype.Text `json:"content"`
 	Metadata []byte      `json:"metadata"`
+	OwnerID  pgtype.UUID `json:"owner_id"`
 }
 
 func (q *Queries) UpdatePipelineItem(ctx context.Context, arg UpdatePipelineItemParams) (PipelineItem, error) {
@@ -146,6 +161,7 @@ func (q *Queries) UpdatePipelineItem(ctx context.Context, arg UpdatePipelineItem
 		arg.Status,
 		arg.Content,
 		arg.Metadata,
+		arg.OwnerID,
 	)
 	var i PipelineItem
 	err := row.Scan(

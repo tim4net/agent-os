@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 var (
@@ -40,7 +42,7 @@ func (a *API) DetailedHealth(w http.ResponseWriter, r *http.Request) {
 
 	// Check database connection
 	dbStatus := "ok"
-	_, err := a.queries.ListAgents(r.Context())
+	_, err := a.queries.ListAgents(r.Context(), pgtype.UUID{})
 	if err != nil {
 		dbStatus = "unhealthy"
 		slog.Error("health check: database ping failed", "error", err)

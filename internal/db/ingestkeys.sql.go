@@ -7,37 +7,50 @@ package db
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const countActiveIngestKeys = `-- name: CountActiveIngestKeys :one
 SELECT COUNT(*) FROM ingest_keys
-WHERE tenant = $1 AND revoked_at IS NULL
+WHERE tenant = $1 AND revoked_at IS NULL AND owner_id = $2
 `
 
+type CountActiveIngestKeysParams struct {
+	Tenant  string      `json:"tenant"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+}
+
 // Count active (non-revoked) keys for a tenant.
-func (q *Queries) CountActiveIngestKeys(ctx context.Context, tenant string) (int64, error) {
-	row := q.db.QueryRow(ctx, countActiveIngestKeys, tenant)
+func (q *Queries) CountActiveIngestKeys(ctx context.Context, arg CountActiveIngestKeysParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countActiveIngestKeys, arg.Tenant, arg.OwnerID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
 }
 
 const createIngestKey = `-- name: CreateIngestKey :one
-INSERT INTO ingest_keys (key_hash, tenant, label)
-VALUES ($1, $2, $3)
+INSERT INTO ingest_keys (owner_id, key_hash, tenant, label)
+VALUES ($1, $2, $3, $4)
 RETURNING id, key_hash, tenant, label, created_at, revoked_at, owner_id
 `
 
 type CreateIngestKeyParams struct {
-	KeyHash string `json:"key_hash"`
-	Tenant  string `json:"tenant"`
-	Label   string `json:"label"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+	KeyHash string      `json:"key_hash"`
+	Tenant  string      `json:"tenant"`
+	Label   string      `json:"label"`
 }
 
 // Insert a new ingest key (hashed). The raw key is never stored — callers
 // must hash before calling this.
 func (q *Queries) CreateIngestKey(ctx context.Context, arg CreateIngestKeyParams) (IngestKey, error) {
-	row := q.db.QueryRow(ctx, createIngestKey, arg.KeyHash, arg.Tenant, arg.Label)
+	row := q.db.QueryRow(ctx, createIngestKey,
+		arg.OwnerID,
+		arg.KeyHash,
+		arg.Tenant,
+		arg.Label,
+	)
 	var i IngestKey
 	err := row.Scan(
 		&i.ID,
@@ -53,13 +66,18 @@ func (q *Queries) CreateIngestKey(ctx context.Context, arg CreateIngestKeyParams
 
 const getIngestKeyByHash = `-- name: GetIngestKeyByHash :one
 SELECT id, key_hash, tenant, label, created_at, revoked_at, owner_id FROM ingest_keys
-WHERE key_hash = $1 AND revoked_at IS NULL
+WHERE key_hash = $1 AND revoked_at IS NULL AND owner_id = $2
 `
+
+type GetIngestKeyByHashParams struct {
+	KeyHash string      `json:"key_hash"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+}
 
 // Look up a (non-revoked) ingest key by its SHA-256 hash.
 // Returns NULL (pgx.ErrNoRows) if not found or revoked.
-func (q *Queries) GetIngestKeyByHash(ctx context.Context, keyHash string) (IngestKey, error) {
-	row := q.db.QueryRow(ctx, getIngestKeyByHash, keyHash)
+func (q *Queries) GetIngestKeyByHash(ctx context.Context, arg GetIngestKeyByHashParams) (IngestKey, error) {
+	row := q.db.QueryRow(ctx, getIngestKeyByHash, arg.KeyHash, arg.OwnerID)
 	var i IngestKey
 	err := row.Scan(
 		&i.ID,
@@ -75,13 +93,18 @@ func (q *Queries) GetIngestKeyByHash(ctx context.Context, keyHash string) (Inges
 
 const listIngestKeysByTenant = `-- name: ListIngestKeysByTenant :many
 SELECT id, key_hash, tenant, label, created_at, revoked_at, owner_id FROM ingest_keys
-WHERE tenant = $1
+WHERE tenant = $1 AND owner_id = $2
 ORDER BY created_at DESC
 `
 
+type ListIngestKeysByTenantParams struct {
+	Tenant  string      `json:"tenant"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+}
+
 // List all (including revoked) keys for a tenant, newest first.
-func (q *Queries) ListIngestKeysByTenant(ctx context.Context, tenant string) ([]IngestKey, error) {
-	rows, err := q.db.Query(ctx, listIngestKeysByTenant, tenant)
+func (q *Queries) ListIngestKeysByTenant(ctx context.Context, arg ListIngestKeysByTenantParams) ([]IngestKey, error) {
+	rows, err := q.db.Query(ctx, listIngestKeysByTenant, arg.Tenant, arg.OwnerID)
 	if err != nil {
 		return nil, err
 	}
@@ -110,11 +133,16 @@ func (q *Queries) ListIngestKeysByTenant(ctx context.Context, tenant string) ([]
 
 const revokeIngestKey = `-- name: RevokeIngestKey :exec
 UPDATE ingest_keys SET revoked_at = NOW()
-WHERE id = $1 AND revoked_at IS NULL
+WHERE id = $1 AND revoked_at IS NULL AND owner_id = $2
 `
 
+type RevokeIngestKeyParams struct {
+	ID      int64       `json:"id"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+}
+
 // Revoke an ingest key by setting revoked_at to now.
-func (q *Queries) RevokeIngestKey(ctx context.Context, id int64) error {
-	_, err := q.db.Exec(ctx, revokeIngestKey, id)
+func (q *Queries) RevokeIngestKey(ctx context.Context, arg RevokeIngestKeyParams) error {
+	_, err := q.db.Exec(ctx, revokeIngestKey, arg.ID, arg.OwnerID)
 	return err
 }

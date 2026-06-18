@@ -42,6 +42,12 @@ func (a *API) TimelineRoutes() http.Handler {
 
 // GetTimeline handles GET /api/timeline?limit=50&offset=0
 func (a *API) GetTimeline(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	limit := 50
 	offset := 0
 
@@ -59,7 +65,7 @@ func (a *API) GetTimeline(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	// Build a map of agent names for enrichment
-	agents, err := a.queries.ListAgents(ctx)
+	agents, err := a.queries.ListAgents(ctx, ownerID)
 	if err != nil {
 		http.Error(w, "failed to list agents: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -72,7 +78,7 @@ func (a *API) GetTimeline(w http.ResponseWriter, r *http.Request) {
 	events := make([]TimelineEvent, 0)
 
 	// 1. Conversations
-	convs, _ := a.queries.ListConversations(ctx, pgtype.UUID{})
+	convs, _ := a.queries.ListConversations(ctx, db.ListConversationsParams{OwnerID: ownerID, Column2: pgtype.UUID{}})
 	for _, c := range convs {
 		// Use saved summary if available, otherwise "New conversation"
 		title := "New conversation"
@@ -99,8 +105,9 @@ func (a *API) GetTimeline(w http.ResponseWriter, r *http.Request) {
 
 	// 2. Tasks completed
 	tasks, _ := a.queries.ListTasks(ctx, db.ListTasksParams{
-		Column1: "done",
-		Column2: pgtype.UUID{},
+		OwnerID: ownerID,
+		Column2: "done",
+		Column3: pgtype.UUID{},
 	})
 	for _, t := range tasks {
 		desc := "Task completed"
@@ -122,8 +129,9 @@ func (a *API) GetTimeline(w http.ResponseWriter, r *http.Request) {
 
 	// 3. Artifacts
 	artifacts, _ := a.queries.ListArtifacts(ctx, db.ListArtifactsParams{
-		Column1: "",
-		Column2: pgtype.UUID{},
+		OwnerID: ownerID,
+		Column2: "",
+		Column3: pgtype.UUID{},
 		Limit:   1000,
 		Offset:  0,
 	})
@@ -150,9 +158,9 @@ func (a *API) GetTimeline(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 4. Workflow runs (completed) — iterate workflows and their runs
-	workflows, _ := a.queries.ListWorkflows(ctx)
+	workflows, _ := a.queries.ListWorkflows(ctx, ownerID)
 	for _, wf := range workflows {
-		runs, err := a.queries.ListWorkflowRuns(ctx, wf.ID)
+		runs, err := a.queries.ListWorkflowRuns(ctx, db.ListWorkflowRunsParams{WorkflowID: wf.ID, OwnerID: ownerID})
 		if err != nil {
 			continue
 		}
@@ -181,8 +189,9 @@ func (a *API) GetTimeline(w http.ResponseWriter, r *http.Request) {
 
 	// 5. Delegations
 	delegations, _ := a.queries.ListDelegations(ctx, db.ListDelegationsParams{
-		Column1: pgtype.UUID{},
-		Column2: "",
+		OwnerID: ownerID,
+		Column2: pgtype.UUID{},
+		Column3: "",
 		Limit:   1000,
 		Offset:  0,
 	})

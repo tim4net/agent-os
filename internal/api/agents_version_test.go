@@ -60,6 +60,7 @@ func (r agentVersionTestRow) Scan(dest ...interface{}) error {
 	*(dest[11].(*pgtype.Text)) = agent.SystemPrompt
 	*(dest[12].(*[]byte)) = agent.Persona
 	*(dest[13].(*bool)) = agent.Visible
+	*(dest[14].(*pgtype.UUID)) = agent.OwnerID
 	return nil
 }
 
@@ -89,6 +90,22 @@ func (h *agentVersionProberHarness) VersionInfo(context.Context) (*harness.Versi
 	return h.info, h.err
 }
 
+// testOwnerID returns a fixed owner UUID used by version tests so the handler's
+// OwnerIDFromContext check succeeds without the full identity middleware.
+func testOwnerID() pgtype.UUID {
+	var id pgtype.UUID
+	if err := id.Scan("00000000-0000-0000-0000-000000000001"); err != nil {
+		panic(err)
+	}
+	return id
+}
+
+// withTestOwner injects a test owner identity into ctx (mirrors what the
+// identity middleware does for real requests).
+func withTestOwner(ctx context.Context) context.Context {
+	return context.WithValue(ctx, ownerIDKey, testOwnerID())
+}
+
 func newAgentVersionTestAPI(t *testing.T, hname string, factory func() harness.Harness) (*API, string) {
 	t.Helper()
 	idStr := uuid.NewString()
@@ -108,13 +125,14 @@ func newAgentVersionTestAPI(t *testing.T, hname string, factory func() harness.H
 		Metadata:    []byte(`{}`),
 		Persona:     []byte(`{}`),
 		Visible:     true,
+		OwnerID:     testOwnerID(),
 	}
 	return &API{queries: db.New(&agentVersionTestDB{agent: agent}), registry: reg}, idStr
 }
 
 func getAgentVersionForTest(t *testing.T, a *API, id string) harness.VersionInfo {
 	t.Helper()
-	rec := invokeAgentVersion(a, id, context.Background())
+	rec := invokeAgentVersion(a, id, withTestOwner(context.Background()))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET version status = %d, body=%s", rec.Code, rec.Body.String())
 	}
@@ -177,7 +195,7 @@ func TestGetAgentVersionProberErrorReturnsUnknown(t *testing.T) {
 
 func TestGetAgentVersionInvalidIDReturns400(t *testing.T) {
 	a := &API{queries: db.New(&agentVersionTestDB{}), registry: harness.NewRegistry()}
-	rec := invokeAgentVersion(a, "not-a-uuid", context.Background())
+	rec := invokeAgentVersion(a, "not-a-uuid", withTestOwner(context.Background()))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 for malformed id; body=%s", rec.Code, rec.Body.String())
 	}
@@ -186,7 +204,7 @@ func TestGetAgentVersionInvalidIDReturns400(t *testing.T) {
 func TestGetAgentVersionUnknownAgentReturns404(t *testing.T) {
 	// DB Scan returns ErrNoRows → GetAgent fails → 404.
 	a := &API{queries: db.New(&agentVersionTestDB{err: pgx.ErrNoRows}), registry: harness.NewRegistry()}
-	rec := invokeAgentVersion(a, uuid.NewString(), context.Background())
+	rec := invokeAgentVersion(a, uuid.NewString(), withTestOwner(context.Background()))
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404 for unknown agent; body=%s", rec.Code, rec.Body.String())
 	}
@@ -203,9 +221,10 @@ func TestGetAgentVersionUnknownHarnessReturns400(t *testing.T) {
 		ID: id, Name: "ghost-agent", DisplayName: "Ghost", Harness: "ghost-harness",
 		BaseUrl: "http://agent.test", Status: "online",
 		Metadata: []byte(`{}`), Persona: []byte(`{}`), Visible: true,
+		OwnerID: testOwnerID(),
 	}
 	a := &API{queries: db.New(&agentVersionTestDB{agent: agent}), registry: harness.NewRegistry()}
-	rec := invokeAgentVersion(a, idStr, context.Background())
+	rec := invokeAgentVersion(a, idStr, withTestOwner(context.Background()))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 for unknown harness; body=%s", rec.Code, rec.Body.String())
 	}
@@ -230,7 +249,7 @@ func TestGetAgentVersionHonorsContextCancellation(t *testing.T) {
 	a, id := newAgentVersionTestAPI(t, "blocking", func() harness.Harness {
 		return ctxBlockingProberHarness{}
 	})
-	parent, cancel := context.WithCancel(context.Background())
+	parent, cancel := context.WithCancel(withTestOwner(context.Background()))
 	cancel()
 	start := time.Now()
 	rec := invokeAgentVersion(a, id, parent)

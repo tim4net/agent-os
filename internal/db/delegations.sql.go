@@ -23,29 +23,32 @@ func (q *Queries) CleanStaleDelegations(ctx context.Context) error {
 
 const countDelegations = `-- name: CountDelegations :one
 SELECT COUNT(*) FROM delegations
-WHERE ($1::uuid IS NULL OR parent_agent_id = $1)
-  AND ($2::text = '' OR status = $2)
+WHERE owner_id = $1
+  AND ($2::uuid IS NULL OR parent_agent_id = $2)
+  AND ($3::text = '' OR status = $3)
 `
 
 type CountDelegationsParams struct {
-	Column1 pgtype.UUID `json:"column_1"`
-	Column2 string      `json:"column_2"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+	Column2 pgtype.UUID `json:"column_2"`
+	Column3 string      `json:"column_3"`
 }
 
 func (q *Queries) CountDelegations(ctx context.Context, arg CountDelegationsParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countDelegations, arg.Column1, arg.Column2)
+	row := q.db.QueryRow(ctx, countDelegations, arg.OwnerID, arg.Column2, arg.Column3)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
 }
 
 const createDelegation = `-- name: CreateDelegation :one
-INSERT INTO delegations (parent_agent_id, child_agent_name, task_goal, status, result_summary, metadata)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO delegations (owner_id, parent_agent_id, child_agent_name, task_goal, status, result_summary, metadata)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 RETURNING id, parent_agent_id, child_agent_name, task_goal, status, result_summary, created_at, completed_at, metadata, owner_id
 `
 
 type CreateDelegationParams struct {
+	OwnerID        pgtype.UUID `json:"owner_id"`
 	ParentAgentID  pgtype.UUID `json:"parent_agent_id"`
 	ChildAgentName string      `json:"child_agent_name"`
 	TaskGoal       string      `json:"task_goal"`
@@ -56,6 +59,7 @@ type CreateDelegationParams struct {
 
 func (q *Queries) CreateDelegation(ctx context.Context, arg CreateDelegationParams) (Delegation, error) {
 	row := q.db.QueryRow(ctx, createDelegation,
+		arg.OwnerID,
 		arg.ParentAgentID,
 		arg.ChildAgentName,
 		arg.TaskGoal,
@@ -80,11 +84,16 @@ func (q *Queries) CreateDelegation(ctx context.Context, arg CreateDelegationPara
 }
 
 const getDelegation = `-- name: GetDelegation :one
-SELECT id, parent_agent_id, child_agent_name, task_goal, status, result_summary, created_at, completed_at, metadata, owner_id FROM delegations WHERE id = $1
+SELECT id, parent_agent_id, child_agent_name, task_goal, status, result_summary, created_at, completed_at, metadata, owner_id FROM delegations WHERE id = $1 AND owner_id = $2
 `
 
-func (q *Queries) GetDelegation(ctx context.Context, id pgtype.UUID) (Delegation, error) {
-	row := q.db.QueryRow(ctx, getDelegation, id)
+type GetDelegationParams struct {
+	ID      pgtype.UUID `json:"id"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) GetDelegation(ctx context.Context, arg GetDelegationParams) (Delegation, error) {
+	row := q.db.QueryRow(ctx, getDelegation, arg.ID, arg.OwnerID)
 	var i Delegation
 	err := row.Scan(
 		&i.ID,
@@ -103,23 +112,26 @@ func (q *Queries) GetDelegation(ctx context.Context, id pgtype.UUID) (Delegation
 
 const listDelegations = `-- name: ListDelegations :many
 SELECT id, parent_agent_id, child_agent_name, task_goal, status, result_summary, created_at, completed_at, metadata, owner_id FROM delegations
-WHERE ($1::uuid IS NULL OR parent_agent_id = $1)
-  AND ($2::text = '' OR status = $2)
+WHERE owner_id = $1
+  AND ($2::uuid IS NULL OR parent_agent_id = $2)
+  AND ($3::text = '' OR status = $3)
 ORDER BY created_at DESC
-LIMIT $3 OFFSET $4
+LIMIT $4 OFFSET $5
 `
 
 type ListDelegationsParams struct {
-	Column1 pgtype.UUID `json:"column_1"`
-	Column2 string      `json:"column_2"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+	Column2 pgtype.UUID `json:"column_2"`
+	Column3 string      `json:"column_3"`
 	Limit   int32       `json:"limit"`
 	Offset  int32       `json:"offset"`
 }
 
 func (q *Queries) ListDelegations(ctx context.Context, arg ListDelegationsParams) ([]Delegation, error) {
 	rows, err := q.db.Query(ctx, listDelegations,
-		arg.Column1,
+		arg.OwnerID,
 		arg.Column2,
+		arg.Column3,
 		arg.Limit,
 		arg.Offset,
 	)
@@ -154,7 +166,7 @@ func (q *Queries) ListDelegations(ctx context.Context, arg ListDelegationsParams
 
 const updateDelegation = `-- name: UpdateDelegation :one
 UPDATE delegations SET status = $2, result_summary = COALESCE($3, result_summary), completed_at = CASE WHEN $2 IN ('completed','failed','interrupted') THEN now() ELSE completed_at END, metadata = COALESCE($4, metadata)
-WHERE id = $1
+WHERE id = $1 AND owner_id = $5
 RETURNING id, parent_agent_id, child_agent_name, task_goal, status, result_summary, created_at, completed_at, metadata, owner_id
 `
 
@@ -163,6 +175,7 @@ type UpdateDelegationParams struct {
 	Status        string      `json:"status"`
 	ResultSummary pgtype.Text `json:"result_summary"`
 	Metadata      []byte      `json:"metadata"`
+	OwnerID       pgtype.UUID `json:"owner_id"`
 }
 
 func (q *Queries) UpdateDelegation(ctx context.Context, arg UpdateDelegationParams) (Delegation, error) {
@@ -171,6 +184,7 @@ func (q *Queries) UpdateDelegation(ctx context.Context, arg UpdateDelegationPara
 		arg.Status,
 		arg.ResultSummary,
 		arg.Metadata,
+		arg.OwnerID,
 	)
 	var i Delegation
 	err := row.Scan(

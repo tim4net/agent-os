@@ -35,7 +35,13 @@ func (a *API) SkillRoutes() http.Handler {
 // ListSkills handles GET /api/skills
 // Returns summaries (no content) for fast listing. Content fetched on demand via GET /api/skills/{id}.
 func (a *API) ListSkills(w http.ResponseWriter, r *http.Request) {
-	summaries, err := a.queries.ListSkillSummaries(r.Context())
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
+	summaries, err := a.queries.ListSkillSummaries(r.Context(), ownerID)
 	if err != nil {
 		http.Error(w, "failed to list skills: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -51,6 +57,12 @@ func (a *API) ListSkills(w http.ResponseWriter, r *http.Request) {
 
 // GetSkill handles GET /api/skills/{id}
 func (a *API) GetSkill(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	idStr := chi.URLParam(r, "id")
 
 	var id pgtype.UUID
@@ -59,7 +71,7 @@ func (a *API) GetSkill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	skill, err := a.queries.GetSkill(r.Context(), id)
+	skill, err := a.queries.GetSkill(r.Context(), db.GetSkillParams{ID: id, OwnerID: ownerID})
 	if err != nil {
 		http.Error(w, "skill not found", http.StatusNotFound)
 		return
@@ -81,6 +93,12 @@ type CreateSkillRequest struct {
 
 // CreateSkill handles POST /api/skills
 func (a *API) CreateSkill(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	var req CreateSkillRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -114,6 +132,7 @@ func (a *API) CreateSkill(w http.ResponseWriter, r *http.Request) {
 	}
 
 	skill, err := a.queries.CreateSkill(r.Context(), db.CreateSkillParams{
+		OwnerID:     ownerID,
 		Name:        req.Name,
 		Description: req.Description,
 		Category:    req.Category,
@@ -143,6 +162,12 @@ type UpdateSkillRequest struct {
 
 // UpdateSkill handles PATCH /api/skills/{id}
 func (a *API) UpdateSkill(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	idStr := chi.URLParam(r, "id")
 
 	var id pgtype.UUID
@@ -151,7 +176,7 @@ func (a *API) UpdateSkill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	existing, err := a.queries.GetSkill(r.Context(), id)
+	existing, err := a.queries.GetSkill(r.Context(), db.GetSkillParams{ID: id, OwnerID: ownerID})
 	if err != nil {
 		http.Error(w, "skill not found", http.StatusNotFound)
 		return
@@ -200,6 +225,7 @@ func (a *API) UpdateSkill(w http.ResponseWriter, r *http.Request) {
 
 	skill, err := a.queries.UpdateSkill(r.Context(), db.UpdateSkillParams{
 		ID:          id,
+		OwnerID:     ownerID,
 		Name:        name,
 		Description: description,
 		Category:    category,
@@ -218,6 +244,12 @@ func (a *API) UpdateSkill(w http.ResponseWriter, r *http.Request) {
 
 // DeleteSkill handles DELETE /api/skills/{id}
 func (a *API) DeleteSkill(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	idStr := chi.URLParam(r, "id")
 
 	var id pgtype.UUID
@@ -226,7 +258,7 @@ func (a *API) DeleteSkill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := a.queries.DeleteSkill(r.Context(), id); err != nil {
+	if err := a.queries.DeleteSkill(r.Context(), db.DeleteSkillParams{ID: id, OwnerID: ownerID}); err != nil {
 		http.Error(w, "failed to delete skill", http.StatusInternalServerError)
 		return
 	}
@@ -281,6 +313,12 @@ func parseSkillFrontmatter(data []byte) hermesSkill {
 // SyncSkillsFromHermes handles POST /api/skills/sync
 // Walks the Hermes skills directory, parses SKILL.md files, and upserts into the skills table.
 func (a *API) SyncSkillsFromHermes(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	skillsPath := a.hermesSkillsPath
 	if skillsPath == "" {
 		http.Error(w, "Hermes skills path not configured", http.StatusServiceUnavailable)
@@ -350,7 +388,7 @@ func (a *API) SyncSkillsFromHermes(w http.ResponseWriter, r *http.Request) {
 	// Get the Roux agent ID to associate skills with
 	// First try to find an agent named "roux" or "hermes"
 	var agentID pgtype.UUID
-	agents, err := a.queries.ListAgents(r.Context())
+	agents, err := a.queries.ListAgents(r.Context(), ownerID)
 	if err == nil {
 		for _, agent := range agents {
 			if agent.Name == "roux" || agent.Name == "hermes" {
@@ -380,6 +418,7 @@ func (a *API) SyncSkillsFromHermes(w http.ResponseWriter, r *http.Request) {
 		}
 
 		result, err := a.queries.UpsertSkill(ctx, db.UpsertSkillParams{
+			OwnerID:     ownerID,
 			Name:        skill.Name,
 			Description: skill.Description,
 			Category:    skill.Category,

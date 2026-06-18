@@ -12,27 +12,29 @@ import (
 )
 
 const createResource = `-- name: CreateResource :one
-INSERT INTO resources (slug, kind, label, provider, is_secret, enc_value, enc_config, config, last4, status, enc_key_version)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+INSERT INTO resources (owner_id, slug, kind, label, provider, is_secret, enc_value, enc_config, config, last4, status, enc_key_version)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 RETURNING id, slug, kind, label, provider, is_secret, enc_value, enc_config, config, last4, status, created_at, updated_at, owner_id, enc_key_version
 `
 
 type CreateResourceParams struct {
-	Slug          string `json:"slug"`
-	Kind          string `json:"kind"`
-	Label         string `json:"label"`
-	Provider      string `json:"provider"`
-	IsSecret      bool   `json:"is_secret"`
-	EncValue      []byte `json:"enc_value"`
-	EncConfig     []byte `json:"enc_config"`
-	Config        []byte `json:"config"`
-	Last4         string `json:"last4"`
-	Status        string `json:"status"`
-	EncKeyVersion int32  `json:"enc_key_version"`
+	OwnerID       pgtype.UUID `json:"owner_id"`
+	Slug          string      `json:"slug"`
+	Kind          string      `json:"kind"`
+	Label         string      `json:"label"`
+	Provider      string      `json:"provider"`
+	IsSecret      bool        `json:"is_secret"`
+	EncValue      []byte      `json:"enc_value"`
+	EncConfig     []byte      `json:"enc_config"`
+	Config        []byte      `json:"config"`
+	Last4         string      `json:"last4"`
+	Status        string      `json:"status"`
+	EncKeyVersion int32       `json:"enc_key_version"`
 }
 
 func (q *Queries) CreateResource(ctx context.Context, arg CreateResourceParams) (Resource, error) {
 	row := q.db.QueryRow(ctx, createResource,
+		arg.OwnerID,
 		arg.Slug,
 		arg.Kind,
 		arg.Label,
@@ -67,21 +69,31 @@ func (q *Queries) CreateResource(ctx context.Context, arg CreateResourceParams) 
 }
 
 const deleteResource = `-- name: DeleteResource :exec
-DELETE FROM resources WHERE id = $1
+DELETE FROM resources WHERE id = $1 AND owner_id = $2
 `
 
-func (q *Queries) DeleteResource(ctx context.Context, id pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteResource, id)
+type DeleteResourceParams struct {
+	ID      pgtype.UUID `json:"id"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) DeleteResource(ctx context.Context, arg DeleteResourceParams) error {
+	_, err := q.db.Exec(ctx, deleteResource, arg.ID, arg.OwnerID)
 	return err
 }
 
 const getResource = `-- name: GetResource :one
 SELECT id, slug, kind, label, provider, is_secret, enc_value, enc_config, config, last4, status, created_at, updated_at, owner_id, enc_key_version
-FROM resources WHERE id = $1
+FROM resources WHERE id = $1 AND owner_id = $2
 `
 
-func (q *Queries) GetResource(ctx context.Context, id pgtype.UUID) (Resource, error) {
-	row := q.db.QueryRow(ctx, getResource, id)
+type GetResourceParams struct {
+	ID      pgtype.UUID `json:"id"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) GetResource(ctx context.Context, arg GetResourceParams) (Resource, error) {
+	row := q.db.QueryRow(ctx, getResource, arg.ID, arg.OwnerID)
 	var i Resource
 	err := row.Scan(
 		&i.ID,
@@ -105,11 +117,16 @@ func (q *Queries) GetResource(ctx context.Context, id pgtype.UUID) (Resource, er
 
 const getResourceBySlug = `-- name: GetResourceBySlug :one
 SELECT id, slug, kind, label, provider, is_secret, enc_value, enc_config, config, last4, status, created_at, updated_at, owner_id, enc_key_version
-FROM resources WHERE slug = $1
+FROM resources WHERE slug = $1 AND owner_id = $2
 `
 
-func (q *Queries) GetResourceBySlug(ctx context.Context, slug string) (Resource, error) {
-	row := q.db.QueryRow(ctx, getResourceBySlug, slug)
+type GetResourceBySlugParams struct {
+	Slug    string      `json:"slug"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) GetResourceBySlug(ctx context.Context, arg GetResourceBySlugParams) (Resource, error) {
+	row := q.db.QueryRow(ctx, getResourceBySlug, arg.Slug, arg.OwnerID)
 	var i Resource
 	err := row.Scan(
 		&i.ID,
@@ -132,20 +149,26 @@ func (q *Queries) GetResourceBySlug(ctx context.Context, slug string) (Resource,
 }
 
 const grantResource = `-- name: GrantResource :one
-INSERT INTO agent_grants (agent_id, resource_id, scope)
-VALUES ($1, $2, $3)
+INSERT INTO agent_grants (owner_id, agent_id, resource_id, scope)
+VALUES ($1, $2, $3, $4)
 ON CONFLICT (agent_id, resource_id, scope) DO UPDATE SET granted_at = agent_grants.granted_at
 RETURNING id, agent_id, resource_id, scope, granted_at, owner_id
 `
 
 type GrantResourceParams struct {
+	OwnerID    pgtype.UUID `json:"owner_id"`
 	AgentID    pgtype.UUID `json:"agent_id"`
 	ResourceID pgtype.UUID `json:"resource_id"`
 	Scope      string      `json:"scope"`
 }
 
 func (q *Queries) GrantResource(ctx context.Context, arg GrantResourceParams) (AgentGrant, error) {
-	row := q.db.QueryRow(ctx, grantResource, arg.AgentID, arg.ResourceID, arg.Scope)
+	row := q.db.QueryRow(ctx, grantResource,
+		arg.OwnerID,
+		arg.AgentID,
+		arg.ResourceID,
+		arg.Scope,
+	)
 	var i AgentGrant
 	err := row.Scan(
 		&i.ID,
@@ -159,11 +182,11 @@ func (q *Queries) GrantResource(ctx context.Context, arg GrantResourceParams) (A
 }
 
 const listAllGrants = `-- name: ListAllGrants :many
-SELECT id, agent_id, resource_id, scope, granted_at, owner_id FROM agent_grants
+SELECT id, agent_id, resource_id, scope, granted_at, owner_id FROM agent_grants WHERE owner_id = $1
 `
 
-func (q *Queries) ListAllGrants(ctx context.Context) ([]AgentGrant, error) {
-	rows, err := q.db.Query(ctx, listAllGrants)
+func (q *Queries) ListAllGrants(ctx context.Context, ownerID pgtype.UUID) ([]AgentGrant, error) {
+	rows, err := q.db.Query(ctx, listAllGrants, ownerID)
 	if err != nil {
 		return nil, err
 	}
@@ -191,11 +214,16 @@ func (q *Queries) ListAllGrants(ctx context.Context) ([]AgentGrant, error) {
 
 const listGrantsForAgent = `-- name: ListGrantsForAgent :many
 SELECT g.id, g.agent_id, g.resource_id, g.scope, g.granted_at, g.owner_id
-FROM agent_grants g WHERE g.agent_id = $1
+FROM agent_grants g WHERE g.agent_id = $1 AND g.owner_id = $2
 `
 
-func (q *Queries) ListGrantsForAgent(ctx context.Context, agentID pgtype.UUID) ([]AgentGrant, error) {
-	rows, err := q.db.Query(ctx, listGrantsForAgent, agentID)
+type ListGrantsForAgentParams struct {
+	AgentID pgtype.UUID `json:"agent_id"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) ListGrantsForAgent(ctx context.Context, arg ListGrantsForAgentParams) ([]AgentGrant, error) {
+	rows, err := q.db.Query(ctx, listGrantsForAgent, arg.AgentID, arg.OwnerID)
 	if err != nil {
 		return nil, err
 	}
@@ -223,11 +251,16 @@ func (q *Queries) ListGrantsForAgent(ctx context.Context, agentID pgtype.UUID) (
 
 const listGrantsForResource = `-- name: ListGrantsForResource :many
 SELECT g.id, g.agent_id, g.resource_id, g.scope, g.granted_at, g.owner_id
-FROM agent_grants g WHERE g.resource_id = $1
+FROM agent_grants g WHERE g.resource_id = $1 AND g.owner_id = $2
 `
 
-func (q *Queries) ListGrantsForResource(ctx context.Context, resourceID pgtype.UUID) ([]AgentGrant, error) {
-	rows, err := q.db.Query(ctx, listGrantsForResource, resourceID)
+type ListGrantsForResourceParams struct {
+	ResourceID pgtype.UUID `json:"resource_id"`
+	OwnerID    pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) ListGrantsForResource(ctx context.Context, arg ListGrantsForResourceParams) ([]AgentGrant, error) {
+	rows, err := q.db.Query(ctx, listGrantsForResource, arg.ResourceID, arg.OwnerID)
 	if err != nil {
 		return nil, err
 	}
@@ -255,11 +288,11 @@ func (q *Queries) ListGrantsForResource(ctx context.Context, resourceID pgtype.U
 
 const listResources = `-- name: ListResources :many
 SELECT id, slug, kind, label, provider, is_secret, enc_value, enc_config, config, last4, status, created_at, updated_at, owner_id, enc_key_version
-FROM resources ORDER BY kind, label, slug
+FROM resources WHERE owner_id = $1 ORDER BY kind, label, slug
 `
 
-func (q *Queries) ListResources(ctx context.Context) ([]Resource, error) {
-	rows, err := q.db.Query(ctx, listResources)
+func (q *Queries) ListResources(ctx context.Context, ownerID pgtype.UUID) ([]Resource, error) {
+	rows, err := q.db.Query(ctx, listResources, ownerID)
 	if err != nil {
 		return nil, err
 	}
@@ -296,11 +329,16 @@ func (q *Queries) ListResources(ctx context.Context) ([]Resource, error) {
 
 const listResourcesByKind = `-- name: ListResourcesByKind :many
 SELECT id, slug, kind, label, provider, is_secret, enc_value, enc_config, config, last4, status, created_at, updated_at, owner_id, enc_key_version
-FROM resources WHERE kind = $1 ORDER BY label, slug
+FROM resources WHERE kind = $1 AND owner_id = $2 ORDER BY label, slug
 `
 
-func (q *Queries) ListResourcesByKind(ctx context.Context, kind string) ([]Resource, error) {
-	rows, err := q.db.Query(ctx, listResourcesByKind, kind)
+type ListResourcesByKindParams struct {
+	Kind    string      `json:"kind"`
+	OwnerID pgtype.UUID `json:"owner_id"`
+}
+
+func (q *Queries) ListResourcesByKind(ctx context.Context, arg ListResourcesByKindParams) ([]Resource, error) {
+	rows, err := q.db.Query(ctx, listResourcesByKind, arg.Kind, arg.OwnerID)
 	if err != nil {
 		return nil, err
 	}
@@ -380,23 +418,24 @@ func (q *Queries) ListResourcesForAgent(ctx context.Context, agentID pgtype.UUID
 }
 
 const revokeResource = `-- name: RevokeResource :exec
-DELETE FROM agent_grants WHERE agent_id = $1 AND resource_id = $2
+DELETE FROM agent_grants WHERE agent_id = $1 AND resource_id = $2 AND owner_id = $3
 `
 
 type RevokeResourceParams struct {
 	AgentID    pgtype.UUID `json:"agent_id"`
 	ResourceID pgtype.UUID `json:"resource_id"`
+	OwnerID    pgtype.UUID `json:"owner_id"`
 }
 
 func (q *Queries) RevokeResource(ctx context.Context, arg RevokeResourceParams) error {
-	_, err := q.db.Exec(ctx, revokeResource, arg.AgentID, arg.ResourceID)
+	_, err := q.db.Exec(ctx, revokeResource, arg.AgentID, arg.ResourceID, arg.OwnerID)
 	return err
 }
 
 const updateResource = `-- name: UpdateResource :one
 UPDATE resources
 SET label = $2, provider = $3, is_secret = $4, enc_value = $5, enc_config = $6, config = $7, last4 = $8, status = $9, enc_key_version = $10, updated_at = NOW()
-WHERE id = $1
+WHERE id = $1 AND owner_id = $11
 RETURNING id, slug, kind, label, provider, is_secret, enc_value, enc_config, config, last4, status, created_at, updated_at, owner_id, enc_key_version
 `
 
@@ -411,6 +450,7 @@ type UpdateResourceParams struct {
 	Last4         string      `json:"last4"`
 	Status        string      `json:"status"`
 	EncKeyVersion int32       `json:"enc_key_version"`
+	OwnerID       pgtype.UUID `json:"owner_id"`
 }
 
 func (q *Queries) UpdateResource(ctx context.Context, arg UpdateResourceParams) (Resource, error) {
@@ -425,6 +465,7 @@ func (q *Queries) UpdateResource(ctx context.Context, arg UpdateResourceParams) 
 		arg.Last4,
 		arg.Status,
 		arg.EncKeyVersion,
+		arg.OwnerID,
 	)
 	var i Resource
 	err := row.Scan(

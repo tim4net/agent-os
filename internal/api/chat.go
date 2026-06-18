@@ -24,6 +24,12 @@ type CreateConversationRequest struct {
 
 // CreateConversation creates a new conversation for an agent.
 func (a *API) CreateConversation(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	var req CreateConversationRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -48,6 +54,7 @@ func (a *API) CreateConversation(w http.ResponseWriter, r *http.Request) {
 	}
 
 	conv, err := a.queries.CreateConversation(r.Context(), db.CreateConversationParams{
+		OwnerID:  ownerID,
 		AgentID:  agentID,
 		Title:    title,
 		Metadata: []byte("{}"),
@@ -64,6 +71,12 @@ func (a *API) CreateConversation(w http.ResponseWriter, r *http.Request) {
 
 // ListConversations returns conversations, optionally filtered by agent_id.
 func (a *API) ListConversations(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	var agentID pgtype.UUID
 	if aid := r.URL.Query().Get("agent_id"); aid != "" {
 		if err := agentID.Scan(aid); err != nil {
@@ -72,7 +85,7 @@ func (a *API) ListConversations(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	convs, err := a.queries.ListConversations(r.Context(), agentID)
+	convs, err := a.queries.ListConversations(r.Context(), db.ListConversationsParams{OwnerID: ownerID, Column2: agentID})
 	if err != nil {
 		http.Error(w, "failed to list conversations", http.StatusInternalServerError)
 		return
@@ -88,6 +101,12 @@ func (a *API) ListConversations(w http.ResponseWriter, r *http.Request) {
 
 // GetConversationMessages returns all messages in a conversation.
 func (a *API) GetConversationMessages(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	idStr := chi.URLParam(r, "id")
 
 	var convID pgtype.UUID
@@ -96,7 +115,7 @@ func (a *API) GetConversationMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	messages, err := a.queries.ListMessages(r.Context(), convID)
+	messages, err := a.queries.ListMessages(r.Context(), db.ListMessagesParams{ConversationID: convID, OwnerID: ownerID})
 	if err != nil {
 		http.Error(w, "failed to list messages", http.StatusInternalServerError)
 		return
@@ -141,6 +160,12 @@ func marshalConversationMeta(meta conversationMeta) []byte {
 
 // ChatWithAgent sends a message to an agent and streams the response via SSE.
 func (a *API) ChatWithAgent(w http.ResponseWriter, r *http.Request) {
+	ownerID, ok := OwnerIDFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized: no owner identity", http.StatusUnauthorized)
+		return
+	}
+
 	idStr := chi.URLParam(r, "id")
 
 	var agentID pgtype.UUID
@@ -161,7 +186,7 @@ func (a *API) ChatWithAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get the agent
-	agent, err := a.queries.GetAgent(r.Context(), agentID)
+	agent, err := a.queries.GetAgent(r.Context(), db.GetAgentParams{ID: agentID, OwnerID: ownerID})
 	if err != nil {
 		http.Error(w, "agent not found", http.StatusNotFound)
 		return
@@ -200,7 +225,7 @@ func (a *API) ChatWithAgent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// Load existing conversation metadata
-		conv, err := a.queries.GetConversation(r.Context(), convID)
+		conv, err := a.queries.GetConversation(r.Context(), db.GetConversationParams{ID: convID, OwnerID: ownerID})
 		if err != nil {
 			http.Error(w, "conversation not found", http.StatusNotFound)
 			return
@@ -227,6 +252,7 @@ func (a *API) ChatWithAgent(w http.ResponseWriter, r *http.Request) {
 		}
 
 		conv, err := a.queries.CreateConversation(r.Context(), db.CreateConversationParams{
+			OwnerID:  ownerID,
 			AgentID:  agentID,
 			Title:    title,
 			Metadata: marshalConversationMeta(convMeta),
@@ -249,7 +275,7 @@ func (a *API) ChatWithAgent(w http.ResponseWriter, r *http.Request) {
 		if conversationCreated {
 			delCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			if delErr := a.queries.DeleteConversation(delCtx, convID); delErr != nil {
+			if delErr := a.queries.DeleteConversation(delCtx, db.DeleteConversationParams{ID: convID, OwnerID: ownerID}); delErr != nil {
 				slog.Warn("failed to roll back orphan conversation after pre-stream error",
 					"conversation_id", convID.String(), "error", delErr)
 			} else {
@@ -262,6 +288,7 @@ func (a *API) ChatWithAgent(w http.ResponseWriter, r *http.Request) {
 
 	// Store the user message
 	userMsg, err := a.queries.CreateMessage(r.Context(), db.CreateMessageParams{
+		OwnerID:        ownerID,
 		ConversationID: convID,
 		Role:           "user",
 		Content:        req.Message,
@@ -288,20 +315,21 @@ func (a *API) ChatWithAgent(w http.ResponseWriter, r *http.Request) {
 		truncated = strings.TrimSpace(truncated)
 
 		// Ensure uniqueness per agent — append #2, #3, etc. if duplicate
-		uniqueTitle := a.makeUniqueTitle(r.Context(), agentID, convID, truncated)
+		uniqueTitle := a.makeUniqueTitle(r.Context(), agentID, convID, truncated, ownerID)
 
 		var titleText pgtype.Text
 		titleText.String = uniqueTitle
 		titleText.Valid = true
 		if _, titleErr := a.queries.UpdateConversation(r.Context(), db.UpdateConversationParams{
-			ID:    convID,
-			Title: titleText,
+			ID:      convID,
+			Title:   titleText,
+			OwnerID: ownerID,
 		}); titleErr != nil {
 			slog.Warn("failed to set immediate title", "error", titleErr)
 		}
 
 		// Fire off background LLM title generation after a 30s delay
-		go a.deferredLLMTitle(convID, agentID)
+		go a.deferredLLMTitle(convID, agentID, ownerID)
 	}
 
 	// Send user message ID as first SSE event
@@ -337,7 +365,7 @@ func (a *API) ChatWithAgent(w http.ResponseWriter, r *http.Request) {
 
 		// RAG: search memory_index for relevant context using the user's message
 		systemPrompt := req.SystemPrompt
-		if ragCtx := a.searchMemoryForContext(req.Message, projectID); ragCtx != nil {
+		if ragCtx := a.searchMemoryForContext(req.Message, ownerID, projectID); ragCtx != nil {
 			if systemPrompt == "" {
 				systemPrompt = ragCtx.SystemBlock
 			} else {
@@ -348,7 +376,7 @@ func (a *API) ChatWithAgent(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Get conversation history for context
-		history, err := a.queries.ListMessages(r.Context(), convID)
+		history, err := a.queries.ListMessages(r.Context(), db.ListMessagesParams{ConversationID: convID, OwnerID: ownerID})
 		if err != nil {
 			failPreStream("failed to load history", http.StatusInternalServerError)
 			return
@@ -445,6 +473,7 @@ func (a *API) ChatWithAgent(w http.ResponseWriter, r *http.Request) {
 		if chunk.Done {
 			// Store assistant response
 			assistantMsg, storeErr := a.queries.CreateMessage(r.Context(), db.CreateMessageParams{
+				OwnerID:        ownerID,
 				ConversationID: convID,
 				Role:           "assistant",
 				Content:        fullContent,
@@ -484,7 +513,7 @@ func (a *API) ChatWithAgent(w http.ResponseWriter, r *http.Request) {
 	if conversationCreated && !doneSent {
 		delCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if delErr := a.queries.DeleteConversation(delCtx, convID); delErr != nil {
+		if delErr := a.queries.DeleteConversation(delCtx, db.DeleteConversationParams{ID: convID, OwnerID: ownerID}); delErr != nil {
 			slog.Warn("failed to roll back orphan conversation after failed stream",
 				"conversation_id", convID.String(), "stream_errored", streamErrored, "error", delErr)
 		} else {
@@ -517,8 +546,9 @@ type RAGContext struct {
 // given query and returns a formatted context block suitable for injection
 // into the system prompt. Returns nil if no results are found.
 // Uses a separate context with a 10s timeout to avoid Chi timeout pitfalls.
+// ownerID is required (owner-scoped data isolation).
 // projectID is optional (zero-value = search all projects).
-func (a *API) searchMemoryForContext(query string, projectID pgtype.UUID) *RAGContext {
+func (a *API) searchMemoryForContext(query string, ownerID, projectID pgtype.UUID) *RAGContext {
 	if query == "" {
 		return nil
 	}
@@ -527,6 +557,7 @@ func (a *API) searchMemoryForContext(query string, projectID pgtype.UUID) *RAGCo
 	defer cancel()
 
 	results, err := a.queries.SearchMemory(ctx, db.SearchMemoryParams{
+		OwnerID:            ownerID,
 		WebsearchToTsquery: query,
 		Limit:              3,
 		ProjectID:          projectID,
@@ -568,14 +599,14 @@ func (a *API) searchMemoryForContext(query string, projectID pgtype.UUID) *RAGCo
 // makeUniqueTitle ensures the proposed title is unique for the given agent.
 // If another conversation with the same agent has the same title, it appends
 // #2, #3, etc. until unique.
-func (a *API) makeUniqueTitle(ctx context.Context, agentID pgtype.UUID, convID pgtype.UUID, proposed string) string {
+func (a *API) makeUniqueTitle(ctx context.Context, agentID pgtype.UUID, convID pgtype.UUID, proposed string, ownerID pgtype.UUID) string {
 	base := proposed
 	suffix := 2
 	for {
 		var count int
 		err := a.pool.QueryRow(ctx,
-			`SELECT COUNT(*) FROM conversations WHERE agent_id = $1 AND title = $2 AND id != $3`,
-			agentID, base, convID,
+			`SELECT COUNT(*) FROM conversations WHERE agent_id = $1 AND title = $2 AND id != $3 AND owner_id = $4`,
+			agentID, base, convID, ownerID,
 		).Scan(&count)
 		if err != nil {
 			slog.Warn("title uniqueness check failed, using proposed title", "error", err)
@@ -595,7 +626,7 @@ func (a *API) makeUniqueTitle(ctx context.Context, agentID pgtype.UUID, convID p
 
 // deferredLLMTitle waits 30 seconds then generates an LLM-based title for
 // the conversation, updating the title column in the DB.
-func (a *API) deferredLLMTitle(convID pgtype.UUID, agentID pgtype.UUID) {
+func (a *API) deferredLLMTitle(convID pgtype.UUID, agentID pgtype.UUID, ownerID pgtype.UUID) {
 	time.Sleep(30 * time.Second)
 
 	// Thinking models (e.g. local-qwen/Qwen 3.6) take 60-90s for inference.
@@ -604,7 +635,7 @@ func (a *API) deferredLLMTitle(convID pgtype.UUID, agentID pgtype.UUID) {
 	defer cancel()
 
 	// Load conversation messages for context
-	msgs, err := a.queries.ListMessages(ctx, convID)
+	msgs, err := a.queries.ListMessages(ctx, db.ListMessagesParams{ConversationID: convID, OwnerID: ownerID})
 	if err != nil || len(msgs) == 0 {
 		return
 	}
@@ -639,14 +670,15 @@ func (a *API) deferredLLMTitle(convID pgtype.UUID, agentID pgtype.UUID) {
 	}
 
 	// Make the LLM title unique per agent
-	uniqueTitle := a.makeUniqueTitle(ctx, agentID, convID, summary)
+	uniqueTitle := a.makeUniqueTitle(ctx, agentID, convID, summary, ownerID)
 
 	var titleText pgtype.Text
 	titleText.String = uniqueTitle
 	titleText.Valid = true
 	if _, updateErr := a.queries.UpdateConversation(ctx, db.UpdateConversationParams{
-		ID:    convID,
-		Title: titleText,
+		ID:      convID,
+		Title:   titleText,
+		OwnerID: ownerID,
 	}); updateErr != nil {
 		// Conversation may have been deleted between chat and title generation — not an error
 		if updateErr.Error() == "no rows in result set" {

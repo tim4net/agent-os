@@ -36,10 +36,10 @@ type Querier interface {
 	CleanStaleDelegations(ctx context.Context) error
 	CompleteWorkUnit(ctx context.Context, id int64) (WorkUnit, error)
 	// Count active (non-revoked) keys for a tenant.
-	CountActiveIngestKeys(ctx context.Context, tenant string) (int64, error)
+	CountActiveIngestKeys(ctx context.Context, arg CountActiveIngestKeysParams) (int64, error)
 	// Counts app instances matching the tenant filter (for pagination total).
-	CountAppInstances(ctx context.Context, tenant string) (int64, error)
-	CountArtifacts(ctx context.Context, dollar_1 string) (int64, error)
+	CountAppInstances(ctx context.Context, arg CountAppInstancesParams) (int64, error)
+	CountArtifacts(ctx context.Context, arg CountArtifactsParams) (int64, error)
 	CountDelegations(ctx context.Context, arg CountDelegationsParams) (int64, error)
 	// Returns total count of distinct (harness, session_id) matching the tenant filter.
 	CountEmitterHealthSessions(ctx context.Context, tenant string) (int64, error)
@@ -48,7 +48,7 @@ type Querier interface {
 	CountFindingsBySeverity(ctx context.Context, severity string) (int64, error)
 	CountFindingsByWpRef(ctx context.Context, wpRef string) (int64, error)
 	// Counts liveness records matching the tenant filter.
-	CountHostLiveness(ctx context.Context, tenant string) (int64, error)
+	CountHostLiveness(ctx context.Context, arg CountHostLivenessParams) (int64, error)
 	CountMailbox(ctx context.Context, arg CountMailboxParams) (int64, error)
 	CountRunLog(ctx context.Context) (int64, error)
 	CountRunLogByWpRef(ctx context.Context, wpRef string) (int64, error)
@@ -59,9 +59,9 @@ type Querier interface {
 	// LIMIT/OFFSET. "Active" mirrors AggregateSpend's HAVING (tokens OR turns OR cost),
 	// so the count stays consistent with the rows actually returned.
 	CountSpendGroups(ctx context.Context, arg CountSpendGroupsParams) (int64, error)
-	CountSubtasks(ctx context.Context, parentTaskID pgtype.UUID) (int64, error)
+	CountSubtasks(ctx context.Context, arg CountSubtasksParams) (int64, error)
 	CountTrackerItemsByProject(ctx context.Context, arg CountTrackerItemsByProjectParams) (int64, error)
-	CountTrackerItemsByTenant(ctx context.Context, tenant string) (int64, error)
+	CountTrackerItemsByTenant(ctx context.Context, arg CountTrackerItemsByTenantParams) (int64, error)
 	CountUnread(ctx context.Context, recipientID pgtype.UUID) (int64, error)
 	// Consistent with ListWorkUnits grouping (same key + same tenant filter) so Total matches.
 	CountWorkUnits(ctx context.Context, tenant string) (int64, error)
@@ -87,24 +87,21 @@ type Querier interface {
 	CreateUserKey(ctx context.Context, arg CreateUserKeyParams) (UserKey, error)
 	CreateWorkflow(ctx context.Context, arg CreateWorkflowParams) (Workflow, error)
 	CreateWorkflowRun(ctx context.Context, arg CreateWorkflowRunParams) (WorkflowRun, error)
-	DeleteAgent(ctx context.Context, id pgtype.UUID) error
+	DeleteAgent(ctx context.Context, arg DeleteAgentParams) error
 	// Deletes an app instance by ID.
-	DeleteAppInstance(ctx context.Context, id pgtype.UUID) error
-	DeleteArtifact(ctx context.Context, id pgtype.UUID) error
-	// Deletes a conversation and (via ON DELETE CASCADE) its messages. Used to roll
-	// back a freshly-created conversation when the very first chat turn fails before
-	// streaming, so a failed send never leaves an orphan conversation behind.
-	DeleteConversation(ctx context.Context, id pgtype.UUID) error
-	DeleteGoal(ctx context.Context, id pgtype.UUID) error
-	DeleteLastExchange(ctx context.Context, conversationID pgtype.UUID) (int64, error)
-	DeleteMemory(ctx context.Context, filePath string) error
-	DeleteMessage(ctx context.Context, id pgtype.UUID) error
-	DeleteMessagesByConversation(ctx context.Context, conversationID pgtype.UUID) (int64, error)
-	DeletePipelineItem(ctx context.Context, id pgtype.UUID) error
-	DeleteResource(ctx context.Context, id pgtype.UUID) error
-	DeleteSkill(ctx context.Context, id pgtype.UUID) error
-	DeleteTask(ctx context.Context, id pgtype.UUID) error
-	DeleteWorkflow(ctx context.Context, id pgtype.UUID) error
+	DeleteAppInstance(ctx context.Context, arg DeleteAppInstanceParams) error
+	DeleteArtifact(ctx context.Context, arg DeleteArtifactParams) error
+	DeleteConversation(ctx context.Context, arg DeleteConversationParams) error
+	DeleteGoal(ctx context.Context, arg DeleteGoalParams) error
+	DeleteLastExchange(ctx context.Context, arg DeleteLastExchangeParams) (int64, error)
+	DeleteMemory(ctx context.Context, arg DeleteMemoryParams) error
+	DeleteMessage(ctx context.Context, arg DeleteMessageParams) error
+	DeleteMessagesByConversation(ctx context.Context, arg DeleteMessagesByConversationParams) (int64, error)
+	DeletePipelineItem(ctx context.Context, arg DeletePipelineItemParams) error
+	DeleteResource(ctx context.Context, arg DeleteResourceParams) error
+	DeleteSkill(ctx context.Context, arg DeleteSkillParams) error
+	DeleteTask(ctx context.Context, arg DeleteTaskParams) error
+	DeleteWorkflow(ctx context.Context, arg DeleteWorkflowParams) error
 	EnqueueWorkUnit(ctx context.Context, arg EnqueueWorkUnitParams) (WorkUnit, error)
 	EnsureAgent(ctx context.Context, arg EnsureAgentParams) (Agent, error)
 	// Idempotent resolution used by the ingest project resolver (contract §1).
@@ -112,13 +109,13 @@ type Querier interface {
 	ExpireMail(ctx context.Context) error
 	ExpireMailByID(ctx context.Context, arg ExpireMailByIDParams) (AgentMail, error)
 	FailWorkUnit(ctx context.Context, arg FailWorkUnitParams) (WorkUnit, error)
-	GetAgent(ctx context.Context, id pgtype.UUID) (Agent, error)
-	GetAgentByName(ctx context.Context, name string) (Agent, error)
+	GetAgent(ctx context.Context, arg GetAgentParams) (Agent, error)
+	GetAgentByName(ctx context.Context, arg GetAgentByNameParams) (Agent, error)
 	GetAgentByNameAndOwner(ctx context.Context, arg GetAgentByNameAndOwnerParams) (Agent, error)
 	// Fetches a single app instance by ID.
-	GetAppInstance(ctx context.Context, id pgtype.UUID) (AppInstance, error)
-	GetArtifact(ctx context.Context, id pgtype.UUID) (Artifact, error)
-	GetArtifactByPath(ctx context.Context, filePath pgtype.Text) (Artifact, error)
+	GetAppInstance(ctx context.Context, arg GetAppInstanceParams) (AppInstance, error)
+	GetArtifact(ctx context.Context, arg GetArtifactParams) (Artifact, error)
+	GetArtifactByPath(ctx context.Context, arg GetArtifactByPathParams) (Artifact, error)
 	// Returns the latest host-liveness alive status for a bounded session.
 	// Joins the session's (host, pid) from work_events (kind=session.start) with
 	// host_liveness to get the latest alive report. COALESCE(NULL, false) means
@@ -135,8 +132,8 @@ type Querier interface {
 	// backstop and the proposed seen_at TTL in the PR-body wiring diff).
 	GetBoundedSessionHostLiveness(ctx context.Context, arg GetBoundedSessionHostLivenessParams) (bool, error)
 	GetControlState(ctx context.Context) (ControlState, error)
-	GetConversation(ctx context.Context, id pgtype.UUID) (Conversation, error)
-	GetDelegation(ctx context.Context, id pgtype.UUID) (Delegation, error)
+	GetConversation(ctx context.Context, arg GetConversationParams) (Conversation, error)
+	GetDelegation(ctx context.Context, arg GetDelegationParams) (Delegation, error)
 	// Returns per-session liveness state derived from work_events.
 	// Pure read — no migration needed (WP-M).
 	// Computes liveness as a PURE FUNCTION of (persisted events, server clock now).
@@ -148,29 +145,29 @@ type Querier interface {
 	//   Default = 5 minutes (contract §4).
 	// @tenant: required — scopes to one tenant (handler rejects empty).
 	GetEmitterHealth(ctx context.Context, arg GetEmitterHealthParams) ([]GetEmitterHealthRow, error)
-	GetGoal(ctx context.Context, id pgtype.UUID) (Goal, error)
+	GetGoal(ctx context.Context, arg GetGoalParams) (Goal, error)
 	// Fetches a single host-liveness row by (host, pid).
 	// Optional tenant filter: returns rows only for matching tenant (or all if empty).
 	GetHostLiveness(ctx context.Context, arg GetHostLivenessParams) (HostLiveness, error)
 	// Look up a (non-revoked) ingest key by its SHA-256 hash.
 	// Returns NULL (pgx.ErrNoRows) if not found or revoked.
-	GetIngestKeyByHash(ctx context.Context, keyHash string) (IngestKey, error)
-	GetLastUserMessage(ctx context.Context, conversationID pgtype.UUID) (Message, error)
+	GetIngestKeyByHash(ctx context.Context, arg GetIngestKeyByHashParams) (IngestKey, error)
+	GetLastUserMessage(ctx context.Context, arg GetLastUserMessageParams) (Message, error)
 	// Returns the latest session.start or session.heartbeat received_at for a
 	// supervised (harness, session_id, tenant). Used to compute supervised liveness.
 	// Tenant-scoped to prevent cross-tenant absorption (ADR-002).
 	// Returns pgx.ErrNoRows if no start/heartbeat exists.
 	GetLatestHeartbeat(ctx context.Context, arg GetLatestHeartbeatParams) (pgtype.Timestamptz, error)
-	GetLatestWorkflowRun(ctx context.Context, workflowID pgtype.UUID) (WorkflowRun, error)
+	GetLatestWorkflowRun(ctx context.Context, arg GetLatestWorkflowRunParams) (WorkflowRun, error)
 	GetMail(ctx context.Context, arg GetMailParams) (AgentMail, error)
 	GetMailThread(ctx context.Context, arg GetMailThreadParams) ([]AgentMail, error)
 	GetMailbox(ctx context.Context, arg GetMailboxParams) ([]AgentMail, error)
-	GetMemoryByPath(ctx context.Context, filePath string) (MemoryIndex, error)
-	GetPipelineItem(ctx context.Context, id pgtype.UUID) (PipelineItem, error)
-	GetProject(ctx context.Context, id pgtype.UUID) (Project, error)
-	GetProjectBySlug(ctx context.Context, slug string) (Project, error)
-	GetResource(ctx context.Context, id pgtype.UUID) (Resource, error)
-	GetResourceBySlug(ctx context.Context, slug string) (Resource, error)
+	GetMemoryByPath(ctx context.Context, arg GetMemoryByPathParams) (MemoryIndex, error)
+	GetPipelineItem(ctx context.Context, arg GetPipelineItemParams) (PipelineItem, error)
+	GetProject(ctx context.Context, arg GetProjectParams) (Project, error)
+	GetProjectBySlug(ctx context.Context, arg GetProjectBySlugParams) (Project, error)
+	GetResource(ctx context.Context, arg GetResourceParams) (Resource, error)
+	GetResourceBySlug(ctx context.Context, arg GetResourceBySlugParams) (Resource, error)
 	// Returns the received_at of the first session.start event for a session.
 	// Used to compute bounded_max_age (6h backstop from contract §4).
 	// Tenant-scoped to prevent cross-tenant absorption (ADR-002).
@@ -181,21 +178,21 @@ type Querier interface {
 	// Tenant-scoped to prevent cross-tenant absorption (ADR-002).
 	// Returns pgx.ErrNoRows if no terminal event exists.
 	GetSessionTerminalEvent(ctx context.Context, arg GetSessionTerminalEventParams) (GetSessionTerminalEventRow, error)
-	GetSkill(ctx context.Context, id pgtype.UUID) (Skill, error)
-	GetTask(ctx context.Context, id pgtype.UUID) (Task, error)
+	GetSkill(ctx context.Context, arg GetSkillParams) (Skill, error)
+	GetTask(ctx context.Context, arg GetTaskParams) (Task, error)
 	GetTrackerItem(ctx context.Context, arg GetTrackerItemParams) (TrackerItem, error)
 	// Returns all projects configured with a given tracker type, scoped to a tenant.
 	GetTrackerProjects(ctx context.Context, arg GetTrackerProjectsParams) ([]Project, error)
 	GetUserByID(ctx context.Context, id pgtype.UUID) (User, error)
 	GetUserByLogin(ctx context.Context, login string) (User, error)
 	GetUserKey(ctx context.Context, userID pgtype.UUID) (UserKey, error)
-	GetWorkEventByEventID(ctx context.Context, eventID pgtype.UUID) (WorkEvent, error)
+	GetWorkEventByEventID(ctx context.Context, arg GetWorkEventByEventIDParams) (WorkEvent, error)
 	GetWorkEventsBySession(ctx context.Context, arg GetWorkEventsBySessionParams) ([]WorkEvent, error)
 	// All events in one group (drill-down). Matches the same 5-part key as ListWorkUnits,
 	// NULL-safe so the uncorrelated buckets match rows with NULL key parts.
 	GetWorkUnitEvents(ctx context.Context, arg GetWorkUnitEventsParams) ([]WorkEvent, error)
-	GetWorkflow(ctx context.Context, id pgtype.UUID) (Workflow, error)
-	GetWorkflowRun(ctx context.Context, id pgtype.UUID) (WorkflowRun, error)
+	GetWorkflow(ctx context.Context, arg GetWorkflowParams) (Workflow, error)
+	GetWorkflowRun(ctx context.Context, arg GetWorkflowRunParams) (WorkflowRun, error)
 	GrantResource(ctx context.Context, arg GrantResourceParams) (AgentGrant, error)
 	// Upsert by event_id: inserts new row, on conflict does nothing and returns nothing (pgx.ErrNoRows).
 	InsertWorkEvent(ctx context.Context, arg InsertWorkEventParams) (WorkEvent, error)
@@ -210,47 +207,47 @@ type Querier interface {
 	// the returned events in application code (contract §4: pure function of events + clock).
 	// Tenant is required (never empty — ADR-002).
 	ListActiveSessions(ctx context.Context, tenant string) ([]ListActiveSessionsRow, error)
-	ListAgents(ctx context.Context) ([]Agent, error)
-	ListAllGrants(ctx context.Context) ([]AgentGrant, error)
+	ListAgents(ctx context.Context, ownerID pgtype.UUID) ([]Agent, error)
+	ListAllGrants(ctx context.Context, ownerID pgtype.UUID) ([]AgentGrant, error)
 	// Lists app instances scoped to a tenant. Returns all if tenant is empty.
 	// Supports pagination with limit/offset.
 	// Orders by last_probed_at DESC NULLS LAST (never-probed instances at end).
 	ListAppInstances(ctx context.Context, arg ListAppInstancesParams) ([]AppInstance, error)
 	ListArtifacts(ctx context.Context, arg ListArtifactsParams) ([]Artifact, error)
-	ListConversations(ctx context.Context, dollar_1 pgtype.UUID) ([]Conversation, error)
+	ListConversations(ctx context.Context, arg ListConversationsParams) ([]Conversation, error)
 	ListDelegations(ctx context.Context, arg ListDelegationsParams) ([]Delegation, error)
 	ListFindings(ctx context.Context, arg ListFindingsParams) ([]Finding, error)
 	ListFindingsByClass(ctx context.Context, arg ListFindingsByClassParams) ([]Finding, error)
 	ListFindingsBySeverity(ctx context.Context, arg ListFindingsBySeverityParams) ([]Finding, error)
 	ListFindingsByWpRef(ctx context.Context, arg ListFindingsByWpRefParams) ([]Finding, error)
-	ListGoals(ctx context.Context) ([]Goal, error)
-	ListGrantsForAgent(ctx context.Context, agentID pgtype.UUID) ([]AgentGrant, error)
-	ListGrantsForResource(ctx context.Context, resourceID pgtype.UUID) ([]AgentGrant, error)
+	ListGoals(ctx context.Context, ownerID pgtype.UUID) ([]Goal, error)
+	ListGrantsForAgent(ctx context.Context, arg ListGrantsForAgentParams) ([]AgentGrant, error)
+	ListGrantsForResource(ctx context.Context, arg ListGrantsForResourceParams) ([]AgentGrant, error)
 	// Lists all liveness records for a tenant, ordered by seen_at DESC.
 	// Returns all if tenant is empty.
 	ListHostLiveness(ctx context.Context, arg ListHostLivenessParams) ([]HostLiveness, error)
 	// List all (including revoked) keys for a tenant, newest first.
-	ListIngestKeysByTenant(ctx context.Context, tenant string) ([]IngestKey, error)
+	ListIngestKeysByTenant(ctx context.Context, arg ListIngestKeysByTenantParams) ([]IngestKey, error)
 	ListLegacyResources(ctx context.Context) ([]Resource, error)
-	ListMemoryIndex(ctx context.Context) ([]MemoryIndex, error)
-	ListMessages(ctx context.Context, conversationID pgtype.UUID) ([]Message, error)
+	ListMemoryIndex(ctx context.Context, ownerID pgtype.UUID) ([]MemoryIndex, error)
+	ListMessages(ctx context.Context, arg ListMessagesParams) ([]Message, error)
 	ListOrchestratorWorkUnits(ctx context.Context) ([]WorkUnit, error)
 	ListPipelineItems(ctx context.Context, arg ListPipelineItemsParams) ([]PipelineItem, error)
-	ListProjects(ctx context.Context) ([]Project, error)
-	ListResources(ctx context.Context) ([]Resource, error)
-	ListResourcesByKind(ctx context.Context, kind string) ([]Resource, error)
+	ListProjects(ctx context.Context, ownerID pgtype.UUID) ([]Project, error)
+	ListResources(ctx context.Context, ownerID pgtype.UUID) ([]Resource, error)
+	ListResourcesByKind(ctx context.Context, arg ListResourcesByKindParams) ([]Resource, error)
 	ListResourcesForAgent(ctx context.Context, agentID pgtype.UUID) ([]Resource, error)
 	ListRunLog(ctx context.Context, arg ListRunLogParams) ([]RunLog, error)
 	ListRunLogByWpRef(ctx context.Context, arg ListRunLogByWpRefParams) ([]RunLog, error)
-	ListSkillSummaries(ctx context.Context) ([]ListSkillSummariesRow, error)
-	ListSkills(ctx context.Context) ([]Skill, error)
-	ListSkillsByAgent(ctx context.Context, agentID pgtype.UUID) ([]Skill, error)
-	ListSubtasks(ctx context.Context, parentTaskID pgtype.UUID) ([]Task, error)
+	ListSkillSummaries(ctx context.Context, ownerID pgtype.UUID) ([]ListSkillSummariesRow, error)
+	ListSkills(ctx context.Context, ownerID pgtype.UUID) ([]Skill, error)
+	ListSkillsByAgent(ctx context.Context, arg ListSkillsByAgentParams) ([]Skill, error)
+	ListSubtasks(ctx context.Context, arg ListSubtasksParams) ([]Task, error)
 	ListTasks(ctx context.Context, arg ListTasksParams) ([]Task, error)
 	ListTrackerItemsByProject(ctx context.Context, arg ListTrackerItemsByProjectParams) ([]TrackerItem, error)
 	ListTrackerItemsByTenant(ctx context.Context, arg ListTrackerItemsByTenantParams) ([]TrackerItem, error)
 	ListUsers(ctx context.Context) ([]User, error)
-	ListVisibleAgents(ctx context.Context) ([]Agent, error)
+	ListVisibleAgents(ctx context.Context, ownerID pgtype.UUID) ([]Agent, error)
 	// WP-B correlation engine. Groups work_events into work_units by the correlation key.
 	// Per contract §7 the key is (project_id, external_ref, branch, sha); we ALSO group by
 	// `tenant` so two tenants emitting the same external_ref with a NULL project_id are never
@@ -269,8 +266,8 @@ type Querier interface {
 	// Optional tenant filter (B3): @tenant = '' returns all tenants; otherwise scopes to one.
 	ListWorkUnits(ctx context.Context, arg ListWorkUnitsParams) ([]ListWorkUnitsRow, error)
 	ListWorkUnitsByStatus(ctx context.Context, arg ListWorkUnitsByStatusParams) ([]WorkUnit, error)
-	ListWorkflowRuns(ctx context.Context, workflowID pgtype.UUID) ([]WorkflowRun, error)
-	ListWorkflows(ctx context.Context) ([]Workflow, error)
+	ListWorkflowRuns(ctx context.Context, arg ListWorkflowRunsParams) ([]WorkflowRun, error)
+	ListWorkflows(ctx context.Context, ownerID pgtype.UUID) ([]Workflow, error)
 	// Called when a server.stopped work-event arrives (contract §4).
 	// Sets status to 'down' — this is a definitive signal, not a probe.
 	MarkInstanceDownByServerStopped(ctx context.Context, arg MarkInstanceDownByServerStoppedParams) error
@@ -279,7 +276,7 @@ type Querier interface {
 	RenameAgent(ctx context.Context, arg RenameAgentParams) (Agent, error)
 	RequeueWorkUnit(ctx context.Context, id int64) (WorkUnit, error)
 	// Revoke an ingest key by setting revoked_at to now.
-	RevokeIngestKey(ctx context.Context, id int64) error
+	RevokeIngestKey(ctx context.Context, arg RevokeIngestKeyParams) error
 	RevokeResource(ctx context.Context, arg RevokeResourceParams) error
 	SearchMemory(ctx context.Context, arg SearchMemoryParams) ([]MemoryIndex, error)
 	// agent_mail.sql — agent-to-agent messaging (WP-101, issue #112).
@@ -297,7 +294,7 @@ type Querier interface {
 	UpdateDelegation(ctx context.Context, arg UpdateDelegationParams) (Delegation, error)
 	UpdateGoal(ctx context.Context, arg UpdateGoalParams) (Goal, error)
 	// Marks an instance as 'down' (from server.stopped event or probe failure).
-	UpdateInstanceDown(ctx context.Context, id pgtype.UUID) error
+	UpdateInstanceDown(ctx context.Context, arg UpdateInstanceDownParams) error
 	// Updates the status and last_probed_at of an instance after a probe.
 	// This is the ONLY way status changes — never set from a work-event.
 	UpdateInstanceProbeStatus(ctx context.Context, arg UpdateInstanceProbeStatusParams) error
