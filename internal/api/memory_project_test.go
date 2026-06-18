@@ -83,6 +83,7 @@ func TestMemoryProjectIsolation(t *testing.T) {
 
 	// Upsert a note under project alpha.
 	if _, err := queries.UpsertMemory(ctx, db.UpsertMemoryParams{
+		OwnerID:   testOwnerID(),
 		FilePath:  "projects/alpha/architecture.md",
 		Title:     pgtype.Text{String: "Alpha Architecture", Valid: true},
 		Content:   pgtype.Text{String: "Alpha project uses a microservice approach for the payment gateway.", Valid: true},
@@ -94,6 +95,7 @@ func TestMemoryProjectIsolation(t *testing.T) {
 
 	// Upsert a note under project beta — same topic keyword to tempt leakage.
 	if _, err := queries.UpsertMemory(ctx, db.UpsertMemoryParams{
+		OwnerID:   testOwnerID(),
 		FilePath:  "projects/beta/architecture.md",
 		Title:     pgtype.Text{String: "Beta Architecture", Valid: true},
 		Content:   pgtype.Text{String: "Beta project uses a microservice approach for the payment gateway too.", Valid: true},
@@ -106,6 +108,7 @@ func TestMemoryProjectIsolation(t *testing.T) {
 	// Upsert a note with NO project_id (NULL) — should never appear when a
 	// specific project_id filter is active.
 	if _, err := queries.UpsertMemory(ctx, db.UpsertMemoryParams{
+		OwnerID:   testOwnerID(),
 		FilePath:  "inbox/unfiled.md",
 		Title:     pgtype.Text{String: "Unfiled", Valid: true},
 		Content:   pgtype.Text{String: "The payment gateway microservice approach is interesting.", Valid: true},
@@ -119,6 +122,7 @@ func TestMemoryProjectIsolation(t *testing.T) {
 	// so without the filter all three would return.  With the filter we expect
 	// ONLY the alpha row.
 	results, err := queries.SearchMemory(ctx, db.SearchMemoryParams{
+		OwnerID:            testOwnerID(),
 		WebsearchToTsquery: "payment gateway microservice",
 		Limit:              10,
 		ProjectID:          alphaID,
@@ -139,6 +143,7 @@ func TestMemoryProjectIsolation(t *testing.T) {
 
 	// Search scoped to beta — symmetric check.
 	results, err = queries.SearchMemory(ctx, db.SearchMemoryParams{
+		OwnerID:            testOwnerID(),
 		WebsearchToTsquery: "payment gateway microservice",
 		Limit:              10,
 		ProjectID:          betaID,
@@ -171,6 +176,7 @@ func TestSearchMemoryWithProjectFilter(t *testing.T) {
 		{"projects/beta/deploy.md", betaID, "Continuous deployment pipeline for beta."},
 	} {
 		if _, err := queries.UpsertMemory(ctx, db.UpsertMemoryParams{
+			OwnerID:   testOwnerID(),
 			FilePath:  p.path,
 			Title:     pgtype.Text{String: p.path, Valid: true},
 			Content:   pgtype.Text{String: p.body, Valid: true},
@@ -183,6 +189,7 @@ func TestSearchMemoryWithProjectFilter(t *testing.T) {
 
 	// ── No filter (project_id IS NULL) → both rows returned ──────────────
 	all, err := queries.SearchMemory(ctx, db.SearchMemoryParams{
+		OwnerID:            testOwnerID(),
 		WebsearchToTsquery: "continuous deployment",
 		Limit:              10,
 		ProjectID:          pgtype.UUID{}, // Valid=false → IS NULL branch
@@ -196,6 +203,7 @@ func TestSearchMemoryWithProjectFilter(t *testing.T) {
 
 	// ── Filter to alpha → only alpha row ─────────────────────────────────
 	alphaOnly, err := queries.SearchMemory(ctx, db.SearchMemoryParams{
+		OwnerID:            testOwnerID(),
 		WebsearchToTsquery: "continuous deployment",
 		Limit:              10,
 		ProjectID:          alphaID,
@@ -209,6 +217,7 @@ func TestSearchMemoryWithProjectFilter(t *testing.T) {
 
 	// ── Filter to beta → only beta row ───────────────────────────────────
 	betaOnly, err := queries.SearchMemory(ctx, db.SearchMemoryParams{
+		OwnerID:            testOwnerID(),
 		WebsearchToTsquery: "continuous deployment",
 		Limit:              10,
 		ProjectID:          betaID,
