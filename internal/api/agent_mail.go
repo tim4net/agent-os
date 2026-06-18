@@ -147,6 +147,7 @@ func (a *API) SendMail(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	ownerID := resolveOwnerID(r.Context())
 
 	// Cap request size so an oversized body is rejected before full decode.
 	r.Body = http.MaxBytesReader(w, r.Body, maxMailBodyBytes+4096)
@@ -181,7 +182,7 @@ func (a *API) SendMail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate recipient exists (404 per the verification spec).
-	if _, err := a.queries.GetAgent(r.Context(), recipientID); err != nil {
+	if _, err := a.queries.GetAgent(r.Context(), db.GetAgentParams{ID: recipientID, OwnerID: ownerID}); err != nil {
 		http.Error(w, "recipient agent not found", http.StatusNotFound)
 		return
 	}

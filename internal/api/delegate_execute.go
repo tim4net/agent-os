@@ -56,6 +56,7 @@ func (a *API) DelegateToAgent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid source agent ID", http.StatusBadRequest)
 		return
 	}
+	ownerID := resolveOwnerID(r.Context())
 
 	var req DelegateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -93,13 +94,13 @@ func (a *API) DelegateToAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Look up both agents
-	sourceAgent, err := a.queries.GetAgent(r.Context(), sourceID)
+	sourceAgent, err := a.queries.GetAgent(r.Context(), db.GetAgentParams{ID: sourceID, OwnerID: ownerID})
 	if err != nil {
 		http.Error(w, "source agent not found", http.StatusNotFound)
 		return
 	}
 
-	targetAgent, err := a.queries.GetAgent(r.Context(), targetID)
+	targetAgent, err := a.queries.GetAgent(r.Context(), db.GetAgentParams{ID: targetID, OwnerID: ownerID})
 	if err != nil {
 		http.Error(w, "target agent not found", http.StatusNotFound)
 		return
