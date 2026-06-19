@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"regexp"
@@ -313,14 +314,38 @@ func (a *API) DeleteResource(w http.ResponseWriter, r *http.Request) {
 
 // resolveResourceSecret returns the decrypted secret string for a resource, or
 // "" if unset / undecryptable. Internal use only (never serialized).
-func (a *API) resolveResourceSecret(res any) string {
+func (a *API) resolveResourceSecret(ctx context.Context, res any) string {
 	var encValue []byte
+	var encKeyVersion int32
+	var ownerID pgtype.UUID
 	switch v := res.(type) {
 	case db.Resource:
 		encValue = v.EncValue
+		encKeyVersion = v.EncKeyVersion
+		ownerID = v.OwnerID
 	}
 
-	if len(encValue) == 0 || !a.cipher.Enabled() {
+	if len(encValue) == 0 {
+		return ""
+	}
+
+	// Envelope-encrypted (enc_key_version >= 1): decrypt via per-owner DEK.
+	// Fall back to direct cipher on failure: CreateResource/UpdateResource
+	// tag resources with enc_key_version=1 but encrypt via the direct cipher
+	// until those write-paths are wired to envelope.EncryptForOwner. This
+	// transitional fallback ensures secrets remain resolvable without a
+	// separate migration. Once the write-path is fixed, the fallback is dead
+	// code but harmless.
+	if encKeyVersion >= 1 && a.envelope != nil && a.envelope.Enabled() && ownerID.Valid {
+		pt, err := a.envelope.DecryptForOwner(ctx, ownerID.Bytes, encValue)
+		if err == nil {
+			return pt
+		}
+		// Envelope decryption failed — fall through to direct cipher.
+	}
+
+	// Legacy direct cipher (enc_key_version 0).
+	if !a.cipher.Enabled() {
 		return ""
 	}
 	pt, err := a.cipher.Decrypt(encValue)

@@ -110,7 +110,7 @@ func (a *API) buildHarnessConfig(ctx context.Context, agent db.Agent) map[string
 	for _, res := range granted {
 		switch res.Kind {
 		case "credential":
-			secret := a.resolveResourceSecret(res)
+			secret := a.resolveResourceSecret(ctx, res)
 			if secret == "" {
 				continue
 			}
@@ -139,7 +139,7 @@ func (a *API) buildHarnessConfig(ctx context.Context, agent db.Agent) map[string
 			for k, v := range cfg {
 				srv[k] = v
 			}
-			if secret := a.resolveResourceSecret(res); secret != "" {
+			if secret := a.resolveResourceSecret(ctx, res); secret != "" {
 				srv["auth_token"] = secret
 			}
 			mcpServers = append(mcpServers, srv)
@@ -154,7 +154,7 @@ func (a *API) buildHarnessConfig(ctx context.Context, agent db.Agent) map[string
 			for k, v := range cfg {
 				intg[k] = v
 			}
-			if secret := a.resolveResourceSecret(res); secret != "" {
+			if secret := a.resolveResourceSecret(ctx, res); secret != "" {
 				intg["token"] = secret
 			}
 			if config["integrations"] == nil {
@@ -183,7 +183,32 @@ func (a *API) buildHarnessConfig(ctx context.Context, agent db.Agent) map[string
 func (a *API) Router() http.Handler {
 	r := chi.NewRouter()
 
-	// Health endpoint
+	// Owner identity: all routes require a resolved owner (trusted
+	// X-Webauth-User header or AOS_DEV_LOGIN fallback) so downstream
+	// handlers can scope every query by owner_id. The /health endpoint
+	// is exempted so health checks work even when the DB is degraded.
+	// This is the Phase 1 identity spine mount deferred from PR #90.
+	//
+	// Nil-guard: test-only minimal APIs (e.g. TestListHarnesses_Endpoint)
+	// construct &API{registry: reg} without a queries/pool. In production
+	// queries is always non-nil (set by NewAPI). Skipping the mount when
+	// queries is nil avoids a nil-pointer panic in GetUserByLogin; those
+	// tests target static endpoints (/harnesses) that don't use owner_id.
+	if a.queries != nil {
+		idMw := IdentityMiddleware(a.queries, IdentityConfigFromEnv())
+		r.Use(func(next http.Handler) http.Handler {
+			handler := idMw(next)
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/health" || r.URL.Path == "/health/" {
+					next.ServeHTTP(w, r)
+					return
+				}
+				handler.ServeHTTP(w, r)
+			})
+		})
+	}
+
+	// Health endpoint (public — exempted above)
 	r.Get("/health", a.DetailedHealth)
 
 	// Activity feed
