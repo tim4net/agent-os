@@ -330,15 +330,18 @@ func (a *API) resolveResourceSecret(ctx context.Context, res any) string {
 	}
 
 	// Envelope-encrypted (enc_key_version >= 1): decrypt via per-owner DEK.
-	if encKeyVersion >= 1 && a.envelope != nil && a.envelope.Enabled() {
-		if !ownerID.Valid {
-			return ""
-		}
+	// Fall back to direct cipher on failure: CreateResource/UpdateResource
+	// tag resources with enc_key_version=1 but encrypt via the direct cipher
+	// until those write-paths are wired to envelope.EncryptForOwner. This
+	// transitional fallback ensures secrets remain resolvable without a
+	// separate migration. Once the write-path is fixed, the fallback is dead
+	// code but harmless.
+	if encKeyVersion >= 1 && a.envelope != nil && a.envelope.Enabled() && ownerID.Valid {
 		pt, err := a.envelope.DecryptForOwner(ctx, ownerID.Bytes, encValue)
-		if err != nil {
-			return ""
+		if err == nil {
+			return pt
 		}
-		return pt
+		// Envelope decryption failed — fall through to direct cipher.
 	}
 
 	// Legacy direct cipher (enc_key_version 0).

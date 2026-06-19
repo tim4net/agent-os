@@ -188,17 +188,25 @@ func (a *API) Router() http.Handler {
 	// handlers can scope every query by owner_id. The /health endpoint
 	// is exempted so health checks work even when the DB is degraded.
 	// This is the Phase 1 identity spine mount deferred from PR #90.
-	idMw := IdentityMiddleware(a.queries, IdentityConfigFromEnv())
-	r.Use(func(next http.Handler) http.Handler {
-		handler := idMw(next)
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/health" || r.URL.Path == "/health/" {
-				next.ServeHTTP(w, r)
-				return
-			}
-			handler.ServeHTTP(w, r)
+	//
+	// Nil-guard: test-only minimal APIs (e.g. TestListHarnesses_Endpoint)
+	// construct &API{registry: reg} without a queries/pool. In production
+	// queries is always non-nil (set by NewAPI). Skipping the mount when
+	// queries is nil avoids a nil-pointer panic in GetUserByLogin; those
+	// tests target static endpoints (/harnesses) that don't use owner_id.
+	if a.queries != nil {
+		idMw := IdentityMiddleware(a.queries, IdentityConfigFromEnv())
+		r.Use(func(next http.Handler) http.Handler {
+			handler := idMw(next)
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/health" || r.URL.Path == "/health/" {
+					next.ServeHTTP(w, r)
+					return
+				}
+				handler.ServeHTTP(w, r)
+			})
 		})
-	})
+	}
 
 	// Health endpoint (public — exempted above)
 	r.Get("/health", a.DetailedHealth)
