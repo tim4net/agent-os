@@ -76,9 +76,11 @@ func (tw *TitleWorker) resummarizeActive(ctx context.Context) {
 		return // no LLM provider configured
 	}
 
-	// Find conversations that have had messages in the last 24 hours
+	// Find conversations that have had messages in the last 24 hours.
+	// Select owner_id so we can scope the downstream ListMessages /
+	// UpdateConversation queries (owner_id is NOT NULL since migration 025).
 	rows, err := tw.api.pool.Query(ctx,
-		`SELECT DISTINCT c.id, c.agent_id
+		`SELECT DISTINCT c.id, c.agent_id, c.owner_id
 		FROM conversations c
 		JOIN messages m ON m.conversation_id = c.id
 		WHERE m.created_at > NOW() - INTERVAL '24 hours'
@@ -93,11 +95,12 @@ func (tw *TitleWorker) resummarizeActive(ctx context.Context) {
 	type convRef struct {
 		ID      pgtype.UUID
 		AgentID pgtype.UUID
+		OwnerID pgtype.UUID
 	}
 	var convs []convRef
 	for rows.Next() {
 		var c convRef
-		if err := rows.Scan(&c.ID, &c.AgentID); err != nil {
+		if err := rows.Scan(&c.ID, &c.AgentID, &c.OwnerID); err != nil {
 			slog.Warn("title worker: scan error", "error", err)
 			continue
 		}
@@ -118,24 +121,24 @@ func (tw *TitleWorker) resummarizeActive(ctx context.Context) {
 
 	for _, c := range convs {
 		wg.Add(1)
-		go func(id, agentID pgtype.UUID) {
+		go func(id, agentID, ownerID pgtype.UUID) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			tw.resummarizeOne(ctx, id, agentID)
-		}(c.ID, c.AgentID)
+			tw.resummarizeOne(ctx, id, agentID, ownerID)
+		}(c.ID, c.AgentID, c.OwnerID)
 	}
 
 	wg.Wait()
 }
 
-func (tw *TitleWorker) resummarizeOne(ctx context.Context, convID pgtype.UUID, agentID pgtype.UUID) {
+func (tw *TitleWorker) resummarizeOne(ctx context.Context, convID pgtype.UUID, agentID pgtype.UUID, ownerID pgtype.UUID) {
 	// Use a separate context with timeout to avoid blocking
 	jobCtx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
 	defer cancel()
 
-	msgs, err := tw.api.queries.ListMessages(jobCtx, db.ListMessagesParams{ConversationID: convID, OwnerID: pgtype.UUID{}})
+	msgs, err := tw.api.queries.ListMessages(jobCtx, db.ListMessagesParams{ConversationID: convID, OwnerID: ownerID})
 	if err != nil || len(msgs) == 0 {
 		return
 	}
@@ -170,14 +173,14 @@ func (tw *TitleWorker) resummarizeOne(ctx context.Context, convID pgtype.UUID, a
 	}
 
 	// Make unique per agent
-	uniqueTitle := tw.api.makeUniqueTitle(jobCtx, agentID, convID, summary, pgtype.UUID{})
+	uniqueTitle := tw.api.makeUniqueTitle(jobCtx, agentID, convID, summary, ownerID)
 
 	var titleText pgtype.Text
 	titleText.String = uniqueTitle
 	titleText.Valid = true
 	if _, updateErr := tw.api.queries.UpdateConversation(jobCtx, db.UpdateConversationParams{
 		ID:      convID,
-		OwnerID: pgtype.UUID{},
+		OwnerID: ownerID,
 		Title:   titleText,
 	}); updateErr != nil {
 		slog.Warn("title worker: failed to update title", "conversation_id", convID.String(), "error", updateErr)
