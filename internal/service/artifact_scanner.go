@@ -82,9 +82,13 @@ func (s *ArtifactScanner) scan(ctx context.Context) {
 			return nil
 		}
 
-		// Check if already in DB
+		// Check if already in DB. The scanner is a background service with no
+		// per-request owner context, so it operates as the system seed owner
+		// (00000000-0000-0000-0000-000000000001, migration 024) — same convention
+		// as the memory indexer (systemOwnerUUID in this package). Files dropped
+		// onto disk outside any user request are attributed to owner-0.
 		_, err = s.queries.GetArtifactByPath(ctx, db.GetArtifactByPathParams{
-			OwnerID:  pgtype.UUID{},
+			OwnerID:  systemOwnerUUID(),
 			FilePath: pgtype.Text{String: relPath, Valid: true},
 		})
 		if err == nil {
@@ -100,7 +104,7 @@ func (s *ArtifactScanner) scan(ctx context.Context) {
 		title := strings.TrimSuffix(filename, filepath.Ext(filename))
 
 		artifact, err := s.queries.CreateArtifact(ctx, db.CreateArtifactParams{
-			OwnerID:     pgtype.UUID{},
+			OwnerID:     systemOwnerUUID(),
 			AgentID:     pgtype.UUID{Valid: false},
 			Type:        artifactType,
 			Title:       pgtype.Text{String: title, Valid: true},
