@@ -316,3 +316,7 @@ func firstNonEmpty(vals ...string) string {
 	}
 	return ""
 }
+
+func init() {
+	Register("agy", NewAgyHarness)
+}

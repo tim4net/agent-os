@@ -69,6 +69,34 @@ func TestRegistry_AllKindsConstruct(t *testing.T) {
 	}
 }
 
+// TestRegistry_AgyRegistered verifies the agy harness self-registers via
+// init() like the other four built-in kinds. Without this, an agent row with
+// harness='agy' (which exists in the seed data) fails at registry.Get() in
+// the AgentWatcher health loop and any chat/models path.
+func TestRegistry_AgyRegistered(t *testing.T) {
+	names := harness.DefaultRegistry.Names()
+	found := false
+	for _, n := range names {
+		if n == "agy" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("agy not in DefaultRegistry names: %v", names)
+	}
+	h, err := harness.DefaultRegistry.Get("agy")
+	if err != nil {
+		t.Fatalf("Get(\"agy\") failed: %v", err)
+	}
+	if h == nil {
+		t.Fatal("Get(\"agy\") returned nil harness")
+	}
+	if h.Name() != "agy" {
+		t.Errorf("agy harness Name() = %q, want \"agy\"", h.Name())
+	}
+}
+
 // TestListHarnesses_Endpoint verifies GET /api/harnesses returns 200 with
 // the registered kinds present (AC3).
 func TestListHarnesses_Endpoint(t *testing.T) {

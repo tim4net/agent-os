@@ -21,6 +21,7 @@ var harnessMeta = map[string]HarnessInfo{
 	"hermes":   {Description: "Hermes agent (chat, models, slash-commands). Uses the Hermes API key.", RequiresAuthToken: false},
 	"openclaw": {Description: "OpenClaw agent over WebSocket. Supports a per-agent auth token.", RequiresAuthToken: true},
 	"litellm":  {Description: "LiteLLM proxy — model gateway, infrastructure target.", RequiresAuthToken: false},
+	"agy":      {Description: "AGY coding agent — shells out to the agy CLI for agentic code work.", RequiresAuthToken: false},
 }
 
 // ListHarnesses handles GET /api/harnesses — the registered harness types,
