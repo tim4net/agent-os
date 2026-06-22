@@ -740,6 +740,26 @@ export function runWorkflow(id: string): Promise<WorkflowRun> {
   })
 }
 
+// --- Workflow Templates ---
+
+// A predefined, instantiable workflow definition. Use createWorkflow() with a
+// template's name/description/steps to instantiate it as a runnable workflow.
+export interface WorkflowTemplate {
+  key: string
+  name: string
+  description: string
+  category: string
+  steps: WorkflowStep[]
+}
+
+export function listWorkflowTemplates(): Promise<WorkflowTemplate[]> {
+  return request<WorkflowTemplate[]>('/api/workflow-templates')
+}
+
+export function getWorkflowTemplate(key: string): Promise<WorkflowTemplate> {
+  return request<WorkflowTemplate>(`/api/workflow-templates/${key}`)
+}
+
 // --- Skills ---
 
 export interface Skill {

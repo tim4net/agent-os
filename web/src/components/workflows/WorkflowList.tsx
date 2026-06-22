@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
-import type { Workflow } from '../../api/client'
-import { listWorkflows, deleteWorkflow, runWorkflow } from '../../api/client'
+import type { Workflow, WorkflowTemplate } from '../../api/client'
+import { listWorkflows, deleteWorkflow, runWorkflow, listWorkflowTemplates, createWorkflow } from '../../api/client'
 import { WorkflowEditor } from './WorkflowEditor'
 import { Icon } from '../Icon'
 
@@ -11,6 +11,8 @@ export function WorkflowList() {
   const [runResult, setRunResult] = useState<{ id: string; status: string; message: string } | null>(null)
   const [editingWorkflow, setEditingWorkflow] = useState<Workflow | null>(null)
   const [creating, setCreating] = useState(false)
+  const [templates, setTemplates] = useState<WorkflowTemplate[]>([])
+  const [usingTemplate, setUsingTemplate] = useState<string | null>(null)
 
   const loadWorkflows = useCallback(async () => {
     setLoading(true)
@@ -28,6 +30,28 @@ export function WorkflowList() {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- async data fetch; setState lands after await
     loadWorkflows()
   }, [loadWorkflows])
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- async data fetch; setState lands after await
+    listWorkflowTemplates().then(setTemplates).catch((err) => console.error('Failed to load workflow templates:', err))
+  }, [])
+
+  // useTemplate instantiates a predefined template as a runnable workflow.
+  async function useTemplate(tpl: WorkflowTemplate) {
+    setUsingTemplate(tpl.key)
+    try {
+      await createWorkflow({
+        name: tpl.name,
+        description: tpl.description,
+        steps: tpl.steps,
+      })
+      await loadWorkflows()
+    } catch (err) {
+      console.error('Failed to instantiate template:', err)
+    } finally {
+      setUsingTemplate(null)
+    }
+  }
 
   async function handleDelete(id: string) {
     if (!confirm('Delete this workflow?')) return
@@ -96,6 +120,36 @@ export function WorkflowList() {
           >
             <Icon name="close" size={14} />
           </button>
+        </div>
+      )}
+
+      {templates.length > 0 && (
+        <div className="mb-6">
+          <h3 className="text-sm font-semibold text-gray-400 mb-3 uppercase tracking-wide">Templates</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {templates.map((tpl) => (
+              <div
+                key={tpl.key}
+                className="bg-gray-900/60 border border-dashed border-gray-700 rounded-lg p-4"
+              >
+                <div className="flex items-start justify-between mb-1">
+                  <h4 className="text-sm font-medium text-white">{tpl.name}</h4>
+                  <span className="text-xs bg-indigo-900/40 text-indigo-300 px-2 py-0.5 rounded-full ml-2 shrink-0">
+                    {tpl.category}
+                  </span>
+                </div>
+                <p className="text-xs text-gray-500 mb-2 line-clamp-2">{tpl.description}</p>
+                <p className="text-xs text-gray-600 mb-3">{tpl.steps.length} steps</p>
+                <button
+                  onClick={() => useTemplate(tpl)}
+                  disabled={usingTemplate === tpl.key}
+                  className="text-xs px-3 py-1.5 bg-indigo-700 hover:bg-indigo-600 disabled:bg-gray-700 disabled:text-gray-500 rounded transition-colors"
+                >
+                  {usingTemplate === tpl.key ? 'Adding...' : '+ Use Template'}
+                </button>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
