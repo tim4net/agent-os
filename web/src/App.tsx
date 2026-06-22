@@ -27,6 +27,12 @@ import { ErrorBoundary } from './components/ErrorBoundary'
 import { StatusFooter } from './components/StatusFooter'
 import { ToastContainer } from './components/Toast'
 import CommandPalette from './components/CommandPalette'
+import {
+  getLastConversationForAgent,
+  setLastConversationForAgent,
+  getLastActiveAgent,
+  setLastActiveAgent,
+} from './lib/conversationPersistence'
 
 const MOBILE_BREAKPOINT = 768
 
@@ -128,7 +134,9 @@ function App() {
   const handleSelectAgent = useCallback((agent: Agent) => {
     setSelectedAgent(agent)
     setActiveTab('Chat')
-    setActiveConversationId(null)
+    // Restore the last conversation for this agent instead of clearing to a
+    // blank "New conversation" view (issue #139).
+    setActiveConversationId(getLastConversationForAgent(agent.id))
     if (isMobile) setSidebarOpen(false)
   }, [isMobile])
 
@@ -138,14 +146,13 @@ function App() {
     if (hasAutoRestored.current || agents.length === 0) return
     hasAutoRestored.current = true
 
-    const savedConvId = sessionStorage.getItem('agent-os-last-conv')
-    const savedAgentId = sessionStorage.getItem('agent-os-last-agent')
-    if (savedConvId && savedAgentId) {
+    const savedAgentId = getLastActiveAgent()
+    if (savedAgentId) {
       const agent = agents.find((a) => a.id === savedAgentId)
       if (agent) {
         // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing restored chat selection from external sessionStorage after agents load
         setSelectedAgent(agent)
-        setActiveConversationId(savedConvId)
+        setActiveConversationId(getLastConversationForAgent(agent.id))
         setActiveTab('Chat')
         return
       }
@@ -156,14 +163,11 @@ function App() {
     // which would bury the dashboard behind a chat view on every page load.
   }, [agents])
 
-  // Persist active conversation to sessionStorage on change
+  // Persist active conversation to sessionStorage on change (per-agent map)
   useEffect(() => {
-    if (activeConversationId && selectedAgent) {
-      sessionStorage.setItem('agent-os-last-conv', activeConversationId)
-      sessionStorage.setItem('agent-os-last-agent', selectedAgent.id)
-    } else {
-      sessionStorage.removeItem('agent-os-last-conv')
-      sessionStorage.removeItem('agent-os-last-agent')
+    if (selectedAgent) {
+      setLastActiveAgent(selectedAgent.id)
+      setLastConversationForAgent(selectedAgent.id, activeConversationId)
     }
   }, [activeConversationId, selectedAgent])
 
