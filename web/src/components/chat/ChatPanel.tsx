@@ -90,22 +90,31 @@ export function ChatPanel({ agent, activeConversationId, onConversationLoaded, o
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agent.id])
 
-  // Load conversation when activeConversationId changes
+  // Load conversation when activeConversationId changes.
+  // Covers two scenarios:
+  //   1. User clicks a different conversation in the sidebar (activeConversationId !== conversationId).
+  //   2. Component remounts due to React key change (App.tsx key={selectedAgent.id}):
+  //      conversationId is initialised to activeConversationId, so a strict !== check
+  //      would never fire. Detect this "fresh mount with pending conv" via messages.length === 0.
   useEffect(() => {
-    if (activeConversationId && activeConversationId !== conversationId) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing local conversation id from external activeConversationId prop before async history load
-      setConversationId(activeConversationId)
-      setLoadingHistory(true)
-      getMessages(activeConversationId)
-        .then((msgs) => {
-          setMessages(msgs)
-          setPartialContent('')
-          onConversationLoaded()
-        })
-        .catch(() => {
-          showToast('Failed to load conversation', 'error')
-        })
-        .finally(() => setLoadingHistory(false))
+    if (activeConversationId) {
+      const isDifferentConv = activeConversationId !== conversationId
+      const isFreshMount = conversationId === activeConversationId && messages.length === 0 && !streaming
+      if (isDifferentConv || isFreshMount) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing local conversation id from external activeConversationId prop before async history load
+        setConversationId(activeConversationId)
+        setLoadingHistory(true)
+        getMessages(activeConversationId)
+          .then((msgs) => {
+            setMessages(msgs)
+            setPartialContent('')
+            onConversationLoaded()
+          })
+          .catch(() => {
+            showToast('Failed to load conversation', 'error')
+          })
+          .finally(() => setLoadingHistory(false))
+      }
     } else if (activeConversationId === null && conversationId !== null) {
       // New chat — clear everything
       setMessages([])
