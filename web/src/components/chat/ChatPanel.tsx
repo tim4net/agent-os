@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Agent, Message, Model, AgentCommand } from '../../api/client'
 import { Icon } from '../Icon'
 
@@ -62,6 +62,7 @@ export function ChatPanel({ agent, activeConversationId, onConversationLoaded, o
   const [conversationId, setConversationId] = useState<string | null>(activeConversationId)
   const [exporting, setExporting] = useState(false)
   const [loadingHistory, setLoadingHistory] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [slashMenuDismissed, setSlashMenuDismissed] = useState(false)
   const [slashCommands, setSlashCommands] = useState<AgentCommand[]>([])
   const [contextSources, setContextSources] = useState<string[]>([])
@@ -71,6 +72,9 @@ export function ChatPanel({ agent, activeConversationId, onConversationLoaded, o
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const slashMenuRef = useRef<HTMLDivElement>(null)
   const abortRef = useRef<AbortController | null>(null)
+  // Tracks the in-flight conversation-history request so it can be
+  // cancelled on navigation/unmount and guarded against stale state updates.
+  const loadControllerRef = useRef<AbortController | null>(null)
 
   const trimmedInput = input.trimStart()
   const slashFilter = trimmedInput.startsWith('/') ? trimmedInput.split(' ')[0].toLowerCase() : ''
@@ -90,29 +94,77 @@ export function ChatPanel({ agent, activeConversationId, onConversationLoaded, o
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agent.id])
 
+  // Load (or re-load) a conversation's history. Guards against hung requests
+  // (#122): a 10s AbortController timeout cancels stale loads and surfaces a
+  // retryable error state instead of leaving "Loading conversation..." up
+  // forever. Any in-flight load is cancelled first so navigation between
+  // conversations never races two requests.
+  const LOAD_HISTORY_TIMEOUT_MS = 10_000
+  const loadConversation = useCallback((convId: string) => {
+    // Cancel any previous in-flight load.
+    loadControllerRef.current?.abort()
+    const controller = new AbortController()
+    loadControllerRef.current = controller
+
+    setLoadingHistory(true)
+    setLoadError(null)
+
+    const timeoutId = window.setTimeout(() => controller.abort(), LOAD_HISTORY_TIMEOUT_MS)
+
+    getMessages(convId, controller.signal)
+      .then((msgs) => {
+        // Guard: if the request resolved after being aborted (timeout/nav),
+        // ignore the result.
+        if (controller.signal.aborted) return
+        setMessages(msgs)
+        setPartialContent('')
+        onConversationLoaded()
+      })
+      .catch(() => {
+        // Ignore outcomes for loads superseded by a newer selection.
+        if (loadControllerRef.current !== controller) return
+        const timedOut = controller.signal.aborted
+        setLoadError(
+          timedOut
+            ? 'Conversation is taking too long to load. It may be stale or unreachable.'
+            : 'Failed to load conversation. It may have been deleted or is temporarily unavailable.',
+        )
+        showToast(timedOut ? 'Conversation load timed out' : 'Failed to load conversation', 'error')
+      })
+      .finally(() => {
+        window.clearTimeout(timeoutId)
+        // Only clear the spinner if this is still the active load; a newer
+        // selection has already set its own spinner state.
+        if (loadControllerRef.current === controller) {
+          setLoadingHistory(false)
+        }
+      })
+  }, [onConversationLoaded])
+
   // Load conversation when activeConversationId changes
   useEffect(() => {
-    if (activeConversationId && activeConversationId !== conversationId) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing local conversation id from external activeConversationId prop before async history load
-      setConversationId(activeConversationId)
-      setLoadingHistory(true)
-      getMessages(activeConversationId)
-        .then((msgs) => {
-          setMessages(msgs)
-          setPartialContent('')
-          onConversationLoaded()
-        })
-        .catch(() => {
-          showToast('Failed to load conversation', 'error')
-        })
-        .finally(() => setLoadingHistory(false))
+    if (activeConversationId) {
+      const isDifferentConv = activeConversationId !== conversationId
+      // Fresh-mount detection: React key={selectedAgent.id} remounts ChatPanel,
+      // initializing conversationId to activeConversationId — the !== check above
+      // never fires. Detect via messages.length === 0 on a non-streaming mount.
+      const isFreshMount = conversationId === activeConversationId && messages.length === 0 && !streaming
+      if (isDifferentConv || isFreshMount) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing local conversation id from external activeConversationId prop before async history load
+        setConversationId(activeConversationId)
+        loadConversation(activeConversationId)
+      }
     } else if (activeConversationId === null && conversationId !== null) {
       // New chat — clear everything
       setMessages([])
       setConversationId(null)
       setPartialContent('')
       setInput('')
+      setLoadError(null)
+      loadControllerRef.current?.abort()
     }
+    // Cancel any in-flight history load when navigating away / unmounting.
+    return () => loadControllerRef.current?.abort()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeConversationId])
 
@@ -439,9 +491,37 @@ export function ChatPanel({ agent, activeConversationId, onConversationLoaded, o
         </div>
       )}
 
+      {/* Load-error banner with retry (#122) */}
+      {loadError && !loadingHistory && (
+        <div className="px-5 py-3 bg-[rgba(239,68,68,0.08)] text-[var(--accent-red)] text-xs flex flex-col gap-2 border-b border-[var(--border-subtle)]">
+          <div className="flex items-center gap-2">
+            <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+            </svg>
+            <span>{loadError}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => { if (conversationId) loadConversation(conversationId) }}
+              className="pill-btn pill-btn--primary text-xs py-1.5 px-3"
+            >
+              Retry
+            </button>
+            <button
+              type="button"
+              onClick={onNewChat}
+              className="pill-btn pill-btn--ghost text-xs py-1.5 px-3"
+            >
+              Start new chat
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Messages area */}
       <div className="flex-1 overflow-y-auto px-5 py-6">
-        {messages.length === 0 && !partialContent && !streaming && (
+        {messages.length === 0 && !partialContent && !streaming && !loadError && (
           <div className="flex flex-col items-center justify-center h-full fade-in">
             <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-[var(--accent-blue)] via-[var(--accent-purple)] to-[var(--accent-cyan)] flex items-center justify-center mb-4 shadow-[var(--shadow-glow)]">
               <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
