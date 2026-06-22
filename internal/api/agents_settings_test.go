@@ -147,3 +147,48 @@ func TestDeleteAgentLifecycle(t *testing.T) {
 		t.Fatalf("delete status = %d, want 204 (id=%s)", dRec.Code, id)
 	}
 }
+
+// TestCreateAgentDefaultsDisplayNameToName verifies that when display_name is
+// omitted the handler falls back to the agent's name rather than rejecting the
+// request (#121). It also confirms an explicit display_name is preserved.
+func TestCreateAgentDefaultsDisplayNameToName(t *testing.T) {
+	a := newTestAPIForAgents(t)
+
+	// 1. Omitted display_name -> defaults to name.
+	body, _ := json.Marshal(CreateAgentRequest{
+		Name: "fallback-bot", Harness: "generic", BaseURL: "http://fb:8080",
+	})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/agents", bytes.NewReader(body))
+	req = req.WithContext(withTestOwner(req.Context()))
+	a.Router().ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create (no display_name) status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var got agentView
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode created: %v", err)
+	}
+	if got.DisplayName != "fallback-bot" {
+		t.Fatalf("display_name = %q, want %q (fallback to name)", got.DisplayName, "fallback-bot")
+	}
+
+	// 2. Explicit display_name -> preserved verbatim.
+	body2, _ := json.Marshal(CreateAgentRequest{
+		Name: "named-bot", DisplayName: "Fancy Bot", Harness: "generic", BaseURL: "http://nb:8080",
+	})
+	rec2 := httptest.NewRecorder()
+	req2 := httptest.NewRequest(http.MethodPost, "/agents", bytes.NewReader(body2))
+	req2 = req2.WithContext(withTestOwner(req2.Context()))
+	a.Router().ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusCreated {
+		t.Fatalf("create (explicit display_name) status = %d, body=%s", rec2.Code, rec2.Body.String())
+	}
+	var got2 agentView
+	if err := json.Unmarshal(rec2.Body.Bytes(), &got2); err != nil {
+		t.Fatalf("decode created: %v", err)
+	}
+	if got2.DisplayName != "Fancy Bot" {
+		t.Fatalf("display_name = %q, want %q", got2.DisplayName, "Fancy Bot")
+	}
+}

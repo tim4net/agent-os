@@ -228,8 +228,8 @@ export function listConversations(): Promise<Conversation[]> {
   return request<Conversation[]>('/api/conversations')
 }
 
-export function getMessages(convId: string): Promise<Message[]> {
-  return request<Message[]>(`/api/conversations/${convId}/messages`)
+export function getMessages(convId: string, signal?: AbortSignal): Promise<Message[]> {
+  return request<Message[]>(`/api/conversations/${convId}/messages`, { signal })
 }
 
 export function createConversation(agentId: string, title: string): Promise<Conversation> {

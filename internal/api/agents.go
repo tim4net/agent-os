@@ -84,9 +84,16 @@ func (a *API) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Name == "" || req.DisplayName == "" || req.Harness == "" || req.BaseURL == "" {
-		http.Error(w, "name, display_name, harness, and base_url are required", http.StatusBadRequest)
+	if req.Name == "" || req.Harness == "" || req.BaseURL == "" {
+		http.Error(w, "name, harness, and base_url are required", http.StatusBadRequest)
 		return
+	}
+
+	// display_name is optional: fall back to the agent's name (slug) when none is
+	// supplied. This guarantees every agent has a meaningful label in the UI
+	// instead of a placeholder/empty value, regardless of how it was registered.
+	if req.DisplayName == "" {
+		req.DisplayName = req.Name
 	}
 
 	// Validate the harness is a registered type so we never persist an agent
