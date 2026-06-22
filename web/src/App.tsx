@@ -46,8 +46,9 @@ type Tab = (typeof tabs)[number]
 
 // Tabs that consume the chat/agent sidebar (agent picker + conversation tree).
 // Chat is the primary consumer; Create attributes generated media to the
-// selected agent. Every other tab ignores the sidebar, so it is unmounted there
-// — the content area reclaims the full width instead of carrying a dead column.
+// selected agent. Every other tab ignores the sidebar — but the sidebar is kept
+// mounted (hidden via CSS) so its state survives navigation (#120); the content
+// area still reclaims the full width because the hidden column is display:none.
 const SIDEBAR_TABS = new Set<Tab>(['Chat', 'Create'])
 
 /** Reusable segmented toggle for sub-views within a tab */
@@ -221,9 +222,12 @@ function App() {
   }
 
   // ── Contextual sidebar ──
-  // The chat/agent sidebar is mounted only on tabs that use it (Chat, Create);
-  // on every other tab it is unmounted so the content area reclaims the width.
-  // Mobile is unchanged: the sidebar is always an on-demand overlay there.
+  // The sidebar is always mounted so its state (agent list, conversation tree,
+  // expanded folders) survives navigation between tabs (#120). On desktop, tabs
+  // that don't consume it get the sidebar hidden via CSS (display:none) — the
+  // content area reclaims the width — rather than unmounting it, which wiped the
+  // agent list and re-fetched conversations on every tab return. Mobile is
+  // unchanged: the sidebar is an on-demand overlay there.
   const tabConsumesSidebar = SIDEBAR_TABS.has(activeTab)
   const showSidebar = isMobile || tabConsumesSidebar
   const effectiveCollapsed = isMobile ? false : sidebarCollapsed
@@ -428,25 +432,35 @@ function App() {
         isMobile={isMobile}
       />
 
-      {/* Sidebar: inline on desktop, overlay on mobile. Unmounted on tabs that
-          don't use it (Build/Knowledge/Automate/Observe/Control/Settings) so the
-          content area reclaims that width. */}
-      {showSidebar && (
-        <div className={isMobile ? (sidebarOpen ? 'fixed inset-y-0 left-0 z-50' : 'hidden') : ''}>
-          <Sidebar
-            agents={agents}
-            selectedAgent={selectedAgent}
-            onSelectAgent={handleSelectAgent}
-            onAgentsChanged={refreshAgents}
-            collapsed={effectiveCollapsed}
-            activeConversationId={activeConversationId}
-            onSelectConversation={handleSelectConversation}
-            onNewChat={handleNewChat}
-            onNewChatWithAgent={handleNewChatWithAgent}
-            conversationVersion={conversationVersion}
-          />
-        </div>
-      )}
+      {/* Sidebar: always mounted so its state (agent list, conversation tree,
+          expanded folders) survives navigation between tabs (#120). Hidden via
+          CSS on tabs that don't use it (Build/Knowledge/Automate/Observe/Control/
+          Settings) so the content area reclaims that width — instead of
+          unmounting, which wiped the agent list and re-fetched on every return. */}
+      <div
+        className={
+          isMobile
+            ? sidebarOpen
+              ? 'fixed inset-y-0 left-0 z-50'
+              : 'hidden'
+            : showSidebar
+              ? ''
+              : 'hidden'
+        }
+      >
+        <Sidebar
+          agents={agents}
+          selectedAgent={selectedAgent}
+          onSelectAgent={handleSelectAgent}
+          onAgentsChanged={refreshAgents}
+          collapsed={effectiveCollapsed}
+          activeConversationId={activeConversationId}
+          onSelectConversation={handleSelectConversation}
+          onNewChat={handleNewChat}
+          onNewChatWithAgent={handleNewChatWithAgent}
+          conversationVersion={conversationVersion}
+        />
+      </div>
 
       <div className="flex-1 flex flex-col min-w-0">
         {/* Content with page transition */}
