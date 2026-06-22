@@ -25,3 +25,8 @@ LIMIT $3;
 
 -- name: DeleteMemory :exec
 DELETE FROM memory_index WHERE file_path = $1 AND owner_id = $2;
+
+-- name: CountMemoryByProject :one
+-- Workspace surface (issue #134): how many notes belong to a project.
+SELECT COUNT(*) FROM memory_index
+WHERE owner_id = $1 AND (project_id = $2 OR $2 IS NULL);

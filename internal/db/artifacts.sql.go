@@ -27,10 +27,30 @@ func (q *Queries) CountArtifacts(ctx context.Context, arg CountArtifactsParams) 
 	return count, err
 }
 
+const countArtifactsByProject = `-- name: CountArtifactsByProject :one
+SELECT COUNT(*) FROM artifacts
+WHERE owner_id = $1
+  AND project_id = $2
+  AND ($3::text IS NULL OR $3::text = '' OR type = $3)
+`
+
+type CountArtifactsByProjectParams struct {
+	OwnerID   pgtype.UUID `json:"owner_id"`
+	ProjectID pgtype.UUID `json:"project_id"`
+	Column3   string      `json:"column_3"`
+}
+
+func (q *Queries) CountArtifactsByProject(ctx context.Context, arg CountArtifactsByProjectParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countArtifactsByProject, arg.OwnerID, arg.ProjectID, arg.Column3)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createArtifact = `-- name: CreateArtifact :one
 INSERT INTO artifacts (owner_id, agent_id, type, title, description, file_path, mime_type, metadata)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING id, agent_id, type, title, description, file_path, mime_type, metadata, created_at, owner_id
+RETURNING id, agent_id, type, title, description, file_path, mime_type, metadata, created_at, owner_id, project_id
 `
 
 type CreateArtifactParams struct {
@@ -67,6 +87,7 @@ func (q *Queries) CreateArtifact(ctx context.Context, arg CreateArtifactParams) 
 		&i.Metadata,
 		&i.CreatedAt,
 		&i.OwnerID,
+		&i.ProjectID,
 	)
 	return i, err
 }
@@ -86,7 +107,7 @@ func (q *Queries) DeleteArtifact(ctx context.Context, arg DeleteArtifactParams) 
 }
 
 const getArtifact = `-- name: GetArtifact :one
-SELECT id, agent_id, type, title, description, file_path, mime_type, metadata, created_at, owner_id FROM artifacts WHERE id = $1 AND owner_id = $2
+SELECT id, agent_id, type, title, description, file_path, mime_type, metadata, created_at, owner_id, project_id FROM artifacts WHERE id = $1 AND owner_id = $2
 `
 
 type GetArtifactParams struct {
@@ -108,12 +129,13 @@ func (q *Queries) GetArtifact(ctx context.Context, arg GetArtifactParams) (Artif
 		&i.Metadata,
 		&i.CreatedAt,
 		&i.OwnerID,
+		&i.ProjectID,
 	)
 	return i, err
 }
 
 const getArtifactByPath = `-- name: GetArtifactByPath :one
-SELECT id, agent_id, type, title, description, file_path, mime_type, metadata, created_at, owner_id FROM artifacts WHERE file_path = $1 AND owner_id = $2
+SELECT id, agent_id, type, title, description, file_path, mime_type, metadata, created_at, owner_id, project_id FROM artifacts WHERE file_path = $1 AND owner_id = $2
 `
 
 type GetArtifactByPathParams struct {
@@ -135,12 +157,13 @@ func (q *Queries) GetArtifactByPath(ctx context.Context, arg GetArtifactByPathPa
 		&i.Metadata,
 		&i.CreatedAt,
 		&i.OwnerID,
+		&i.ProjectID,
 	)
 	return i, err
 }
 
 const listArtifacts = `-- name: ListArtifacts :many
-SELECT id, agent_id, type, title, description, file_path, mime_type, metadata, created_at, owner_id FROM artifacts
+SELECT id, agent_id, type, title, description, file_path, mime_type, metadata, created_at, owner_id, project_id FROM artifacts
 WHERE owner_id = $1
   AND ($2::text IS NULL OR $2::text = '' OR type = $2)
   AND ($3::uuid IS NULL OR agent_id = $3)
@@ -182,6 +205,7 @@ func (q *Queries) ListArtifacts(ctx context.Context, arg ListArtifactsParams) ([
 			&i.Metadata,
 			&i.CreatedAt,
 			&i.OwnerID,
+			&i.ProjectID,
 		); err != nil {
 			return nil, err
 		}
@@ -191,4 +215,78 @@ func (q *Queries) ListArtifacts(ctx context.Context, arg ListArtifactsParams) ([
 		return nil, err
 	}
 	return items, nil
+}
+
+const listArtifactsByProject = `-- name: ListArtifactsByProject :many
+SELECT id, agent_id, type, title, description, file_path, mime_type, metadata, created_at, owner_id, project_id FROM artifacts
+WHERE owner_id = $1
+  AND project_id = $2
+  AND ($3::text IS NULL OR $3::text = '' OR type = $3)
+ORDER BY created_at DESC
+LIMIT $4 OFFSET $5
+`
+
+type ListArtifactsByProjectParams struct {
+	OwnerID   pgtype.UUID `json:"owner_id"`
+	ProjectID pgtype.UUID `json:"project_id"`
+	Column3   string      `json:"column_3"`
+	Limit     int32       `json:"limit"`
+	Offset    int32       `json:"offset"`
+}
+
+// Workspace scoping (issue #134): artifacts scoped to a project, with the
+// same optional type filter as ListArtifacts.
+func (q *Queries) ListArtifactsByProject(ctx context.Context, arg ListArtifactsByProjectParams) ([]Artifact, error) {
+	rows, err := q.db.Query(ctx, listArtifactsByProject,
+		arg.OwnerID,
+		arg.ProjectID,
+		arg.Column3,
+		arg.Limit,
+		arg.Offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Artifact
+	for rows.Next() {
+		var i Artifact
+		if err := rows.Scan(
+			&i.ID,
+			&i.AgentID,
+			&i.Type,
+			&i.Title,
+			&i.Description,
+			&i.FilePath,
+			&i.MimeType,
+			&i.Metadata,
+			&i.CreatedAt,
+			&i.OwnerID,
+			&i.ProjectID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const setArtifactProject = `-- name: SetArtifactProject :exec
+UPDATE artifacts SET project_id = $2
+WHERE id = $1 AND owner_id = $3
+`
+
+type SetArtifactProjectParams struct {
+	ID        pgtype.UUID `json:"id"`
+	ProjectID pgtype.UUID `json:"project_id"`
+	OwnerID   pgtype.UUID `json:"owner_id"`
+}
+
+// Assign (or clear) an artifact to a workspace.
+func (q *Queries) SetArtifactProject(ctx context.Context, arg SetArtifactProjectParams) error {
+	_, err := q.db.Exec(ctx, setArtifactProject, arg.ID, arg.ProjectID, arg.OwnerID)
+	return err
 }

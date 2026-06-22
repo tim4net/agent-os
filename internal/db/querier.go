@@ -40,6 +40,7 @@ type Querier interface {
 	// Counts app instances matching the tenant filter (for pagination total).
 	CountAppInstances(ctx context.Context, arg CountAppInstancesParams) (int64, error)
 	CountArtifacts(ctx context.Context, arg CountArtifactsParams) (int64, error)
+	CountArtifactsByProject(ctx context.Context, arg CountArtifactsByProjectParams) (int64, error)
 	CountDelegations(ctx context.Context, arg CountDelegationsParams) (int64, error)
 	// Returns total count of distinct (harness, session_id) matching the tenant filter.
 	CountEmitterHealthSessions(ctx context.Context, tenant string) (int64, error)
@@ -50,6 +51,8 @@ type Querier interface {
 	// Counts liveness records matching the tenant filter.
 	CountHostLiveness(ctx context.Context, arg CountHostLivenessParams) (int64, error)
 	CountMailbox(ctx context.Context, arg CountMailboxParams) (int64, error)
+	// Workspace surface (issue #134): how many notes belong to a project.
+	CountMemoryByProject(ctx context.Context, arg CountMemoryByProjectParams) (int64, error)
 	CountRunLog(ctx context.Context) (int64, error)
 	CountRunLogByWpRef(ctx context.Context, wpRef string) (int64, error)
 	// Counts distinct (harness, session_id) pairs that have at least one
@@ -208,12 +211,17 @@ type Querier interface {
 	// Tenant is required (never empty — ADR-002).
 	ListActiveSessions(ctx context.Context, tenant string) ([]ListActiveSessionsRow, error)
 	ListAgents(ctx context.Context, ownerID pgtype.UUID) ([]Agent, error)
+	// Workspace scoping (issue #134): agents assigned to a given project.
+	ListAgentsByProject(ctx context.Context, arg ListAgentsByProjectParams) ([]Agent, error)
 	ListAllGrants(ctx context.Context, ownerID pgtype.UUID) ([]AgentGrant, error)
 	// Lists app instances scoped to a tenant. Returns all if tenant is empty.
 	// Supports pagination with limit/offset.
 	// Orders by last_probed_at DESC NULLS LAST (never-probed instances at end).
 	ListAppInstances(ctx context.Context, arg ListAppInstancesParams) ([]AppInstance, error)
 	ListArtifacts(ctx context.Context, arg ListArtifactsParams) ([]Artifact, error)
+	// Workspace scoping (issue #134): artifacts scoped to a project, with the
+	// same optional type filter as ListArtifacts.
+	ListArtifactsByProject(ctx context.Context, arg ListArtifactsByProjectParams) ([]Artifact, error)
 	ListConversations(ctx context.Context, arg ListConversationsParams) ([]ListConversationsRow, error)
 	ListDelegations(ctx context.Context, arg ListDelegationsParams) ([]Delegation, error)
 	ListFindings(ctx context.Context, arg ListFindingsParams) ([]Finding, error)
@@ -294,6 +302,10 @@ type Querier interface {
 	// mail). Expired mail (expires_at in the past) is excluded from inbox listings
 	// and unread counts so the absence is observable without a background sweeper.
 	SendMail(ctx context.Context, arg SendMailParams) (AgentMail, error)
+	// Assign (or clear, when project_id is NULL) an agent to a workspace.
+	SetAgentProject(ctx context.Context, arg SetAgentProjectParams) (Agent, error)
+	// Assign (or clear) an artifact to a workspace.
+	SetArtifactProject(ctx context.Context, arg SetArtifactProjectParams) error
 	SetControlMode(ctx context.Context, mode ControlMode) (ControlState, error)
 	UpdateAgent(ctx context.Context, arg UpdateAgentParams) (Agent, error)
 	UpdateAgentConfig(ctx context.Context, arg UpdateAgentConfigParams) (Agent, error)
