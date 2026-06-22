@@ -1,5 +1,8 @@
 -- name: ListConversations :many
-SELECT c.* FROM conversations c
+SELECT c.*, (
+    SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id
+) AS message_count
+FROM conversations c
 JOIN agents a ON c.agent_id = a.id
 WHERE a.visible = true
 AND c.owner_id = $1

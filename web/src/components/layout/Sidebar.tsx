@@ -156,9 +156,24 @@ export function Sidebar({
 
   function toggleAgentTree(agent: Agent) {
     const agentId = agent.id
-    // If clicking a different agent than currently selected, select it for chat
+    // If clicking a different agent than currently selected, switch to it.
+    // Instead of dropping into a blank "New conversation", auto-select the
+    // agent's most recent conversation so the user keeps their context (#139).
+    // onSelectConversation also sets the active agent, so it fully replaces the
+    // previous onSelectAgent(null-conversation) behaviour.
     if (selectedAgent?.id !== agentId) {
-      onSelectAgent(agent)
+      const latestConv = conversations
+        .filter((c) => c.agent_id === agentId)
+        .sort(
+          (a, b) =>
+            new Date(b.updated_at || b.created_at || 0).getTime() -
+            new Date(a.updated_at || a.created_at || 0).getTime(),
+        )[0]
+      if (latestConv) {
+        onSelectConversation(latestConv)
+      } else {
+        onSelectAgent(agent)
+      }
     }
     // Always toggle the tree expand/collapse
     setExpandedAgents((prev) => {
@@ -380,7 +395,7 @@ export function Sidebar({
                         }}
                         title="Configure agent"
                         aria-label="Configure agent"
-                        className="absolute right-1.5 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 p-1 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-active)] transition-all"
+                        className="absolute right-1.5 top-1/2 -translate-y-1/2 pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 p-1 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-active)] transition-all"
                       >
                         <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path
@@ -511,7 +526,7 @@ export function Sidebar({
                           }}
                           title="Configure agent"
                           aria-label="Configure agent"
-                          className="absolute right-1.5 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 p-1 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-active)] transition-all"
+                          className="absolute right-1.5 top-1/2 -translate-y-1/2 pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 p-1 rounded-lg text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-active)] transition-all"
                         >
                           <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path

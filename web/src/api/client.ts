@@ -23,6 +23,7 @@ export interface Conversation {
   summary: string | null
   created_at?: string
   updated_at?: string
+  message_count?: number
 }
 
 export interface Message {

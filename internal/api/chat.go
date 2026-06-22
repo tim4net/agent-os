@@ -69,6 +69,33 @@ func (a *API) CreateConversation(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(conv)
 }
 
+// listConversationsWithCount lists conversations (owner-scoped, optionally
+// filtered by agent) together with each conversation's message_count.
+// Mirrors the ListConversations sqlc query plus a correlated message count so
+// the frontend no longer sees message_count: 0 for every thread (#140).
+const listConversationsWithCount = `SELECT c.id, c.agent_id, c.title, c.metadata, c.created_at, c.updated_at, c.summary, c.owner_id,
+       (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id) AS message_count
+FROM conversations c
+JOIN agents a ON c.agent_id = a.id
+WHERE a.visible = true
+  AND c.owner_id = $1
+  AND ($2::uuid IS NULL OR c.agent_id = $2)
+ORDER BY c.updated_at DESC`
+
+// conversationListItem is a conversation augmented with its message_count for
+// the list endpoint response (#140).
+type conversationListItem struct {
+	ID           pgtype.UUID        `json:"id"`
+	AgentID      pgtype.UUID        `json:"agent_id"`
+	Title        pgtype.Text        `json:"title"`
+	Metadata     []byte             `json:"metadata"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+	Summary      pgtype.Text        `json:"summary"`
+	OwnerID      pgtype.UUID        `json:"owner_id"`
+	MessageCount int                `json:"message_count"`
+}
+
 // ListConversations returns conversations, optionally filtered by agent_id.
 func (a *API) ListConversations(w http.ResponseWriter, r *http.Request) {
 	ownerID, ok := OwnerIDFromContext(r.Context())
@@ -85,18 +112,46 @@ func (a *API) ListConversations(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	convs, err := a.queries.ListConversations(r.Context(), db.ListConversationsParams{OwnerID: ownerID, Column2: agentID})
+	// Run the list query through the pool directly so we can return the
+	// per-conversation message_count. The sqlc-generated ListConversations
+	// (internal/db/queries/conversations.sql) has been updated to match, but
+	// its generated Go has not been regenerated yet (#140).
+	rows, err := a.pool.Query(r.Context(), listConversationsWithCount, ownerID, agentID)
 	if err != nil {
+		slog.Error("list conversations: query failed", "error", err)
 		http.Error(w, "failed to list conversations", http.StatusInternalServerError)
 		return
 	}
+	defer rows.Close()
 
-	if convs == nil {
-		convs = []db.Conversation{}
+	items := []conversationListItem{}
+	for rows.Next() {
+		var c conversationListItem
+		if scanErr := rows.Scan(
+			&c.ID,
+			&c.AgentID,
+			&c.Title,
+			&c.Metadata,
+			&c.CreatedAt,
+			&c.UpdatedAt,
+			&c.Summary,
+			&c.OwnerID,
+			&c.MessageCount,
+		); scanErr != nil {
+			slog.Error("list conversations: scan failed", "error", scanErr)
+			http.Error(w, "failed to list conversations", http.StatusInternalServerError)
+			return
+		}
+		items = append(items, c)
+	}
+	if err := rows.Err(); err != nil {
+		slog.Error("list conversations: rows iteration error", "error", err)
+			http.Error(w, "failed to list conversations", http.StatusInternalServerError)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(convs)
+	json.NewEncoder(w).Encode(items)
 }
 
 // GetConversationMessages returns all messages in a conversation.
