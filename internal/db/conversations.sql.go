@@ -205,11 +205,13 @@ func (q *Queries) GetLastUserMessage(ctx context.Context, arg GetLastUserMessage
 }
 
 const listConversations = `-- name: ListConversations :many
-SELECT c.id, c.agent_id, c.title, c.metadata, c.created_at, c.updated_at, c.summary, c.owner_id FROM conversations c
+SELECT c.id, c.agent_id, c.title, c.metadata, c.created_at, c.updated_at, c.summary, c.owner_id, COUNT(m.id)::int AS message_count FROM conversations c
 JOIN agents a ON c.agent_id = a.id
+LEFT JOIN messages m ON m.conversation_id = c.id AND m.owner_id = c.owner_id
 WHERE a.visible = true
 AND c.owner_id = $1
 AND ($2::uuid IS NULL OR c.agent_id = $2)
+GROUP BY c.id
 ORDER BY c.updated_at DESC
 `
 
@@ -218,15 +220,27 @@ type ListConversationsParams struct {
 	Column2 pgtype.UUID `json:"column_2"`
 }
 
-func (q *Queries) ListConversations(ctx context.Context, arg ListConversationsParams) ([]Conversation, error) {
+type ListConversationsRow struct {
+	ID           pgtype.UUID        `json:"id"`
+	AgentID      pgtype.UUID        `json:"agent_id"`
+	Title        pgtype.Text        `json:"title"`
+	Metadata     []byte             `json:"metadata"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+	Summary      pgtype.Text        `json:"summary"`
+	OwnerID      pgtype.UUID        `json:"owner_id"`
+	MessageCount int32              `json:"message_count"`
+}
+
+func (q *Queries) ListConversations(ctx context.Context, arg ListConversationsParams) ([]ListConversationsRow, error) {
 	rows, err := q.db.Query(ctx, listConversations, arg.OwnerID, arg.Column2)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Conversation
+	var items []ListConversationsRow
 	for rows.Next() {
-		var i Conversation
+		var i ListConversationsRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.AgentID,
@@ -236,6 +250,7 @@ func (q *Queries) ListConversations(ctx context.Context, arg ListConversationsPa
 			&i.UpdatedAt,
 			&i.Summary,
 			&i.OwnerID,
+			&i.MessageCount,
 		); err != nil {
 			return nil, err
 		}

@@ -92,7 +92,7 @@ func (a *API) ListConversations(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if convs == nil {
-		convs = []db.Conversation{}
+		convs = []db.ListConversationsRow{}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
