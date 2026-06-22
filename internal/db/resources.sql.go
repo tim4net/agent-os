@@ -381,6 +381,16 @@ WHERE g.agent_id = $1
 ORDER BY r.kind, r.label
 `
 
+// ListResourcesForAgent filters ONLY by agent_id and intentionally does NOT
+// re-check owner_id. Cross-owner isolation is enforced one layer up, at
+// GRANT CREATION: GrantAgentResource (internal/api/resources.go) validates that
+// BOTH the agent and the resource belong to the calling owner via the
+// owner-scoped GetAgent/GetResource lookups before it inserts an agent_grants
+// row, so every grant is inherently intra-owner.
+//
+// DO NOT reuse this query from any code path that creates grants without that
+// ownership check — doing so would silently leak another owner's (possibly
+// secret) resources. Regression guard: TestGrantCrossOwnerIsolation.
 func (q *Queries) ListResourcesForAgent(ctx context.Context, agentID pgtype.UUID) ([]Resource, error) {
 	rows, err := q.db.Query(ctx, listResourcesForAgent, agentID)
 	if err != nil {

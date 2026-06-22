@@ -96,8 +96,18 @@ export function ConversationHistory({
                     : 'hover:bg-gray-800/50'
                 }`}
               >
-                <div className="text-sm text-gray-300 truncate">
-                  {conv.title || 'Untitled'}
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-sm text-gray-300 truncate flex-1 min-w-0">
+                    {conv.title || 'Untitled'}
+                  </div>
+                  {conv.message_count != null && conv.message_count > 0 && (
+                    <span
+                      className="text-[10px] text-gray-500 flex-shrink-0"
+                      title={`${conv.message_count} message${conv.message_count === 1 ? '' : 's'}`}
+                    >
+                      {conv.message_count}
+                    </span>
+                  )}
                 </div>
               </button>
             ))}

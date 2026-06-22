@@ -455,9 +455,19 @@ export function Sidebar({
                                       {isActive && (
                                         <span className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-3 rounded-r-full bg-gradient-to-b from-[var(--accent-blue)] to-[var(--accent-cyan)]" />
                                       )}
-                                      <span className={`block truncate ${isActive ? 'text-[var(--text-primary)]' : convLabel ? 'text-[var(--text-secondary)]' : 'text-[var(--text-muted)]'}`}>
-                                        {displayText}
-                                      </span>
+                                      <div className="flex items-center justify-between gap-2">
+                                        <span className={`block truncate ${isActive ? 'text-[var(--text-primary)]' : convLabel ? 'text-[var(--text-secondary)]' : 'text-[var(--text-muted)]'}`}>
+                                          {displayText}
+                                        </span>
+                                        {conv.message_count != null && conv.message_count > 0 && (
+                                          <span
+                                            className="text-[10px] text-[var(--text-muted)] flex-shrink-0 tabular-nums"
+                                            title={`${conv.message_count} message${conv.message_count === 1 ? '' : 's'}`}
+                                          >
+                                            {conv.message_count}
+                                          </span>
+                                        )}
+                                      </div>
                                     </button>
                                   )
                                 })}

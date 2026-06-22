@@ -214,7 +214,7 @@ type Querier interface {
 	// Orders by last_probed_at DESC NULLS LAST (never-probed instances at end).
 	ListAppInstances(ctx context.Context, arg ListAppInstancesParams) ([]AppInstance, error)
 	ListArtifacts(ctx context.Context, arg ListArtifactsParams) ([]Artifact, error)
-	ListConversations(ctx context.Context, arg ListConversationsParams) ([]Conversation, error)
+	ListConversations(ctx context.Context, arg ListConversationsParams) ([]ListConversationsRow, error)
 	ListDelegations(ctx context.Context, arg ListDelegationsParams) ([]Delegation, error)
 	ListFindings(ctx context.Context, arg ListFindingsParams) ([]Finding, error)
 	ListFindingsByClass(ctx context.Context, arg ListFindingsByClassParams) ([]Finding, error)
@@ -236,6 +236,16 @@ type Querier interface {
 	ListProjects(ctx context.Context, ownerID pgtype.UUID) ([]Project, error)
 	ListResources(ctx context.Context, ownerID pgtype.UUID) ([]Resource, error)
 	ListResourcesByKind(ctx context.Context, arg ListResourcesByKindParams) ([]Resource, error)
+	// ListResourcesForAgent filters ONLY by agent_id and intentionally does NOT
+	// re-check owner_id. Cross-owner isolation is enforced one layer up, at
+	// GRANT CREATION: GrantAgentResource (internal/api/resources.go) validates that
+	// BOTH the agent and the resource belong to the calling owner via the
+	// owner-scoped GetAgent/GetResource lookups before it inserts an agent_grants
+	// row, so every grant is inherently intra-owner.
+	//
+	// DO NOT reuse this query from any code path that creates grants without that
+	// ownership check — doing so would silently leak another owner's (possibly
+	// secret) resources. Regression guard: TestGrantCrossOwnerIsolation.
 	ListResourcesForAgent(ctx context.Context, agentID pgtype.UUID) ([]Resource, error)
 	ListRunLog(ctx context.Context, arg ListRunLogParams) ([]RunLog, error)
 	ListRunLogByWpRef(ctx context.Context, arg ListRunLogByWpRefParams) ([]RunLog, error)

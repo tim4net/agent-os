@@ -23,6 +23,8 @@ export interface Conversation {
   summary: string | null
   created_at?: string
   updated_at?: string
+  /** Number of messages in the conversation (populated by GET /api/conversations). */
+  message_count?: number
 }
 
 export interface Message {
