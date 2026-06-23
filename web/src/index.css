@@ -65,6 +65,20 @@
   --duration-fast:  150ms;
   --duration-base:  250ms;
   --duration-slow:  400ms;
+
+  /* Density base — the root font-size drives Tailwind's rem-based spacing
+     scale (p-*, gap-*, text-*), so changing it cascades app-wide. The
+     DensityProvider toggles <html data-density="…">; the selectors below
+     scale it for a genuine layout/density change. */
+  font-size: 16px; /* cozy default */
+}
+
+/* Density (layout) overrides — set on <html> by DensityProvider. */
+html[data-density='compact'] {
+  font-size: 14px; /* ~12% tighter spacing & text */
+}
+html[data-density='comfortable'] {
+  font-size: 18px; /* ~12% roomier spacing & text */
 }
 
 /* ---------- Tailwind v4 @theme extensions ---------- */
