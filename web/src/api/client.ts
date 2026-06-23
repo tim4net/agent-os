@@ -507,6 +507,38 @@ export interface StudioProvider {
   available: boolean
 }
 
+/**
+ * Reuse the existing STT endpoint (POST /api/voice/transcribe -> Whisper via
+ * LiteLLM). Shared by VoiceButton and Talk Mode so transcription is not
+ * duplicated (#124). Accepts a recorded audio blob, returns trimmed text.
+ */
+export async function transcribeAudio(blob: Blob): Promise<string> {
+  const formData = new FormData()
+  formData.append('file', blob, 'recording.webm')
+  const res = await fetch('/api/voice/transcribe', { method: 'POST', body: formData })
+  if (!res.ok) {
+    throw new Error(`Transcription failed (${res.status})`)
+  }
+  const data = (await res.json()) as { text?: string }
+  return (data.text ?? '').trim()
+}
+
+/**
+ * Reuse the existing TTS endpoint (POST /api/voice/synthesize -> tts-1 via
+ * LiteLLM). Returns synthesized speech as a Blob ready for playback (#124).
+ */
+export async function synthesizeSpeech(text: string, voice = 'alloy'): Promise<Blob> {
+  const res = await fetch('/api/voice/synthesize', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, voice }),
+  })
+  if (!res.ok) {
+    throw new Error(`Speech synthesis failed (${res.status})`)
+  }
+  return res.blob()
+}
+
 export function getStudioProviders(): Promise<StudioProvider[]> {
   return request<StudioProvider[]>('/api/studio/providers')
 }

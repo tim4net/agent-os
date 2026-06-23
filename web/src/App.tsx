@@ -9,6 +9,7 @@ import { VerticalRail } from './components/layout/VerticalRail'
 
 import MissionControl from './components/MissionControl'
 import { ChatPanel } from './components/chat/ChatPanel'
+import { TalkMode } from './components/chat/TalkMode'
 import { ArtifactGrid } from './components/workspace/ArtifactGrid'
 import { FileTree } from './components/memory/FileTree'
 import { NoteViewer } from './components/memory/NoteViewer'
@@ -93,6 +94,7 @@ function App() {
   const [memoryFilePath, setMemoryFilePath] = useState<string | null>(null)
   const [mediaPreviewKey, setMediaPreviewKey] = useState(0)
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null)
+  const [chatView, setChatView] = useState<'text' | 'talk'>('text')
   const [conversationVersion, setConversationVersion] = useState(0)
 
   // Sub-view states for merged tabs
@@ -248,14 +250,32 @@ function App() {
         }
         return (
           <ErrorBoundary name="Chat">
-            <ChatPanel
-              key={selectedAgent.id}
-              agent={selectedAgent}
-              activeConversationId={activeConversationId}
-              onConversationLoaded={() => {}}
-              onConversationCreated={handleConversationCreated}
-              onNewChat={handleNewChat}
-            />
+            <div className="flex flex-col h-full">
+              {/* Text / Talk mode toggle (#124) */}
+              <div className="flex justify-center py-2 border-b border-[var(--border-subtle)]">
+                <SubViewToggle
+                  options={[{ key: 'text', label: 'Text' }, { key: 'talk', label: 'Talk' }]}
+                  value={chatView}
+                  onChange={(v) => setChatView(v as 'text' | 'talk')}
+                />
+              </div>
+              {chatView === 'talk' ? (
+                <TalkMode
+                  agent={selectedAgent}
+                  conversationId={activeConversationId}
+                  onConversationCreated={handleConversationCreated}
+                />
+              ) : (
+                <ChatPanel
+                  key={selectedAgent.id}
+                  agent={selectedAgent}
+                  activeConversationId={activeConversationId}
+                  onConversationLoaded={() => {}}
+                  onConversationCreated={handleConversationCreated}
+                  onNewChat={handleNewChat}
+                />
+              )}
+            </div>
           </ErrorBoundary>
         )
 
