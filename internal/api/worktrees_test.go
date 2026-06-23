@@ -141,6 +141,45 @@ func TestHTTPWorktrees_BadRepoPath_Returns500(t *testing.T) {
 	}
 }
 
+// TestHTTPWorktrees_GitUnavailable_Returns503 is the negative test for
+// issue #123: when git is not available the endpoint must degrade to 503 with
+// a clean message, never an unhandled 500 or a leaked stack trace. It forces
+// the git-unavailable path via the AOS_GIT_BIN override.
+func TestHTTPWorktrees_GitUnavailable_Returns503(t *testing.T) {
+	t.Setenv("AOS_GIT_BIN", "/nonexistent/path/to/git")
+
+	a := &API{
+		queries: nil,
+		bus:     service.NewEventBus(),
+	}
+
+	srv := httptest.NewServer(a.WorktreeRoutes())
+	defer srv.Close()
+
+	// repo_path is irrelevant: the scanner fails at LookPath before touching it.
+	resp, err := http.Get(srv.URL + "/?repo_path=/anywhere")
+	if err != nil {
+		t.Fatalf("GET worktrees: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 when git unavailable, got %d", resp.StatusCode)
+	}
+
+	var body map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	msg := body["error"]
+	// The message must be clean — no leaked exec internals, binary path, or stack trace.
+	for _, leak := range []string{"exec", "fork", "/nonexistent", "panic", "goroutine"} {
+		if strings.Contains(msg, leak) {
+			t.Fatalf("error message leaks internals (%q present): %q", leak, msg)
+		}
+	}
+}
+
 // TestHTTPWorktrees_ExternalRefSurfacesForSCBranch tests that an SC-prefixed
 // branch name surfaces as external_ref in the response.
 func TestHTTPWorktrees_ExternalRefSurfacesForSCBranch(t *testing.T) {

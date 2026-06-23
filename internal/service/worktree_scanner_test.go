@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -364,5 +365,25 @@ func TestWorktreeScanner_GitStatusErrorReturnsError(t *testing.T) {
 	// The error should mention "git status"
 	if errStr := err.Error(); !strings.Contains(errStr, "git status") {
 		t.Fatalf("expected error to mention 'git status', got: %v", err)
+	}
+}
+
+// TestWorktreeScanner_GitUnavailable verifies the negative path for issue #123:
+// when the configured git binary cannot be found, Scan must return the
+// ErrGitUnavailable sentinel (so the handler can degrade to 503) rather than a
+// generic error. This is the mutation guard — reverting the LookPath check
+// turns this test RED because errors.Is(err, ErrGitUnavailable) would be false.
+func TestWorktreeScanner_GitUnavailable(t *testing.T) {
+	tmpDir := t.TempDir()
+	repoDir := filepath.Join(tmpDir, "repo")
+	must(os.MkdirAll(repoDir, 0o755))
+
+	scanner := NewWorktreeScannerWithGit(repoDir, "/nonexistent/path/to/git")
+	_, err := scanner.Scan(context.Background())
+	if err == nil {
+		t.Fatal("expected ErrGitUnavailable, got nil error")
+	}
+	if !errors.Is(err, ErrGitUnavailable) {
+		t.Fatalf("expected errors.Is(err, ErrGitUnavailable) to be true, got: %v", err)
 	}
 }

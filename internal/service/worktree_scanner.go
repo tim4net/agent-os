@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -9,6 +10,12 @@ import (
 	"strings"
 	"sync"
 )
+
+// ErrGitUnavailable is returned by Scan when the configured git executable
+// cannot be found on PATH (e.g. git is not installed in the API container).
+// The HTTP handler maps it to 503 so the endpoint degrades gracefully instead
+// of returning an unhandled 500 with a leaked stack trace (issue #123).
+var ErrGitUnavailable = errors.New("git is not available")
 
 // scrubbedGitEnv returns os.Environ() with GIT_DIR, GIT_WORK_TREE,
 // GIT_INDEX_FILE removed (so a parent git process — e.g. a pre-push hook —
@@ -56,14 +63,24 @@ type WorktreeInfo struct {
 // each worktree with branch + dirty status. It is safe for concurrent use.
 type WorktreeScanner struct {
 	gitDir  string // path to the .git directory (or repo root)
+	gitBin  string // git executable path (defaults to "git")
 	mu      sync.Mutex
 	lastErr error
 }
 
-// NewWorktreeScanner creates a scanner for the given repo root directory.
-// The directory must contain a .git subdirectory or be a bare repo.
+// NewWorktreeScanner creates a scanner for the given repo root directory that
+// uses the "git" found on PATH. The directory must contain a .git subdirectory
+// or be a bare repo.
 func NewWorktreeScanner(repoRoot string) *WorktreeScanner {
-	return &WorktreeScanner{gitDir: repoRoot}
+	return NewWorktreeScannerWithGit(repoRoot, "git")
+}
+
+// NewWorktreeScannerWithGit creates a scanner that invokes the given git
+// executable path instead of the default "git". Operators may point it at a
+// non-standard git, and tests use a nonexistent binary to force the
+// ErrGitUnavailable path (issue #123).
+func NewWorktreeScannerWithGit(repoRoot, gitBin string) *WorktreeScanner {
+	return &WorktreeScanner{gitDir: repoRoot, gitBin: gitBin}
 }
 
 // Scan runs `git worktree list` and `git status` for each worktree to
@@ -73,9 +90,17 @@ func (s *WorktreeScanner) Scan(ctx context.Context) ([]WorktreeInfo, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Fail fast if the git binary is not available (issue #123). Inside the
+	// API container git may be absent; we surface a distinct, checkable error
+	// so the handler can degrade to 503 instead of an unhandled 500.
+	if _, err := exec.LookPath(s.gitBin); err != nil {
+		s.lastErr = fmt.Errorf("%w: %v", ErrGitUnavailable, err)
+		return nil, s.lastErr
+	}
+
 	// Step 1: parse `git worktree list` output
 	// Format: <path> <commit-sha> [<branch-or-detached>]
-	listCmd := exec.CommandContext(ctx, "git", "-C", s.gitDir, "worktree", "list", "--porcelain")
+	listCmd := exec.CommandContext(ctx, s.gitBin, "-C", s.gitDir, "worktree", "list", "--porcelain")
 	listCmd.Env = scrubbedGitEnv()
 	out, err := listCmd.Output()
 	if err != nil {
@@ -90,7 +115,7 @@ func (s *WorktreeScanner) Scan(ctx context.Context) ([]WorktreeInfo, error) {
 	}
 
 	// Step 2: determine the default branch name so we can set IsMain.
-	defaultBranch := detectDefaultBranch(ctx, s.gitDir)
+	defaultBranch := detectDefaultBranch(ctx, s.gitDir, s.gitBin)
 
 	// Step 3: check dirty status for each worktree
 	results := make([]WorktreeInfo, 0, len(worktrees))
@@ -103,7 +128,7 @@ func (s *WorktreeScanner) Scan(ctx context.Context) ([]WorktreeInfo, error) {
 		}
 
 		// Check if dirty
-		statusCmd := exec.CommandContext(ctx, "git", "-C", wt.Path, "status", "--porcelain")
+		statusCmd := exec.CommandContext(ctx, s.gitBin, "-C", wt.Path, "status", "--porcelain")
 		statusCmd.Env = scrubbedGitEnv()
 		statusOut, statusErr := statusCmd.Output()
 		if statusErr != nil {
@@ -173,9 +198,9 @@ func parseWorktreeList(output string) ([]Worktree, error) {
 // It tries `git symbolic-ref refs/remotes/origin/HEAD` first (works in clones),
 // then falls back to `git branch --show-current` (works in local repos).
 // Returns empty string if detection fails (non-fatal).
-func detectDefaultBranch(ctx context.Context, gitDir string) string {
+func detectDefaultBranch(ctx context.Context, gitDir, gitBin string) string {
 	// Try origin/HEAD symbolic ref (yields "origin/main" → "main")
-	cmd := exec.CommandContext(ctx, "git", "-C", gitDir, "symbolic-ref", "refs/remotes/origin/HEAD")
+	cmd := exec.CommandContext(ctx, gitBin, "-C", gitDir, "symbolic-ref", "refs/remotes/origin/HEAD")
 	cmd.Env = scrubbedGitEnv()
 	out, err := cmd.Output()
 	if err == nil {
@@ -185,7 +210,7 @@ func detectDefaultBranch(ctx context.Context, gitDir string) string {
 	}
 
 	// Fallback: current branch of the repo
-	cmd = exec.CommandContext(ctx, "git", "-C", gitDir, "branch", "--show-current")
+	cmd = exec.CommandContext(ctx, gitBin, "-C", gitDir, "branch", "--show-current")
 	cmd.Env = scrubbedGitEnv()
 	out, err = cmd.Output()
 	if err == nil {

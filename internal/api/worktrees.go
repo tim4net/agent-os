@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"log/slog"
 	"net/http"
 	"os"
@@ -47,11 +48,27 @@ func (a *API) ListWorktrees(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	scanner := service.NewWorktreeScanner(repoPath)
+	// AOS_GIT_BIN overrides the git executable used by the scanner (defaults
+	// to "git"). Operators may point it at a non-standard git, and tests use a
+	// nonexistent binary to force the git-unavailable path (issue #123).
+	gitBin := os.Getenv("AOS_GIT_BIN")
+	if gitBin == "" {
+		gitBin = "git"
+	}
+
+	scanner := service.NewWorktreeScannerWithGit(repoPath, gitBin)
 	worktrees, err := scanner.Scan(r.Context())
 	if err != nil {
+		// Distinguish "git not available" (503, degraded) from genuine scan
+		// failures (500). Never leak raw exec internals to the client: log the
+		// detail server-side and return a clean message (issue #123).
+		if errors.Is(err, service.ErrGitUnavailable) {
+			slog.Default().Error("worktrees: git unavailable", "error", err, "repo", repoPath)
+			writeError(w, http.StatusServiceUnavailable, "git is not available in this environment; worktree listing is unavailable")
+			return
+		}
 		slog.Default().Error("worktrees: scan failed", "error", err, "repo", repoPath)
-		writeError(w, http.StatusInternalServerError, "failed to scan worktrees: "+err.Error())
+		writeError(w, http.StatusInternalServerError, "failed to scan worktrees")
 		return
 	}
 
