@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
 import { ThemeProvider } from './ThemeProvider'
+import { DensityProvider } from './DensityProvider'
 
 // Register service worker for PWA
 if ('serviceWorker' in navigator) {
@@ -16,7 +17,9 @@ if ('serviceWorker' in navigator) {
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ThemeProvider>
-      <App />
+      <DensityProvider>
+        <App />
+      </DensityProvider>
     </ThemeProvider>
   </StrictMode>,
 )

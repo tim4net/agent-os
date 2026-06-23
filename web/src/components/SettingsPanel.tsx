@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useTheme, THEME_META, type ThemeName } from '../theme-context'
+import { useDensity, DENSITY_META, type DensityName } from '../density-context'
 import { AgentsSection } from './settings/AgentsSection'
 import { AccessMatrix } from './settings/AccessMatrix'
 import { VaultManager } from './settings/VaultManager'
@@ -10,6 +11,7 @@ import { type Agent } from '../api/client'
 
 export default function SettingsPanel() {
   const { theme, setTheme } = useTheme()
+  const { density, setDensity } = useDensity()
   const [activeTab, setActiveTab] = useState<'access' | 'vault' | 'agents' | 'updates' | 'general'>('access')
   const [selectedAgentForAccess, setSelectedAgentForAccess] = useState<Agent | null>(null)
   const { agents, loading: agentsLoading } = useAgents()
@@ -125,6 +127,56 @@ export default function SettingsPanel() {
                   </div>
                   <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
                     {t.description}
+                  </p>
+                </button>
+              ))}
+            </div>
+          </section>
+
+          {/* Density / Layout Selector */}
+          <section className="mb-8">
+            <h3 className="text-sm font-medium uppercase tracking-wider mb-4" style={{ color: 'var(--text-muted)' }}>
+              Density
+            </h3>
+            <p className="text-xs mb-4" style={{ color: 'var(--text-muted)' }}>
+              Adjust spacing and text scale across the whole interface. Saved per browser.
+            </p>
+            <div
+              role="radiogroup"
+              aria-label="Density"
+              className="grid grid-cols-1 sm:grid-cols-3 gap-3 max-w-3xl"
+            >
+              {DENSITY_META.map((d) => (
+                <button
+                  key={d.name}
+                  role="radio"
+                  aria-checked={density === d.name}
+                  onClick={() => setDensity(d.name as DensityName)}
+                  className={`glass-card text-left p-4 cursor-pointer transition-all ${
+                    density === d.name
+                      ? 'ring-2 scale-[1.02]'
+                      : 'hover:scale-[1.01]'
+                  }`}
+                  style={{
+                    borderColor: density === d.name ? 'var(--accent-blue)' : undefined,
+                    boxShadow: density === d.name ? 'var(--shadow-glow)' : undefined,
+                  }}
+                >
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="font-semibold text-sm" style={{ color: 'var(--text-primary)' }}>
+                      {d.label}
+                    </span>
+                    {density === d.name && (
+                      <span
+                        className="ml-auto text-xs px-2 py-0.5 rounded-full"
+                        style={{ background: 'var(--accent-blue)', color: 'var(--text-inverse)' }}
+                      >
+                        Active
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs leading-relaxed" style={{ color: 'var(--text-muted)' }}>
+                    {d.description}
                   </p>
                 </button>
               ))}
