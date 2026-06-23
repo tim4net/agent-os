@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"path/filepath"
 	"sort"
 	"sync"
@@ -169,6 +168,15 @@ type VideoJob struct {
 	Error      string
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
+	// PollErrors counts consecutive transient upstream poll errors. It resets to
+	// 0 on any non-error response and, once it exceeds videoPollMaxErrors, the
+	// poller gives up and marks the job failed — so a flapping upstream cannot
+	// keep a billed job polling forever.
+	PollErrors int
+	// ProcessingStartedAt is when the job entered "processing". The poller uses
+	// it (vs UpdatedAt, which mutates on every state change) to enforce a hard
+	// max poll lifetime, so a job stuck "pending" upstream cannot poll forever.
+	ProcessingStartedAt time.Time
 }
 
 // videoJobMaxActive caps the number of jobs retained in memory. Completed/failed
@@ -181,6 +189,15 @@ const videoJobMaxActive = 500
 const videoJobTerminalTTL = 1 * time.Hour
 
 // VideoJobStore is an in-memory, thread-safe store for video jobs.
+//
+// Trade-off: job state lives only in process memory and is NOT persisted to the
+// DB. A deploy/crash mid-render therefore drops every in-flight "processing" job
+// with no recovery: the upstream render was already submitted (and billed by the
+// provider) but the artifact will never be finalized and the client polls until
+// its own error path gives up. This is acceptable for the current single-node,
+// non-critical rendering path; if/when billed video generation ships to
+// production, persist job state in the DB (or re-hydrate "processing" jobs from
+// the upstream on startup) before relying on this store.
 type VideoJobStore struct {
 	mu        sync.RWMutex
 	jobs      map[string]*VideoJob
@@ -280,6 +297,12 @@ func (s *VideoJobStore) SetProcessing(id, upstreamID string) {
 		job.State = "processing"
 		job.Progress = 50
 		job.UpstreamID = upstreamID
+		job.PollErrors = 0
+		// ProcessingStartedAt is the immutable anchor for the max-lifetime cap;
+		// do not overwrite if a job is re-set to processing (defensive idempotency).
+		if job.ProcessingStartedAt.IsZero() {
+			job.ProcessingStartedAt = time.Now()
+		}
 		job.UpdatedAt = time.Now()
 	}
 }
@@ -308,6 +331,62 @@ func (s *VideoJobStore) Fail(id, errMsg string) {
 	}
 }
 
+// IncrementPollError bumps a job's consecutive transient-error counter and
+// returns the new count + whether the job has exceeded the retry cap. The poller
+// uses this to decide whether to give up on a flapping upstream. A non-error
+// response (handled by the caller) is expected to reset via a separate Set call;
+// here we only count failures.
+func (s *VideoJobStore) IncrementPollError(id string, maxErrors int) (count int, exceeded bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	job, ok := s.jobs[id]
+	if !ok {
+		return 0, false
+	}
+	job.PollErrors++
+	job.UpdatedAt = time.Now()
+	return job.PollErrors, job.PollErrors > maxErrors
+}
+
+// ResetPollError clears a job's consecutive transient-error counter. Called on
+// any non-error upstream response so the cap measures *consecutive* failures
+// rather than a lifetime total.
+func (s *VideoJobStore) ResetPollError(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if job, ok := s.jobs[id]; ok {
+		job.PollErrors = 0
+	}
+}
+
+// FailStaleProcessing fails every "processing" job whose ProcessingStartedAt is
+// older than maxDuration. It returns the number failed. Called each tick so a
+// job stuck "pending" upstream (never an error, never terminal) cannot poll
+// forever or hold a capacity slot indefinitely.
+func (s *VideoJobStore) FailStaleProcessing(now time.Time, maxDuration time.Duration) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	n := 0
+	for _, j := range s.jobs {
+		if j.State == "processing" && !j.ProcessingStartedAt.IsZero() &&
+			now.Sub(j.ProcessingStartedAt) > maxDuration {
+			j.State = "failed"
+			j.Error = fmt.Sprintf("video render exceeded max poll lifetime of %s", maxDuration)
+			j.UpdatedAt = now
+			n++
+		}
+	}
+	return n
+}
+
+// videoMaxDownloadBytes caps the size of a streamed video download. Guards
+// against a malicious/buggy upstream serving an unbounded body that would fill
+// disk and RAM-via-buffers across the bounded finalizer worker pool.
+const videoMaxDownloadBytes int64 = 512 * 1024 * 1024 // 512 MiB
+
 // VideoFinalizer stores a completed video via the asset pipeline and returns the artifact id.
 type VideoFinalizer interface {
 	Store(ctx context.Context, job *VideoJob, videoURL string) (artifactID string, err error)
@@ -318,11 +397,6 @@ type studioVideoFinalizer struct {
 }
 
 func (f *studioVideoFinalizer) Store(ctx context.Context, job *VideoJob, videoURL string) (string, error) {
-	fileData, err := downloadFile(ctx, videoURL)
-	if err != nil {
-		return "", err
-	}
-
 	ext := detectExtension(videoURL, "video")
 	if ext == "" {
 		ext = ".mp4"
@@ -330,10 +404,10 @@ func (f *studioVideoFinalizer) Store(ctx context.Context, job *VideoJob, videoUR
 	relativePath := filepath.Join("studio", job.ID+ext)
 	fullPath := filepath.Join(f.api.artifactsPath, relativePath)
 
-	if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
-		return "", err
-	}
-	if err := os.WriteFile(fullPath, fileData, 0644); err != nil {
+	// Stream the video directly to disk (capped at videoMaxDownloadBytes) instead
+	// of buffering the whole file in memory. With videoPollConcurrency=8 this
+	// avoids up to 8 full videos resident in RAM during concurrent finalization.
+	if err := downloadFileToPath(ctx, videoURL, fullPath, videoMaxDownloadBytes); err != nil {
 		return "", err
 	}
 
@@ -373,6 +447,18 @@ const videoPollConcurrency = 8
 // during a poll tick (in addition to the provider's own HTTP client timeout).
 const videoPollCallTimeout = 15 * time.Second
 
+// videoPollMaxErrors is the maximum number of consecutive transient upstream
+// poll errors tolerated before the poller gives up and fails the job. Without
+// this cap a flapping upstream (returning a transient error every tick) would
+// be retried every videoPollInterval forever, draining quota and never resolving.
+const videoPollMaxErrors = 10
+
+// videoPollMaxDuration is the hard wall-clock lifetime a job may spend in the
+// "processing" state. After it elapses the poller fails the job regardless of
+// upstream status, so a job stuck "pending" upstream cannot poll forever. xAI
+// video renders typically complete within a few minutes; 30m is a generous cap.
+const videoPollMaxDuration = 30 * time.Minute
+
 // Close stops the background video poller goroutine. It is safe to call multiple
 // times (idempotent via sync.Once) and from the server graceful-stop path. Tests
 // that construct StudioAPI without starting the poller can call this harmlessly.
@@ -405,6 +491,11 @@ func (s *StudioAPI) pollVideoJobsOnce(ctx context.Context) {
 
 	// Reap terminal jobs that have aged out so the store stays bounded.
 	s.videoJobs.ReapTerminal(time.Now(), videoJobTerminalTTL)
+
+	// Fail processing jobs that have exceeded their max poll lifetime, so a job
+	// stuck "pending" upstream (no error, never terminal) cannot poll forever or
+	// hold a capacity slot indefinitely.
+	s.videoJobs.FailStaleProcessing(time.Now(), videoPollMaxDuration)
 
 	// Gather processing jobs under a read lock (no HTTP calls while locked).
 	s.videoJobs.mu.RLock()
@@ -456,10 +547,20 @@ func (s *StudioAPI) pollOneJob(parent context.Context, job *VideoJob) {
 
 	res, err := provider.FetchStatus(ctx, job.UpstreamID)
 	if err != nil {
-		// Don't fail the job on a transient network error; retry next tick.
-		logf("studio: video poller failed to fetch status for job %s: %v", job.ID, err)
+		// Don't fail the job on the first transient network error; but DO cap
+		// consecutive errors so a flapping upstream can't keep it polling (and
+		// billing) forever. After the cap, mark the job failed.
+		_, exceeded := s.videoJobs.IncrementPollError(job.ID, videoPollMaxErrors)
+		if exceeded {
+			s.videoJobs.Fail(job.ID, fmt.Sprintf("giving up after %d consecutive poll errors: %v", videoPollMaxErrors+1, err))
+		} else {
+			logf("studio: video poller failed to fetch status for job %s: %v", job.ID, err)
+		}
 		return
 	}
+	// A non-error response (even "pending") resets the consecutive-error counter,
+	// matching the "consecutive" semantics of the cap.
+	s.videoJobs.ResetPollError(job.ID)
 
 	switch res.State {
 	case "complete":
@@ -539,15 +640,23 @@ func (s *StudioAPI) SubmitVideoJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	upstreamID, err := provider.Submit(r.Context(), req.Prompt, req.Model)
-	if err != nil {
-		http.Error(w, "upstream submit failed: "+err.Error(), http.StatusBadGateway)
-		return
-	}
-
+	// Reserve a tracked slot BEFORE billing the upstream submit. xAI bills on
+	// submission; if we submitted first and then hit a full store, the job would
+	// be orphaned (billed, never tracked/polled, no artifact ever produced, money
+	// silently lost). Reserving first guarantees every billed submit lands in a
+	// tracked job, and a full queue is rejected before any billing occurs.
 	job := s.videoJobs.Create(req.Prompt, req.Model, providerName)
 	if job == nil {
 		http.Error(w, "video job queue is full, try again shortly", http.StatusServiceUnavailable)
+		return
+	}
+
+	upstreamID, err := provider.Submit(r.Context(), req.Prompt, req.Model)
+	if err != nil {
+		// Record the reserved slot as failed (it is reaped after TTL) so the
+		// failure is observable via GetVideoJob rather than silently dropped.
+		s.videoJobs.Fail(job.ID, "upstream submit failed: "+err.Error())
+		http.Error(w, "upstream submit failed: "+err.Error(), http.StatusBadGateway)
 		return
 	}
 	s.videoJobs.SetProcessing(job.ID, upstreamID)

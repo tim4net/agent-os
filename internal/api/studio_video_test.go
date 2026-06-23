@@ -1,10 +1,14 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -445,5 +449,199 @@ func TestXAIVideoProvider_HTTPClientTimeout(t *testing.T) {
 	}
 	if elapsed > 400*time.Millisecond {
 		t.Errorf("expected Submit to bail out near the client timeout (~40ms), took %v", elapsed)
+	}
+}
+
+// countingProvider records how many times Submit was called. Used to prove the
+// reserve-before-submit fix: when the store is full, Submit (which bills) must
+// never be called.
+type countingProvider struct {
+	mu      sync.Mutex
+	submits int
+}
+
+func (c *countingProvider) Submit(ctx context.Context, prompt, model string) (string, error) {
+	c.mu.Lock()
+	c.submits++
+	c.mu.Unlock()
+	return "up_billed", nil
+}
+
+func (c *countingProvider) FetchStatus(ctx context.Context, jobID string) (VideoResult, error) {
+	return VideoResult{State: "complete"}, nil
+}
+
+func (c *countingProvider) SubmitCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.submits
+}
+
+// TestSubmitVideoJob_NoOrphanBilledJobWhenStoreFull is the key NEGATIVE test for
+// the reserve-before-submit fix: when the store is at capacity, the handler must
+// reject with 503 WITHOUT calling provider.Submit. xAI bills on submit, so
+// submitting then failing to track the job would orphan a billed job that never
+// completes (money silently lost).
+func TestSubmitVideoJob_NoOrphanBilledJobWhenStoreFull(t *testing.T) {
+	store := NewVideoJobStore()
+	store.maxActive = 2
+	// Fill the store with active (non-terminal) jobs so Create will refuse.
+	for i := 0; i < 2; i++ {
+		j := store.Create("p", "m", "prov")
+		store.SetProcessing(j.ID, "up")
+	}
+
+	prov := &countingProvider{}
+	s := &StudioAPI{
+		videoProviders: map[string]VideoProvider{"test-prov": prov},
+		videoJobs:      store,
+		providerInfo:   map[string]ProviderInfo{"test-prov": {Available: true}},
+	}
+	router := s.StudioRoutes()
+
+	req := httptest.NewRequest(http.MethodPost, "/video/jobs", strings.NewReader(`{"prompt":"p","provider":"test-prov"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 when store is full, got %d (body %s)", w.Code, w.Body.String())
+	}
+	if n := prov.SubmitCount(); n != 0 {
+		t.Errorf("provider.Submit must NOT be called when the store is full (would orphan a billed job); called %d times", n)
+	}
+}
+
+// TestSubmitVideoJob_SubmitFailureRecordsFailedJob proves that when the upstream
+// submit fails AFTER a slot was reserved, the reserved job is recorded as failed
+// (observable via GetVideoJob) rather than silently dropped.
+func TestSubmitVideoJob_SubmitFailureRecordsFailedJob(t *testing.T) {
+	store := NewVideoJobStore()
+	prov := &fakeProvider{err: errors.New("xai 403 forbidden")} // Submit returns err
+	s := &StudioAPI{
+		videoProviders: map[string]VideoProvider{"test-prov": prov},
+		videoJobs:      store,
+		providerInfo:   map[string]ProviderInfo{"test-prov": {Available: true}},
+	}
+	router := s.StudioRoutes()
+
+	req := httptest.NewRequest(http.MethodPost, "/video/jobs", strings.NewReader(`{"prompt":"p","provider":"test-prov"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502 on upstream submit failure, got %d", w.Code)
+	}
+
+	store.mu.RLock()
+	count := len(store.jobs)
+	var failed *VideoJob
+	for _, j := range store.jobs {
+		failed = j
+	}
+	store.mu.RUnlock()
+
+	if count != 1 {
+		t.Fatalf("expected exactly 1 reserved job recorded, got %d", count)
+	}
+	if failed.State != "failed" || !strings.Contains(failed.Error, "upstream submit failed") {
+		t.Errorf("expected reserved job recorded failed with submit error, got state=%s error=%q", failed.State, failed.Error)
+	}
+}
+
+// TestVideoJobStore_FailStaleProcessing proves the max-lifetime cap: a
+// "processing" job whose ProcessingStartedAt is older than the cap is failed,
+// while a fresh processing job is left alone.
+func TestVideoJobStore_FailStaleProcessing(t *testing.T) {
+	store := NewVideoJobStore()
+
+	stale := store.Create("stale", "m", "prov")
+	store.SetProcessing(stale.ID, "up")
+	// Backdate the processing start past the cap.
+	store.mu.Lock()
+	store.jobs[stale.ID].ProcessingStartedAt = time.Now().Add(-2 * time.Hour)
+	store.mu.Unlock()
+
+	n := store.FailStaleProcessing(time.Now(), videoPollMaxDuration)
+	if n != 1 {
+		t.Fatalf("expected 1 stale job failed, got %d", n)
+	}
+	if j, _ := store.Get(stale.ID); j.State != "failed" || !strings.Contains(j.Error, "max poll lifetime") {
+		t.Errorf("expected stale job failed with lifetime error, got state=%s error=%q", j.State, j.Error)
+	}
+
+	// A fresh processing job must NOT be failed.
+	fresh := store.Create("fresh", "m", "prov")
+	store.SetProcessing(fresh.ID, "up")
+	if n := store.FailStaleProcessing(time.Now(), videoPollMaxDuration); n != 0 {
+		t.Errorf("expected fresh job not failed, got %d failed", n)
+	}
+	if j, _ := store.Get(fresh.ID); j.State != "processing" {
+		t.Errorf("fresh job should remain processing, got %s", j.State)
+	}
+}
+
+// TestVideoPoller_FailsAfterConsecutiveErrorCap proves the consecutive-error
+// cap: a job whose upstream returns a transient error every tick keeps polling
+// up to the cap, then is failed — it never polls (and bills) forever.
+func TestVideoPoller_FailsAfterConsecutiveErrorCap(t *testing.T) {
+	store := NewVideoJobStore()
+	fp := &fakeProvider{err: errors.New("upstream flapping")}
+	s := &StudioAPI{
+		videoProviders:  map[string]VideoProvider{"test-prov": fp},
+		videoJobs:       store,
+		pollCallTimeout: videoPollCallTimeout,
+	}
+
+	job := store.Create("p", "m", "test-prov")
+	store.SetProcessing(job.ID, "up_1")
+
+	// Up to and including the cap: job must stay processing (transient, retrying).
+	for i := 0; i < videoPollMaxErrors; i++ {
+		s.pollVideoJobsOnce(context.Background())
+	}
+	if j, _ := store.Get(job.ID); j.State != "processing" {
+		t.Fatalf("job should still be processing after %d (==cap) transient errors, got %s", videoPollMaxErrors, j.State)
+	}
+
+	// One more error tips past the cap: job is now failed.
+	s.pollVideoJobsOnce(context.Background())
+	j, _ := store.Get(job.ID)
+	if j.State != "failed" {
+		t.Fatalf("job should be failed after exceeding error cap, got state=%s (errors=%d)", j.State, j.PollErrors)
+	}
+	if !strings.Contains(j.Error, "consecutive poll errors") {
+		t.Errorf("expected give-up error message, got %q", j.Error)
+	}
+}
+
+// TestDownloadFileToPath_StreamsAndCapsSize proves the streaming finalizer path:
+// it writes the body to disk byte-for-byte (no full-buffer in memory) and
+// enforces the maxBytes ceiling (oversize → error, not OOM).
+func TestDownloadFileToPath_StreamsAndCapsSize(t *testing.T) {
+	body := bytes.Repeat([]byte("x"), 1000)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(body)
+	}))
+	defer srv.Close()
+
+	// maxBytes=0 → unlimited; content is streamed to disk intact.
+	dest := filepath.Join(t.TempDir(), "nested", "video.mp4")
+	if err := downloadFileToPath(context.Background(), srv.URL, dest, 0); err != nil {
+		t.Fatalf("streaming download failed: %v", err)
+	}
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("reading dest: %v", err)
+	}
+	if len(got) != len(body) {
+		t.Errorf("streamed content length mismatch: got %d bytes, want %d", len(got), len(body))
+	}
+
+	// maxBytes cap enforced: a body exceeding the cap must error.
+	dest2 := filepath.Join(t.TempDir(), "capped.mp4")
+	if err := downloadFileToPath(context.Background(), srv.URL, dest2, 100); err == nil {
+		t.Errorf("expected error when body exceeds maxBytes cap, got nil")
 	}
 }

@@ -431,6 +431,48 @@ func downloadFile(ctx context.Context, url string) ([]byte, error) {
 	return io.ReadAll(resp.Body)
 }
 
+// downloadFileToPath streams a URL's response body directly to destPath without
+// buffering the whole file in memory (unlike downloadFile, which io.ReadAll's
+// the entire body). This matters for video, which is far larger than images and
+// may be finalized concurrently (up to videoPollConcurrency at once). maxBytes
+// caps the body size; pass 0 for no cap. http.MaxBytesReader turns an oversize
+// download into a readable error instead of an OOM.
+func downloadFileToPath(ctx context.Context, url, destPath string, maxBytes int64) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("download failed with status %d", resp.StatusCode)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
+		return err
+	}
+
+	out, err := os.Create(destPath)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	body := io.Reader(resp.Body)
+	if maxBytes > 0 {
+		body = http.MaxBytesReader(nil, resp.Body, maxBytes)
+	}
+	if _, err := io.Copy(out, body); err != nil {
+		return err
+	}
+	return out.Sync()
+}
+
 // detectExtension returns a file extension based on URL or type.
 func detectExtension(url string, genType string) string {
 	// Try to get extension from URL

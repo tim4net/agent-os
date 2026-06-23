@@ -132,6 +132,49 @@ func opID(method, path, handler string) string {
 	return strings.ToLower(method) + "_" + slug
 }
 
+// responseCode is a single documented HTTP response status + description.
+type responseCode struct {
+	code int
+	desc string
+}
+
+// defaultResponses is the generic response set emitted for routes whose handler
+// has no known non-standard status codes. It matches the generator's original
+// output so existing routes are unchanged.
+func defaultResponses() []responseCode {
+	return []responseCode{
+		{200, "Success"},
+		{400, "Bad request"},
+		{404, "Not found"},
+		{500, "Server error"},
+	}
+}
+
+// handlerResponses returns the documented response codes for a handler. It
+// overrides defaultResponses() for handlers that return non-standard codes
+// (e.g. 201 Created, 502 Bad Gateway, 503 Service Unavailable) so the generated
+// spec matches what clients actually receive — generated clients otherwise
+// mishandle success/overload responses. Each override MUST mirror the real
+// http.Status* codes the handler writes; add new entries as handlers adopt
+// non-default codes.
+func handlerResponses(handler string) []responseCode {
+	switch handler {
+	case "SubmitVideoJob":
+		// internal/api SubmitVideoJob: 201 Created on success; 400 (bad JSON,
+		// unknown provider, unsupported); 502 (upstream submit failed);
+		// 503 (job queue full); 500 (encode/write error). Never 200/404.
+		return []responseCode{
+			{201, "Created"},
+			{400, "Bad request"},
+			{502, "Upstream submit failed"},
+			{503, "Job queue full"},
+			{500, "Server error"},
+		}
+	default:
+		return defaultResponses()
+	}
+}
+
 // emit writes an OpenAPI 3.1 document to stdout. Hand-rolled YAML keeps the
 // generator dependency-free (no external OpenAPI library in go.mod).
 func emit(routes []route) {
@@ -202,10 +245,9 @@ func emit(routes []route) {
 				}
 			}
 			fmt.Fprintln(w, "      responses:")
-			fmt.Fprintln(w, "        '200': { description: Success }")
-			fmt.Fprintln(w, "        '400': { description: Bad request }")
-			fmt.Fprintln(w, "        '404': { description: Not found }")
-			fmt.Fprintln(w, "        '500': { description: Server error }")
+			for _, rc := range handlerResponses(r.Handler) {
+				fmt.Fprintf(w, "        '%d': { description: %s }\n", rc.code, rc.desc)
+			}
 		}
 	}
 }
