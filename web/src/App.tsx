@@ -10,6 +10,7 @@ import { VerticalRail } from './components/layout/VerticalRail'
 import MissionControl from './components/MissionControl'
 import { ChatPanel } from './components/chat/ChatPanel'
 import { TalkMode } from './components/chat/TalkMode'
+import { JarvisMode } from './components/chat/JarvisMode'
 import { ArtifactGrid } from './components/workspace/ArtifactGrid'
 import { FileTree } from './components/memory/FileTree'
 import { NoteViewer } from './components/memory/NoteViewer'
@@ -94,7 +95,7 @@ function App() {
   const [memoryFilePath, setMemoryFilePath] = useState<string | null>(null)
   const [mediaPreviewKey, setMediaPreviewKey] = useState(0)
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null)
-  const [chatView, setChatView] = useState<'text' | 'talk'>('text')
+  const [chatView, setChatView] = useState<'text' | 'talk' | 'jarvis'>('text')
   const [conversationVersion, setConversationVersion] = useState(0)
 
   // Sub-view states for merged tabs
@@ -251,16 +252,22 @@ function App() {
         return (
           <ErrorBoundary name="Chat">
             <div className="flex flex-col h-full">
-              {/* Text / Talk mode toggle (#124) */}
+              {/* Text / Talk / Jarvis mode toggle (#124, #125) */}
               <div className="flex justify-center py-2 border-b border-[var(--border-subtle)]">
                 <SubViewToggle
-                  options={[{ key: 'text', label: 'Text' }, { key: 'talk', label: 'Talk' }]}
+                  options={[{ key: 'text', label: 'Text' }, { key: 'talk', label: 'Talk' }, { key: 'jarvis', label: 'Jarvis' }]}
                   value={chatView}
-                  onChange={(v) => setChatView(v as 'text' | 'talk')}
+                  onChange={(v) => setChatView(v as 'text' | 'talk' | 'jarvis')}
                 />
               </div>
               {chatView === 'talk' ? (
                 <TalkMode
+                  agent={selectedAgent}
+                  conversationId={activeConversationId}
+                  onConversationCreated={handleConversationCreated}
+                />
+              ) : chatView === 'jarvis' ? (
+                <JarvisMode
                   agent={selectedAgent}
                   conversationId={activeConversationId}
                   onConversationCreated={handleConversationCreated}
