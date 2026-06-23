@@ -53,6 +53,39 @@ func TestAllReturnsCopy(t *testing.T) {
 	}
 }
 
+// TestAllAndGetDeepCopySteps proves All() and Get() deep-copy the nested
+// Steps slice, not just the top-level Template slice. Mutating a step through
+// a returned template must not corrupt the package-level registry.
+func TestAllAndGetDeepCopySteps(t *testing.T) {
+	original := All()
+	if len(original) == 0 || len(original[0].Steps) == 0 {
+		t.Fatal("expected at least one template with at least one step")
+	}
+	wantName := original[0].Steps[0].Name
+
+	// Mutate via All().
+	got := All()
+	got[0].Steps[0].Name = "PWNED-ALL"
+
+	// Mutate via Get() (find a known key).
+	key := original[0].Key
+	tpl, ok := Get(key)
+	if !ok {
+		t.Fatalf("expected Get(%q) to succeed", key)
+	}
+	tpl.Steps[0].Name = "PWNED-GET"
+
+	// Re-read the registry — neither mutation must have leaked.
+	after := All()
+	if after[0].Steps[0].Name != wantName {
+		t.Fatalf("All()/Get() did not deep-copy Steps: step name mutated from %q to %q", wantName, after[0].Steps[0].Name)
+	}
+	got2, _ := Get(key)
+	if got2.Steps[0].Name != wantName {
+		t.Fatalf("Get() did not deep-copy Steps: step name mutated from %q to %q", wantName, got2.Steps[0].Name)
+	}
+}
+
 // TestGetUnknownKey returns false for an unregistered key.
 func TestGetUnknownKey(t *testing.T) {
 	if _, ok := Get("does-not-exist"); ok {

@@ -131,17 +131,30 @@ func init() {
 }
 
 // All returns every registered workflow template. The returned slice is a copy
-// of the registry so callers cannot mutate the package-level definitions.
+// of the registry so callers cannot mutate the package-level definitions —
+// including the nested Steps slice on each template, which is deep-copied so
+// mutating a step through a returned template cannot corrupt the registry.
 func All() []Template {
 	out := make([]Template, len(all))
 	copy(out, all)
+	// copy() above only duplicates the top-level Template slice headers; the
+	// backing arrays for each Steps slice would otherwise be shared with the
+	// package-level registry, so deep-copy them too.
+	for i := range out {
+		out[i].Steps = append([]WorkflowStep(nil), out[i].Steps...)
+	}
 	return out
 }
 
-// Get returns the template with the given key and true if found.
+// Get returns the template with the given key and true if found. The returned
+// template's Steps slice is a deep copy, so callers cannot mutate the
+// package-level definitions through it.
 func Get(key string) (Template, bool) {
 	for _, t := range all {
 		if t.Key == key {
+			// The range value copies the Template struct, but its Steps slice
+			// header still shares the registry's backing array — deep-copy it.
+			t.Steps = append([]WorkflowStep(nil), t.Steps...)
 			return t, true
 		}
 	}

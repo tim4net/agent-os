@@ -13,6 +13,8 @@ export function WorkflowList() {
   const [creating, setCreating] = useState(false)
   const [templates, setTemplates] = useState<WorkflowTemplate[]>([])
   const [usingTemplate, setUsingTemplate] = useState<string | null>(null)
+  const [templateError, setTemplateError] = useState<string | null>(null)
+  const [templatesError, setTemplatesError] = useState<string | null>(null)
 
   const loadWorkflows = useCallback(async () => {
     setLoading(true)
@@ -33,12 +35,18 @@ export function WorkflowList() {
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- async data fetch; setState lands after await
-    listWorkflowTemplates().then(setTemplates).catch((err) => console.error('Failed to load workflow templates:', err))
+    listWorkflowTemplates()
+      .then(setTemplates)
+      .catch((err) => {
+        console.error('Failed to load workflow templates:', err)
+        setTemplatesError('Failed to load templates')
+      })
   }, [])
 
   // useTemplate instantiates a predefined template as a runnable workflow.
   async function useTemplate(tpl: WorkflowTemplate) {
     setUsingTemplate(tpl.key)
+    setTemplateError(null)
     try {
       await createWorkflow({
         name: tpl.name,
@@ -47,7 +55,9 @@ export function WorkflowList() {
       })
       await loadWorkflows()
     } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error'
       console.error('Failed to instantiate template:', err)
+      setTemplateError(`Failed to instantiate "${tpl.name}": ${msg}`)
     } finally {
       setUsingTemplate(null)
     }
@@ -117,6 +127,21 @@ export function WorkflowList() {
           <button
             onClick={() => setRunResult(null)}
             className="ml-3 text-gray-400 hover:text-white"
+          >
+            <Icon name="close" size={14} />
+          </button>
+        </div>
+      )}
+
+      {(templateError || templatesError) && (
+        <div className="mb-4 px-4 py-3 rounded-lg text-sm bg-red-900/30 text-red-300 border border-red-800 flex items-center justify-between">
+          <span>{templateError || templatesError}</span>
+          <button
+            onClick={() => {
+              setTemplateError(null)
+              setTemplatesError(null)
+            }}
+            className="text-gray-400 hover:text-white"
           >
             <Icon name="close" size={14} />
           </button>

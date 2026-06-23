@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -22,7 +23,9 @@ func (a *API) WorkflowTemplateRoutes() http.Handler {
 // ListWorkflowTemplates handles GET /api/workflow-templates
 func (a *API) ListWorkflowTemplates(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(workflowtemplates.All())
+	if err := json.NewEncoder(w).Encode(workflowtemplates.All()); err != nil {
+		log.Printf("workflow templates: failed to encode list: %v", err)
+	}
 }
 
 // GetWorkflowTemplate handles GET /api/workflow-templates/{key}
@@ -34,5 +37,7 @@ func (a *API) GetWorkflowTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(tpl)
+	if err := json.NewEncoder(w).Encode(tpl); err != nil {
+		log.Printf("workflow templates: failed to encode %q: %v", key, err)
+	}
 }
