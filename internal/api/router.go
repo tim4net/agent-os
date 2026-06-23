@@ -357,5 +357,12 @@ func (a *API) Router() http.Handler {
 	// DEFAULT_ENDPOINT target /api/host/liveness — so mount at /host/liveness.
 	r.Mount("/host/liveness", a.HostLivenessRoutes())
 
+	// Live host surface (issue #132): a read-only, on-demand snapshot of
+	// host-side capabilities (hostname, PID, git worktrees) computed by the
+	// API process itself. Distinct from /host/liveness (the DB-backed
+	// heartbeat table): this exposes git/worktree info the containerised API
+	// otherwise lacks.
+	r.Mount("/host/live", a.HostLiveRoutes())
+
 	return r
 }
