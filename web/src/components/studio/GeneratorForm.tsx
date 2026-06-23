@@ -258,8 +258,8 @@ export function GeneratorForm({ onGenerated, agentId }: GeneratorFormProps) {
         className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
       >
         {generating ? (
-          <span className="flex items-center gap-2">
-            <span className="animate-spin">⏳</span> {progressMsg ? progressMsg : 'Generating…'}
+          <span className="flex items-center gap-2" role="status" aria-live="polite">
+            <span className="animate-spin" aria-hidden="true">⏳</span> {progressMsg ? progressMsg : 'Generating…'}
           </span>
         ) : (
           `Generate ${type}`

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 
@@ -38,11 +39,16 @@ type XAIVideoProvider struct {
 	http    *http.Client
 }
 
+// videoHTTPTimeout bounds every xAI video API call so a stalled upstream
+// response cannot block Submit/FetchStatus indefinitely (http.DefaultClient has
+// no timeout).
+const videoHTTPTimeout = 30 * time.Second
+
 func NewXAIVideoProvider(apiKey string) *XAIVideoProvider {
 	return &XAIVideoProvider{
 		apiKey:  apiKey,
 		baseURL: "https://api.x.ai",
-		http:    http.DefaultClient,
+		http:    &http.Client{Timeout: videoHTTPTimeout},
 	}
 }
 
@@ -151,35 +157,55 @@ func (p *XAIVideoProvider) FetchStatus(ctx context.Context, jobID string) (Video
 
 // VideoJob is an in-memory representation of a video generation job.
 type VideoJob struct {
-	ID         string    // internal uuid (uuid.NewString())
+	ID         string // internal uuid (uuid.NewString())
 	Prompt     string
 	Model      string
 	Provider   string
-	State      string    // "queued" | "processing" | "complete" | "failed"
-	Progress   int       // 0..100 (rough: queued=0, processing=50, complete=100)
-	UpstreamID string    // jobID from provider.Submit
-	VideoURL   string    // final remote video url
-	ArtifactID string    // set after asset pipeline stores it
+	State      string // "queued" | "processing" | "complete" | "failed"
+	Progress   int    // 0..100 (rough: queued=0, processing=50, complete=100)
+	UpstreamID string // jobID from provider.Submit
+	VideoURL   string // final remote video url
+	ArtifactID string // set after asset pipeline stores it
 	Error      string
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
 }
 
+// videoJobMaxActive caps the number of jobs retained in memory. Completed/failed
+// jobs are evicted oldest-first before this cap bites, so a flood of submissions
+// cannot grow the store without bound.
+const videoJobMaxActive = 500
+
+// videoJobTerminalTTL is how long a completed/failed job is kept after it reaches
+// a terminal state before the poller reaps it.
+const videoJobTerminalTTL = 1 * time.Hour
+
 // VideoJobStore is an in-memory, thread-safe store for video jobs.
 type VideoJobStore struct {
-	mu   sync.RWMutex
-	jobs map[string]*VideoJob
+	mu        sync.RWMutex
+	jobs      map[string]*VideoJob
+	maxActive int
 }
 
 func NewVideoJobStore() *VideoJobStore {
 	return &VideoJobStore{
-		jobs: make(map[string]*VideoJob),
+		jobs:      make(map[string]*VideoJob),
+		maxActive: videoJobMaxActive,
 	}
 }
 
 func (s *VideoJobStore) Create(prompt, model, provider string) *VideoJob {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// Make room before adding: evict terminal jobs oldest-first if at the cap.
+	if len(s.jobs) >= s.maxActive {
+		s.evictTerminalLocked()
+	}
+	// Still at the cap (everything is active) — refuse rather than grow unbounded.
+	if len(s.jobs) >= s.maxActive {
+		return nil
+	}
 
 	job := &VideoJob{
 		ID:        uuid.NewString(),
@@ -192,7 +218,7 @@ func (s *VideoJobStore) Create(prompt, model, provider string) *VideoJob {
 		UpdatedAt: time.Now(),
 	}
 	s.jobs[job.ID] = job
-	
+
 	jobCopy := *job
 	return &jobCopy
 }
@@ -207,6 +233,43 @@ func (s *VideoJobStore) Get(id string) (*VideoJob, bool) {
 	}
 	jobCopy := *job
 	return &jobCopy, true
+}
+
+// evictTerminalLocked removes completed/failed jobs, oldest first, until the
+// store is below the cap. Caller must hold s.mu in write mode.
+func (s *VideoJobStore) evictTerminalLocked() {
+	type kv struct {
+		id string
+		ts time.Time
+	}
+	var terminal []kv
+	for id, j := range s.jobs {
+		if j.State == "complete" || j.State == "failed" {
+			terminal = append(terminal, kv{id, j.CreatedAt})
+		}
+	}
+	sort.Slice(terminal, func(i, j int) bool { return terminal[i].ts.Before(terminal[j].ts) })
+	for len(s.jobs) >= s.maxActive && len(terminal) > 0 {
+		delete(s.jobs, terminal[0].id)
+		terminal = terminal[1:]
+	}
+}
+
+// ReapTerminal removes completed/failed jobs whose UpdatedAt is older than maxAge
+// relative to now. Returns the number removed. Called by the poller each tick so
+// terminal jobs do not live in memory forever.
+func (s *VideoJobStore) ReapTerminal(now time.Time, maxAge time.Duration) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	removed := 0
+	for id, j := range s.jobs {
+		if (j.State == "complete" || j.State == "failed") && now.Sub(j.UpdatedAt) > maxAge {
+			delete(s.jobs, id)
+			removed++
+		}
+	}
+	return removed
 }
 
 func (s *VideoJobStore) SetProcessing(id, upstreamID string) {
@@ -302,6 +365,25 @@ func (f *studioVideoFinalizer) Store(ctx context.Context, job *VideoJob, videoUR
 
 const videoPollInterval = 2 * time.Second
 
+// videoPollConcurrency bounds how many jobs are polled in parallel each tick, so
+// one slow upstream cannot starve the jobs queued behind it.
+const videoPollConcurrency = 8
+
+// videoPollCallTimeout bounds each individual upstream status/finalize call made
+// during a poll tick (in addition to the provider's own HTTP client timeout).
+const videoPollCallTimeout = 15 * time.Second
+
+// Close stops the background video poller goroutine. It is safe to call multiple
+// times (idempotent via sync.Once) and from the server graceful-stop path. Tests
+// that construct StudioAPI without starting the poller can call this harmlessly.
+func (s *StudioAPI) Close() {
+	s.stopVideoPollerOnce.Do(func() {
+		if s.stopVideoPoller != nil {
+			close(s.stopVideoPoller)
+		}
+	})
+}
+
 func (s *StudioAPI) runVideoPoller() {
 	ticker := time.NewTicker(videoPollInterval)
 	defer ticker.Stop()
@@ -321,10 +403,12 @@ func (s *StudioAPI) pollVideoJobsOnce(ctx context.Context) {
 		return
 	}
 
-	// Iterate over jobs to find processing ones
-	// To avoid holding the lock during HTTP calls, we gather them first
+	// Reap terminal jobs that have aged out so the store stays bounded.
+	s.videoJobs.ReapTerminal(time.Now(), videoJobTerminalTTL)
+
+	// Gather processing jobs under a read lock (no HTTP calls while locked).
 	s.videoJobs.mu.RLock()
-	var processing []*VideoJob
+	processing := make([]*VideoJob, 0)
 	for _, job := range s.videoJobs.jobs {
 		if job.State == "processing" {
 			jobCopy := *job
@@ -333,35 +417,64 @@ func (s *StudioAPI) pollVideoJobsOnce(ctx context.Context) {
 	}
 	s.videoJobs.mu.RUnlock()
 
+	if len(processing) == 0 {
+		return
+	}
+
+	// Poll concurrently with a bounded worker pool and a per-call deadline so a
+	// single hung upstream call cannot block the whole tick.
+	sem := make(chan struct{}, videoPollConcurrency)
+	var wg sync.WaitGroup
 	for _, job := range processing {
-		provider, ok := s.videoProviders[job.Provider]
-		if !ok {
-			s.videoJobs.Fail(job.ID, "unknown provider")
-			continue
-		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(job *VideoJob) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			s.pollOneJob(ctx, job)
+		}(job)
+	}
+	wg.Wait()
+}
 
-		res, err := provider.FetchStatus(ctx, job.UpstreamID)
-		if err != nil {
-			// Don't fail the job immediately on network error, let it retry next tick
-			logf("studio: video poller failed to fetch status for job %s: %v", job.ID, err)
-			continue
-		}
+// pollOneJob checks a single processing job against its provider with a per-call
+// timeout, then finalizes or fails it. State mutations go through the store's
+// lock-protected methods, so concurrent calls are safe.
+func (s *StudioAPI) pollOneJob(parent context.Context, job *VideoJob) {
+	provider, ok := s.videoProviders[job.Provider]
+	if !ok {
+		s.videoJobs.Fail(job.ID, "unknown provider")
+		return
+	}
 
-		switch res.State {
-		case "complete":
-			if s.videoFinalizer != nil {
-				artifactID, err := s.videoFinalizer.Store(ctx, job, res.VideoURL)
-				if err != nil {
-					s.videoJobs.Fail(job.ID, "failed to store video: "+err.Error())
-				} else {
-					s.videoJobs.Complete(job.ID, res.VideoURL, artifactID)
-				}
+	timeout := s.pollCallTimeout
+	if timeout <= 0 {
+		timeout = videoPollCallTimeout
+	}
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	defer cancel()
+
+	res, err := provider.FetchStatus(ctx, job.UpstreamID)
+	if err != nil {
+		// Don't fail the job on a transient network error; retry next tick.
+		logf("studio: video poller failed to fetch status for job %s: %v", job.ID, err)
+		return
+	}
+
+	switch res.State {
+	case "complete":
+		if s.videoFinalizer != nil {
+			artifactID, err := s.videoFinalizer.Store(ctx, job, res.VideoURL)
+			if err != nil {
+				s.videoJobs.Fail(job.ID, "failed to store video: "+err.Error())
 			} else {
-				s.videoJobs.Complete(job.ID, res.VideoURL, "")
+				s.videoJobs.Complete(job.ID, res.VideoURL, artifactID)
 			}
-		case "failed":
-			s.videoJobs.Fail(job.ID, res.ErrMsg)
+		} else {
+			s.videoJobs.Complete(job.ID, res.VideoURL, "")
 		}
+	case "failed":
+		s.videoJobs.Fail(job.ID, res.ErrMsg)
 	}
 }
 
@@ -433,6 +546,10 @@ func (s *StudioAPI) SubmitVideoJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	job := s.videoJobs.Create(req.Prompt, req.Model, providerName)
+	if job == nil {
+		http.Error(w, "video job queue is full, try again shortly", http.StatusServiceUnavailable)
+		return
+	}
 	s.videoJobs.SetProcessing(job.ID, upstreamID)
 
 	// Fetch updated state

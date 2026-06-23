@@ -224,6 +224,7 @@ func main() {
 	scanner.Stop()
 	indexer.Stop()
 	titleWorker.Stop()
+	a.Close()
 
 	// Drain connections with 10s timeout
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

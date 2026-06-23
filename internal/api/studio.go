@@ -1,4 +1,5 @@
 package api
+
 import (
 	"context"
 	b64 "encoding/base64"
@@ -9,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -25,7 +28,7 @@ type StudioProvider interface {
 // ProviderInfo describes a registered studio provider.
 type ProviderInfo struct {
 	Name        string   `json:"name"`
-	Type        string   `json:"type"`         // "image", "video", "audio"
+	Type        string   `json:"type"` // "image", "video", "audio"
 	Models      []string `json:"models"`
 	RequiresKey bool     `json:"requires_key"`
 	Available   bool     `json:"available"`
@@ -33,14 +36,16 @@ type ProviderInfo struct {
 
 // StudioAPI holds dependencies for studio/generation endpoints.
 type StudioAPI struct {
-	queries       *db.Queries
-	artifactsPath string
-	providers       map[string]StudioProvider
-	providerInfo    map[string]ProviderInfo
-	videoProviders  map[string]VideoProvider
-	videoJobs       *VideoJobStore
-	videoFinalizer  VideoFinalizer
-	stopVideoPoller chan struct{}
+	queries             *db.Queries
+	artifactsPath       string
+	providers           map[string]StudioProvider
+	providerInfo        map[string]ProviderInfo
+	videoProviders      map[string]VideoProvider
+	videoJobs           *VideoJobStore
+	videoFinalizer      VideoFinalizer
+	stopVideoPoller     chan struct{}
+	stopVideoPollerOnce sync.Once
+	pollCallTimeout     time.Duration // per-job upstream call deadline; defaults to videoPollCallTimeout
 }
 
 // NewStudioAPI creates a new StudioAPI with multiple providers.
@@ -55,6 +60,7 @@ func NewStudioAPI(queries *db.Queries, artifactsPath string, keys map[string]str
 		videoProviders:  make(map[string]VideoProvider),
 		videoJobs:       NewVideoJobStore(),
 		stopVideoPoller: make(chan struct{}),
+		pollCallTimeout: videoPollCallTimeout,
 	}
 	s.videoFinalizer = &studioVideoFinalizer{api: s}
 
@@ -136,7 +142,7 @@ func NewStudioAPI(queries *db.Queries, artifactsPath string, keys map[string]str
 // GenerateRequest is the JSON body for the generate endpoint.
 type GenerateRequest struct {
 	Prompt   string `json:"prompt"`
-	Type     string `json:"type"`     // "image", "video", "audio"
+	Type     string `json:"type"` // "image", "video", "audio"
 	Model    string `json:"model"`
 	Provider string `json:"provider"`
 	AgentID  string `json:"agent_id"` // optional: associate artifact with an agent
