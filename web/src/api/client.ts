@@ -246,10 +246,12 @@ export function sendChat(
   message: string,
   model?: string,
   conversationId?: string,
+  mode?: string,
 ): ReadableStream<ChatChunk> {
   const body: Record<string, string> = { message }
   if (model) body.model = model
   if (conversationId) body.conversation_id = conversationId
+  if (mode) body.mode = mode
 
   // Use AbortController only for connect timeout (10s).
   // No idle timeout — like Telegram, the connection stays open until
