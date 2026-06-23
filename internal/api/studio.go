@@ -35,8 +35,12 @@ type ProviderInfo struct {
 type StudioAPI struct {
 	queries       *db.Queries
 	artifactsPath string
-	providers     map[string]StudioProvider
-	providerInfo  map[string]ProviderInfo
+	providers       map[string]StudioProvider
+	providerInfo    map[string]ProviderInfo
+	videoProviders  map[string]VideoProvider
+	videoJobs       *VideoJobStore
+	videoFinalizer  VideoFinalizer
+	stopVideoPoller chan struct{}
 }
 
 // NewStudioAPI creates a new StudioAPI with multiple providers.
@@ -44,11 +48,15 @@ type StudioAPI struct {
 // Providers without a key are still registered but marked unavailable.
 func NewStudioAPI(queries *db.Queries, artifactsPath string, keys map[string]string) *StudioAPI {
 	s := &StudioAPI{
-		queries:       queries,
-		artifactsPath: artifactsPath,
-		providers:     make(map[string]StudioProvider),
-		providerInfo:  make(map[string]ProviderInfo),
+		queries:         queries,
+		artifactsPath:   artifactsPath,
+		providers:       make(map[string]StudioProvider),
+		providerInfo:    make(map[string]ProviderInfo),
+		videoProviders:  make(map[string]VideoProvider),
+		videoJobs:       NewVideoJobStore(),
+		stopVideoPoller: make(chan struct{}),
 	}
+	s.videoFinalizer = &studioVideoFinalizer{api: s}
 
 	// Provider 1: xAI
 	// NOTE: xAI has the API key but team has no billing credits — returns 403.
@@ -108,6 +116,20 @@ func NewStudioAPI(queries *db.Queries, artifactsPath string, keys map[string]str
 		Available:   falKey != "",
 	}
 
+	// Provider 6: Grok Video (xAI)
+	s.videoProviders["grok-video"] = NewXAIVideoProvider(xaiKey)
+	s.providerInfo["grok-video"] = ProviderInfo{
+		Name:        "grok-video",
+		Type:        "video",
+		Models:      []string{"grok-2-video"},
+		RequiresKey: true,
+		Available:   xaiKey != "",
+	}
+
+	if s.videoJobs != nil && len(s.videoProviders) > 0 {
+		go s.runVideoPoller()
+	}
+
 	return s
 }
 
@@ -128,6 +150,9 @@ func (s *StudioAPI) StudioRoutes() http.Handler {
 	r.Get("/generations", s.ListGenerations)
 	r.Get("/providers", s.ListProviders)
 
+	r.Post("/video/jobs", s.SubmitVideoJob)
+	r.Get("/video/jobs/{id}", s.GetVideoJob)
+
 	return r
 }
 
@@ -135,7 +160,7 @@ func (s *StudioAPI) StudioRoutes() http.Handler {
 func (s *StudioAPI) ListProviders(w http.ResponseWriter, r *http.Request) {
 	providers := make([]ProviderInfo, 0, len(s.providerInfo))
 	// Return in a deterministic order
-	for _, name := range []string{"xai", "pollinations", "openrouter", "gemini", "fal"} {
+	for _, name := range []string{"xai", "pollinations", "openrouter", "gemini", "fal", "grok-video"} {
 		if info, ok := s.providerInfo[name]; ok {
 			providers = append(providers, info)
 		}
@@ -148,7 +173,7 @@ func (s *StudioAPI) ListProviders(w http.ResponseWriter, r *http.Request) {
 // firstAvailableProvider returns the name of the first available provider.
 func (s *StudioAPI) firstAvailableProvider() string {
 	// Prefer pollinations since it's always available and free
-	for _, name := range []string{"pollinations", "xai", "openrouter", "gemini", "fal"} {
+	for _, name := range []string{"pollinations", "xai", "openrouter", "gemini", "fal", "grok-video"} {
 		if info, ok := s.providerInfo[name]; ok && info.Available {
 			return name
 		}
