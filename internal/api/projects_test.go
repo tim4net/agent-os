@@ -325,6 +325,40 @@ func TestWorkspaceCRUD_Integration(t *testing.T) {
 		t.Fatalf("repo_url not updated: got %v", updated.RepoURL)
 	}
 
+	// ── Update name ─────────────────────────────────────────────────────────
+	// Regression for the silent-name-drop bug: the PATCH previously accepted a
+	// name field but the underlying UPDATE query omitted the name column, so the
+	// rename was a no-op that returned 200 with the old name. Verify the rename
+	// is now both echoed back AND persisted to the DB.
+	newName := "Renamed " + slug
+	rec = httptest.NewRecorder()
+	a.ProjectRoutes().ServeHTTP(rec, wsReq(http.MethodPatch, "/"+id, mustMarshal(t, UpdateWorkspaceRequest{
+		Name: &newName,
+	})))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("rename workspace: expected 200, got %d (body=%s)", rec.Code, rec.Body.String())
+	}
+	var renamed projectView
+	if err := json.Unmarshal(rec.Body.Bytes(), &renamed); err != nil {
+		t.Fatalf("decode rename: %v", err)
+	}
+	if renamed.Name != newName {
+		t.Fatalf("name not updated in PATCH response: got %q, want %q", renamed.Name, newName)
+	}
+	// Re-GET to confirm the rename was actually persisted (not just echoed).
+	rec = httptest.NewRecorder()
+	a.ProjectRoutes().ServeHTTP(rec, wsReq(http.MethodGet, "/"+id, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get after rename: expected 200, got %d", rec.Code)
+	}
+	var afterRename projectView
+	if err := json.Unmarshal(rec.Body.Bytes(), &afterRename); err != nil {
+		t.Fatalf("decode get after rename: %v", err)
+	}
+	if afterRename.Name != newName {
+		t.Fatalf("name not persisted after rename: got %q, want %q", afterRename.Name, newName)
+	}
+
 	// ── Get unknown → 404 ───────────────────────────────────────────────────
 	rec = httptest.NewRecorder()
 	a.ProjectRoutes().ServeHTTP(rec, wsReq(http.MethodGet, "/00000000-0000-0000-0000-000000000099", nil))
@@ -487,6 +521,44 @@ func TestListArtifacts_ProjectScoping_Integration(t *testing.T) {
 	}
 	if resp.Total != 1 {
 		t.Fatalf("scoped artifacts: want 1, got %d", resp.Total)
+	}
+}
+
+// TestWorkspaceSurface_ArtifactsTotalAboveLimit_Integration verifies the
+// /surface artifacts bucket reports the true COUNT(*), not the capped fetch
+// length. The preview Items list is bounded at 50 rows, but Total must reflect
+// the real artifact count. Regression: previously Total was set to
+// len(artifacts), silently capping it at 50 for large workspaces.
+func TestWorkspaceSurface_ArtifactsTotalAboveLimit_Integration(t *testing.T) {
+	a, pool := newWorkspaceTestAPI(t)
+	ctx := context.Background()
+	owner := testOwnerID()
+
+	proj := createWorkspaceViaAPI(t, a, "ArtTotal "+uniqueSlug(t))
+	var pid pgtype.UUID
+	if err := pid.Scan(proj.ID.(string)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Seed more than the 50-row preview limit.
+	const n = 55
+	for i := 0; i < n; i++ {
+		artID := mustCreateArtifact(t, pool, owner)
+		if err := a.queries.SetArtifactProject(ctx, db.SetArtifactProjectParams{
+			ID: artID, ProjectID: pid, OwnerID: owner,
+		}); err != nil {
+			t.Fatalf("set artifact %d project: %v", i, err)
+		}
+	}
+
+	surf := getSurface(t, a, proj.ID.(string))
+	// Total must be the true count (55), NOT capped at the 50-row preview.
+	if surf.Artifacts.Total != n {
+		t.Fatalf("artifacts total above limit: want %d, got %d (preview Items capped at 50)", n, surf.Artifacts.Total)
+	}
+	// The Items preview is bounded at 50.
+	if len(surf.Artifacts.Items) > 50 {
+		t.Fatalf("artifacts preview items should be capped at 50, got %d", len(surf.Artifacts.Items))
 	}
 }
 

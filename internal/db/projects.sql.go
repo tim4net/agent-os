@@ -180,23 +180,29 @@ func (q *Queries) ListProjects(ctx context.Context, ownerID pgtype.UUID) ([]Proj
 	return items, nil
 }
 
-const updateProjectTracker = `-- name: UpdateProjectTracker :one
-UPDATE projects SET tracker = $2, external_ref = $3, repo_url = $4, updated_at = NOW()
-WHERE id = $1 AND owner_id = $5
+const updateProject = `-- name: UpdateProject :one
+UPDATE projects SET name = $2, tracker = $3, external_ref = $4, repo_url = $5, updated_at = NOW()
+WHERE id = $1 AND owner_id = $6
 RETURNING id, slug, name, tenant, created_at, updated_at, tracker, external_ref, repo_url, owner_id
 `
 
-type UpdateProjectTrackerParams struct {
+type UpdateProjectParams struct {
 	ID          pgtype.UUID `json:"id"`
+	Name        string      `json:"name"`
 	Tracker     string      `json:"tracker"`
 	ExternalRef pgtype.Text `json:"external_ref"`
 	RepoUrl     pgtype.Text `json:"repo_url"`
 	OwnerID     pgtype.UUID `json:"owner_id"`
 }
 
-func (q *Queries) UpdateProjectTracker(ctx context.Context, arg UpdateProjectTrackerParams) (Project, error) {
-	row := q.db.QueryRow(ctx, updateProjectTracker,
+// Updates all mutable project fields: name, tracker, external_ref, repo_url.
+// (Renamed from UpdateProjectTracker once name became mutable so the query
+// name reflects what it actually persists — previously name was silently
+// dropped because it wasn't in the SET clause.)
+func (q *Queries) UpdateProject(ctx context.Context, arg UpdateProjectParams) (Project, error) {
+	row := q.db.QueryRow(ctx, updateProject,
 		arg.ID,
+		arg.Name,
 		arg.Tracker,
 		arg.ExternalRef,
 		arg.RepoUrl,

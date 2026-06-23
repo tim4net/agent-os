@@ -179,7 +179,10 @@ func (a *API) CreateWorkspace(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "a workspace with that slug already exists", http.StatusConflict)
 			return
 		}
-		http.Error(w, "failed to create workspace: "+err.Error(), http.StatusInternalServerError)
+		// Non-conflict error: don't leak raw DB internals (constraint names,
+		// schema details) to the client. There is no structured logger on the
+		// API struct, so we return a generic message here.
+		http.Error(w, "failed to create workspace", http.StatusInternalServerError)
 		return
 	}
 
@@ -228,8 +231,9 @@ func (a *API) UpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 		proj.RepoUrl = pgtype.Text{String: ru, Valid: ru != ""}
 	}
 
-	updated, err := a.queries.UpdateProjectTracker(r.Context(), db.UpdateProjectTrackerParams{
+	updated, err := a.queries.UpdateProject(r.Context(), db.UpdateProjectParams{
 		ID:          proj.ID,
+		Name:        proj.Name,
 		Tracker:     proj.Tracker,
 		ExternalRef: proj.ExternalRef,
 		RepoUrl:     proj.RepoUrl,
@@ -320,6 +324,18 @@ func (a *API) WorkspaceSurface(w http.ResponseWriter, r *http.Request) {
 	surface.Memory = surfaceBucket[any]{Total: int(memTotal), Items: []any{}}
 
 	// Artifacts scoped to this workspace.
+	// Use the true COUNT(*) for Total (consistent with Memory above) and keep
+	// the ListArtifactsByProject rows as the bounded preview in Items. The prior
+	// implementation set Total = len(artifacts), which capped it at the fetch
+	// limit (50) and underreported for large workspaces.
+	artTotal, err := a.queries.CountArtifactsByProject(ctx, db.CountArtifactsByProjectParams{
+		OwnerID:   ownerID,
+		ProjectID: id,
+	})
+	if err != nil {
+		http.Error(w, "failed to load workspace artifacts", http.StatusInternalServerError)
+		return
+	}
 	artifacts, err := a.queries.ListArtifactsByProject(ctx, db.ListArtifactsByProjectParams{
 		OwnerID:   ownerID,
 		ProjectID: id,
@@ -335,7 +351,7 @@ func (a *API) WorkspaceSurface(w http.ResponseWriter, r *http.Request) {
 	for _, ar := range artifacts {
 		artifactItems = append(artifactItems, artifactToResponse(ar))
 	}
-	surface.Artifacts = surfaceBucket[any]{Total: len(artifacts), Items: artifactItems}
+	surface.Artifacts = surfaceBucket[any]{Total: int(artTotal), Items: artifactItems}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(surface)

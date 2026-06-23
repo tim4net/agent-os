@@ -321,7 +321,11 @@ type Querier interface {
 	// This is the ONLY way status changes — never set from a work-event.
 	UpdateInstanceProbeStatus(ctx context.Context, arg UpdateInstanceProbeStatusParams) error
 	UpdatePipelineItem(ctx context.Context, arg UpdatePipelineItemParams) (PipelineItem, error)
-	UpdateProjectTracker(ctx context.Context, arg UpdateProjectTrackerParams) (Project, error)
+	// Updates all mutable project fields: name, tracker, external_ref, repo_url.
+	// (Renamed from UpdateProjectTracker once name became mutable so the query
+	// name reflects what it actually persists — previously name was silently
+	// dropped because it wasn't in the SET clause.)
+	UpdateProject(ctx context.Context, arg UpdateProjectParams) (Project, error)
 	UpdateResource(ctx context.Context, arg UpdateResourceParams) (Resource, error)
 	UpdateResourceEncryption(ctx context.Context, arg UpdateResourceEncryptionParams) error
 	UpdateSkill(ctx context.Context, arg UpdateSkillParams) (Skill, error)
