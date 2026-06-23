@@ -17,6 +17,8 @@ type Config struct {
 	FALKey           string
 	ZAIAPIKey        string
 	HermesAPIKey     string
+	OmiAPIToken      string
+	OmiBaseURL       string
 	LLMModel         string
 	Port             string
 }
@@ -37,8 +39,12 @@ func Load() *Config {
 		FALKey:           getEnv("FAL_KEY", ""),
 		ZAIAPIKey:        getEnv("ZAI_API_KEY", ""),
 		HermesAPIKey:     getEnv("HERMES_API_KEY", ""),
-		LLMModel:         getEnv("LLM_MODEL", "local-qwen"),
-		Port:             getEnv("PORT", "8080"),
+		// Omi wearable integration (issue #135). Opt-in: only enabled when
+		// OMI_API_TOKEN is set. OMI_BASE_URL overrides the cloud API root.
+		OmiAPIToken: getEnv("OMI_API_TOKEN", ""),
+		OmiBaseURL:  getEnv("OMI_BASE_URL", ""),
+		LLMModel:    getEnv("LLM_MODEL", "local-qwen"),
+		Port:        getEnv("PORT", "8080"),
 	}
 }
 
