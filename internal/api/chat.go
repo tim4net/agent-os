@@ -136,6 +136,9 @@ type ChatRequest struct {
 	ConversationID string `json:"conversation_id"`
 	SystemPrompt   string `json:"system_prompt"`
 	ProjectID      string `json:"project_id,omitempty"`
+	// Mode selects an answer-style mode (e.g. "perplexity" for a
+	// web-search-grounded, cited answer). Empty/unknown = default chat.
+	Mode string `json:"mode,omitempty"`
 }
 
 // conversationMeta is the structured metadata stored in conversations.metadata.
@@ -341,10 +344,20 @@ func (a *API) ChatWithAgent(w http.ResponseWriter, r *http.Request) {
 
 	useSession := isHermes && convMeta.HermesSessionID != ""
 
+	// Mode augmentation (e.g. Perplexity-style search-grounded answers). The
+	// instruction is injected into the system prompt for the legacy path and
+	// prepended to the message for the Hermes session path (which has no
+	// separate system-prompt channel). Unknown/default modes are a no-op.
+	modePrompt := modeSystemPrompt(req.Mode)
+
 	if useSession {
 		// Use the Hermes session API — the agent manages its own conversation
 		// context internally, so we don't need to build message history.
-		chunkCh, err = hermesHarness.SessionChat(r.Context(), convMeta.HermesSessionID, req.Message)
+		msgToSend := req.Message
+		if modePrompt != "" {
+			msgToSend = modePrompt + "\n\n" + req.Message
+		}
+		chunkCh, err = hermesHarness.SessionChat(r.Context(), convMeta.HermesSessionID, msgToSend)
 		if err != nil {
 			if err == harness.ErrNotSupported {
 				failPreStream("chat not supported for this agent", http.StatusNotImplemented)
@@ -365,6 +378,17 @@ func (a *API) ChatWithAgent(w http.ResponseWriter, r *http.Request) {
 
 		// RAG: search memory_index for relevant context using the user's message
 		systemPrompt := req.SystemPrompt
+
+		// Prepend the mode augmentation (e.g. Perplexity) so it takes
+		// precedence in the composed system prompt. No-op for default mode.
+		if modePrompt != "" {
+			if systemPrompt == "" {
+				systemPrompt = modePrompt
+			} else {
+				systemPrompt = modePrompt + "\n\n" + systemPrompt
+			}
+		}
+
 		if ragCtx := a.searchMemoryForContext(req.Message, ownerID, projectID); ragCtx != nil {
 			if systemPrompt == "" {
 				systemPrompt = ragCtx.SystemBlock

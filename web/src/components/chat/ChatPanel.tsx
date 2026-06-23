@@ -68,6 +68,9 @@ export function ChatPanel({ agent, activeConversationId, onConversationLoaded, o
   const [contextSources, setContextSources] = useState<string[]>([])
   const [activeTools, setActiveTools] = useState<string[]>([])
   const [queuedMessage, setQueuedMessage] = useState<string | null>(null)
+  // Perplexity mode: when on, every turn is sent with mode="perplexity" so the
+  // backend injects a web-search-grounded, citation-style system prompt (#137).
+  const [perplexityMode, setPerplexityMode] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const slashMenuRef = useRef<HTMLDivElement>(null)
@@ -326,7 +329,7 @@ export function ChatPanel({ agent, activeConversationId, onConversationLoaded, o
     setActiveTools([])
 
     try {
-      const stream = sendChat(agent.id, text, selectedModel || undefined, conversationId ?? undefined)
+      const stream = sendChat(agent.id, text, selectedModel || undefined, conversationId ?? undefined, perplexityMode ? 'perplexity' : undefined)
       const reader = stream.getReader()
 
       let accumulated = ''
@@ -443,6 +446,22 @@ export function ChatPanel({ agent, activeConversationId, onConversationLoaded, o
           </div>
         </div>
         <div className="flex items-center gap-1.5">
+          <button
+            onClick={() => setPerplexityMode((v) => !v)}
+            className={`pill-btn text-xs py-1.5 px-3 ${
+              perplexityMode
+                ? 'pill-btn--primary'
+                : 'pill-btn--ghost'
+            }`}
+            title="Perplexity mode: ground answers in web search with inline citations"
+            aria-pressed={perplexityMode}
+            aria-label="Toggle Perplexity mode"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-4.35-4.35M11 19a8 8 0 100-16 8 8 0 000 16z" />
+            </svg>
+            <span className="hidden sm:inline">Search</span>
+          </button>
           <button
             onClick={onNewChat}
             className="pill-btn pill-btn--ghost text-xs py-1.5 px-3"
