@@ -818,6 +818,17 @@ paths:
         '400': { description: Bad request }
         '404': { description: Not found }
         '500': { description: Server error }
+  /api/host/live:
+    get:
+      tags: [host]
+      operationId: get_GetHostLive
+      summary: Get Host Live
+      description: Handler GetHostLive in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
   /api/host/liveness:
     get:
       tags: [host]
@@ -834,23 +845,6 @@ paths:
       operationId: post_PostHostLiveness
       summary: Post Host Liveness
       description: Handler PostHostLiveness in internal/api.
-      responses:
-        '200': { description: Success }
-        '400': { description: Bad request }
-        '404': { description: Not found }
-        '500': { description: Server error }
-  /api/host/live:
-    get:
-      tags: [host]
-      operationId: get_GetHostLive
-      summary: Get Host Live
-      description: Handler GetHostLive in internal/api. Read-only on-demand snapshot of host-side capabilities (hostname, PID, git worktrees). Issue #132.
-      parameters:
-        - in: query
-          name: repo_path
-          schema:
-            type: string
-          description: Repo root to scan for worktrees. Defaults to AOS_REPO_PATH env var then /repos/agent-os.
       responses:
         '200': { description: Success }
         '400': { description: Bad request }
