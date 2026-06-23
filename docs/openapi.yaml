@@ -33,6 +33,7 @@ tags:
   - name: ledger
   - name: memory
   - name: pipeline
+  - name: projects
   - name: resources
   - name: skills
   - name: slash-command
@@ -1099,6 +1100,74 @@ paths:
       operationId: post_GeneratePipelineContent
       summary: Generate Pipeline Content
       description: Handler GeneratePipelineContent in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/projects:
+    get:
+      tags: [projects]
+      operationId: get_ListWorkspaces
+      summary: List Workspaces
+      description: Handler ListWorkspaces in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+    post:
+      tags: [projects]
+      operationId: post_CreateWorkspace
+      summary: Create Workspace
+      description: Handler CreateWorkspace in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/projects/{id}:
+    get:
+      tags: [projects]
+      operationId: get_GetWorkspace
+      summary: Get Workspace
+      description: Handler GetWorkspace in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+    patch:
+      tags: [projects]
+      operationId: patch_UpdateWorkspace
+      summary: Update Workspace
+      description: Handler UpdateWorkspace in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/projects/{id}/surface:
+    get:
+      tags: [projects]
+      operationId: get_WorkspaceSurface
+      summary: Workspace Surface
+      description: Handler WorkspaceSurface in internal/api.
       parameters:
         - name: id
           in: path
