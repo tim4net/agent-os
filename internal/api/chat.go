@@ -507,6 +507,12 @@ func (a *API) ChatWithAgent(w http.ResponseWriter, r *http.Request) {
 				slog.Warn("failed to store assistant message", "error", storeErr)
 			}
 
+			// Automatic memory writeback (issue #127): distill this
+			// conversation into durable memory once the turn is complete, so
+			// the knowledge compounds and is retrievable via RAG on future
+			// turns. Fire-and-forget; nil-safe when unset.
+			a.triggerMemoryWriteback(convID, ownerID)
+
 			doneData, _ := json.Marshal(map[string]any{
 				"done":            true,
 				"conversation_id": convID.String(),

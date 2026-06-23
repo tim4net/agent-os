@@ -189,6 +189,14 @@ func main() {
 	a := api.NewAPI(queries, pool, harness.DefaultRegistry, bus, feed, cipher, envelope, cfg.LiteLLMURL, cfg.ArtifactsPath, cfg.ObsidianPath, cfg.HermesSkillsPath, apiKeys, providerKeys, cfg.LLMModel)
 	r.Mount("/api", a.Router())
 
+	// Wire the automatic memory writeback (issue #127): after each chat turn,
+	// distill the conversation into durable memory (Obsidian + memory_index)
+	// so knowledge compounds across sessions. The distiller uses the LiteLLM
+	// proxy (or OpenRouter fallback); when no LLM is configured it degrades to
+	// the heuristic distiller so the feedback loop still closes.
+	writeback := service.NewMemoryWriteback(queries, cfg.ObsidianPath, a.MemoryDistiller()).WithEventBus(bus)
+	a.SetMemoryWriteback(writeback)
+
 	// Start background title worker (hourly re-summarization of active conversations)
 	titleWorker := api.NewTitleWorker(a)
 	titleWorker.Start(ctx)

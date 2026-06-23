@@ -40,6 +40,9 @@ type API struct {
 	memory           *MemoryAPI
 	studio           *StudioAPI
 	mailLimiter      *mailLimiter
+	// writeback distills finished conversations into durable memory (issue
+	// #127). Nil until SetMemoryWriteback is called at boot; nil-safe elsewhere.
+	writeback *service.MemoryWriteback
 }
 
 // NewAPI creates a new API instance with the given dependencies.
