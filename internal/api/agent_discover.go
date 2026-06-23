@@ -7,28 +7,86 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/tim4net/agent-os/internal/config"
 	"github.com/tim4net/agent-os/internal/db"
 )
 
-// KnownAgent defines a known agent hostname and its default harness type.
-type KnownAgent struct {
+// DiscoveredAgent represents an agent present in the fleet manifest but not yet
+// registered. The candidate set is config-driven (issue #136) and filtered by
+// registered harness types.
+type DiscoveredAgent struct {
 	Hostname    string `json:"hostname"`
 	DisplayName string `json:"display_name"`
 	Harness     string `json:"harness"`
 	BaseURL     string `json:"base_url"`
+	Online      bool   `json:"online"`
 }
 
-// knownAgents is the mapping of hostnames to harness types.
-var knownAgents = []KnownAgent{
-	{Hostname: "roux", DisplayName: "Roux", Harness: "hermes", BaseURL: "http://roux:8080"},
-	{Hostname: "crawbot", DisplayName: "Crawbot", Harness: "openclaw", BaseURL: "http://crawbot:8080"},
-	{Hostname: "xps", DisplayName: "XPS", Harness: "litellm", BaseURL: "http://xps:4000"},
+// manifest returns the API's fleet manifest, falling back to the config default
+// when unset (e.g. in unit tests that build &API{} literals directly).
+func (a *API) manifest() []config.AgentSpec {
+	if a.agentManifest != nil {
+		return a.agentManifest
+	}
+	return config.DefaultAgentSpecs()
 }
 
-// DiscoveredAgent represents an agent found on the tailnet but not yet registered.
-type DiscoveredAgent struct {
-	KnownAgent
-	Online bool `json:"online"`
+// harnessKnown reports whether a harness type is registered. A nil registry is
+// treated as "all known" so discovery degrades gracefully rather than
+// returning an empty fleet.
+func (a *API) harnessKnown(name string) bool {
+	if a.registry == nil {
+		return true
+	}
+	for _, n := range a.registry.Names() {
+		if n == name {
+			return true
+		}
+	}
+	return false
+}
+
+// computeDiscovered derives the discoverable agent list purely from its inputs
+// (no I/O) so it is unit-testable. Candidates come from the manifest (config),
+// excluding already-registered agents and agents whose harness type is not
+// registered. This is the core of issue #136: the fleet is assembled from
+// registered sources (manifest + registry), not a hardcoded Go list.
+func computeDiscovered(manifest []config.AgentSpec, registered map[string]bool, online map[string]bool, isHarnessKnown func(string) bool) []DiscoveredAgent {
+	out := []DiscoveredAgent{}
+	for _, s := range manifest {
+		if registered[s.Hostname] {
+			continue
+		}
+		if isHarnessKnown != nil && !isHarnessKnown(s.Harness) {
+			slog.Warn("discovery: skipping agent with unregistered harness", "hostname", s.Hostname, "harness", s.Harness)
+			continue
+		}
+		out = append(out, DiscoveredAgent{
+			Hostname:    s.Hostname,
+			DisplayName: s.DisplayName,
+			Harness:     s.Harness,
+			BaseURL:     s.BaseURL,
+			Online:      online[s.Hostname],
+		})
+	}
+	return out
+}
+
+// unregisteredCandidates returns manifest entries that are not yet registered
+// and whose harness type is registered — the set auto-register will create.
+func unregisteredCandidates(manifest []config.AgentSpec, registered map[string]bool, isHarnessKnown func(string) bool) []config.AgentSpec {
+	out := []config.AgentSpec{}
+	for _, s := range manifest {
+		if registered[s.Hostname] {
+			continue
+		}
+		if isHarnessKnown != nil && !isHarnessKnown(s.Harness) {
+			slog.Warn("auto-register: skipping agent with unregistered harness", "hostname", s.Hostname, "harness", s.Harness)
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
 }
 
 // DiscoverAgents handles GET /api/agents/discover
@@ -48,28 +106,13 @@ func (a *API) DiscoverAgents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Build set of registered agent names
-	registeredNames := make(map[string]bool)
+	registeredNames := make(map[string]bool, len(registered))
 	for _, agent := range registered {
 		registeredNames[agent.Name] = true
 	}
 
-	// Get tailscale status to check which agents are online
-	onlineHosts := getTailscaleOnlineHosts()
-
-	// Find unregistered agents
-	var discovered []DiscoveredAgent
-	for _, ka := range knownAgents {
-		if !registeredNames[ka.Hostname] {
-			discovered = append(discovered, DiscoveredAgent{
-				KnownAgent: ka,
-				Online:     onlineHosts[ka.Hostname],
-			})
-		}
-	}
-
-	if discovered == nil {
-		discovered = []DiscoveredAgent{}
-	}
+	// Candidates are derived from the config-driven manifest, not a hardcoded list.
+	discovered := computeDiscovered(a.manifest(), registeredNames, getTailscaleOnlineHosts(), a.harnessKnown)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
@@ -94,54 +137,54 @@ func (a *API) AutoRegisterAgents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	registeredNames := make(map[string]bool)
+	registeredNames := make(map[string]bool, len(registered))
 	for _, agent := range registered {
 		registeredNames[agent.Name] = true
 	}
 
-	var registered_agents []db.Agent
-	for _, ka := range knownAgents {
-		if registeredNames[ka.Hostname] {
-			continue
-		}
+	candidates := unregisteredCandidates(a.manifest(), registeredNames, a.harnessKnown)
 
+	var created []db.Agent
+	for _, c := range candidates {
 		agent, err := a.queries.EnsureAgent(r.Context(), db.EnsureAgentParams{
 			OwnerID:     ownerID,
-			Name:        ka.Hostname,
-			DisplayName: ka.DisplayName,
-			Harness:     ka.Harness,
-			BaseUrl:     ka.BaseURL,
+			Name:        c.Hostname,
+			DisplayName: c.DisplayName,
+			Harness:     c.Harness,
+			BaseUrl:     c.BaseURL,
 			Metadata:    []byte(`{"auto_registered": true, "discovered": true}`),
 		})
 		if err != nil {
 			// err == pgx.ErrNoRows means agent was created by a concurrent request — fetch it.
 			existing, getErr := a.queries.GetAgentByName(r.Context(), db.GetAgentByNameParams{
-				Name:    ka.Hostname,
+				Name:    c.Hostname,
 				OwnerID: ownerID,
 			})
 			if getErr != nil {
-				slog.Error("failed to auto-register agent", "hostname", ka.Hostname, "error", err)
+				slog.Error("failed to auto-register agent", "hostname", c.Hostname, "error", err)
 				continue
 			}
 			agent = existing
 		}
 
-		slog.Info("auto-registered agent", "hostname", ka.Hostname, "harness", ka.Harness, "id", agent.ID.String())
-		registered_agents = append(registered_agents, agent)
+		slog.Info("auto-registered agent", "hostname", c.Hostname, "harness", c.Harness, "id", agent.ID.String())
+		created = append(created, agent)
 	}
 
-	if registered_agents == nil {
-		registered_agents = []db.Agent{}
+	if created == nil {
+		created = []db.Agent{}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"registered": sanitizeAgents(registered_agents),
-		"count":      len(registered_agents),
+		"registered": sanitizeAgents(created),
+		"count":      len(created),
 	})
 }
 
-// getTailscaleOnlineHosts runs `tailscale status` and returns a set of online hostnames.
+// getTailscaleOnlineHosts runs `tailscale status` and returns a set of online
+// hostnames. It returns ALL online peers; the caller filters by manifest
+// membership, so it no longer depends on a hardcoded agent list.
 func getTailscaleOnlineHosts() map[string]bool {
 	hosts := make(map[string]bool)
 
@@ -157,9 +200,6 @@ func getTailscaleOnlineHosts() map[string]bool {
 			HostName string `json:"HostName"`
 			Online   bool   `json:"Online"`
 		} `json:"Peer"`
-		Self struct {
-			HostName string `json:"HostName"`
-		} `json:"Self"`
 	}
 
 	if err := json.Unmarshal(out, &status); err != nil {
@@ -179,19 +219,19 @@ func getTailscaleOnlineHosts() map[string]bool {
 }
 
 // parseTailscaleStatusText is a fallback for when JSON output isn't available.
+// It returns every hostname seen in the status text (lowercased first label)
+// rather than filtering to a hardcoded known set.
 func parseTailscaleStatusText(output string) map[string]bool {
 	hosts := make(map[string]bool)
-	lines := strings.Split(output, "\n")
-	for _, line := range lines {
+	for _, line := range strings.Split(output, "\n") {
 		// Typical format: "hostname 100.x.x.x:xxxx   idle   linux   -"
 		fields := strings.Fields(line)
 		if len(fields) >= 3 {
 			name := strings.ToLower(fields[0])
-			for _, ka := range knownAgents {
-				if name == ka.Hostname {
-					hosts[name] = true
-				}
+			if name == "" || strings.HasPrefix(name, "#") {
+				continue
 			}
+			hosts[name] = true
 		}
 	}
 	return hosts

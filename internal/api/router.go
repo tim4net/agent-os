@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/tim4net/agent-os/internal/config"
 	"github.com/tim4net/agent-os/internal/db"
 	"github.com/tim4net/agent-os/internal/harness"
 	"github.com/tim4net/agent-os/internal/secret"
@@ -34,6 +35,7 @@ type API struct {
 	zaiAPIKey        string
 	openrouterAPIKey string
 	llmModel         string
+	agentManifest    []config.AgentSpec
 	artifacts        *ArtifactAPI
 	memory           *MemoryAPI
 	studio           *StudioAPI
@@ -62,6 +64,7 @@ func NewAPI(queries *db.Queries, pool *pgxpool.Pool, registry *harness.Registry,
 		zaiAPIKey:        keys.ZAI,
 		openrouterAPIKey: keys.OpenRouter,
 		llmModel:         llmModel,
+		agentManifest:    config.LoadAgentManifest(),
 		artifacts:        NewArtifactAPI(queries, artifactsPath),
 		memory:           NewMemoryAPI(queries, obsidianPath, litellmURL, llmModel),
 		studio:           NewStudioAPI(queries, artifactsPath, apiKeys),

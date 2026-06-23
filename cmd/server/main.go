@@ -228,43 +228,25 @@ func main() {
 	slog.Info("agent-os stopped")
 }
 
-// knownAgent defines a known agent that should exist in the database.
-type knownAgent struct {
-	Name        string
-	DisplayName string
-	Harness     string
-	BaseURL     string
-}
-
-// knownAgentsList is the single source of truth for agents that must exist.
-// Only used for initial seeding — existing rows are never modified.
-var knownAgentsList = []knownAgent{
-	{Name: "roux", DisplayName: "Roux", Harness: "hermes", BaseURL: "http://roux:8080"},
-	{Name: "crawbot", DisplayName: "Crawbot", Harness: "openclaw", BaseURL: "http://crawbot:8080"},
-	{Name: "litellm", DisplayName: "LiteLLM on xps", Harness: "litellm", BaseURL: "http://xps:4000"},
-	// agy is a LOCAL coding agent (Antigravity CLI) — runs as a subprocess on the
-	// Agent OS host with ambient keyring auth, so it's reachable with no network
-	// backend. base_url is intentionally unused by the agy harness.
-	{Name: "agy", DisplayName: "Antigravity (agy)", Harness: "agy", BaseURL: "local://agy"},
-}
-
 // ensureKnownAgents inserts agents that don't yet exist in the database.
 // Uses ON CONFLICT (name) DO NOTHING so existing rows (including display_name,
-// role, system_prompt, persona) are never overwritten.
+// role, system_prompt, persona) are never overwritten. The fleet list is the
+// config-driven manifest (issue #136) — see config.LoadAgentManifest — not a
+// hardcoded Go list.
 func ensureKnownAgents(ctx context.Context, queries *db.Queries) {
-	for _, ka := range knownAgentsList {
+	for _, s := range config.LoadAgentManifest() {
 		_, err := queries.EnsureAgent(ctx, db.EnsureAgentParams{
-			Name:        ka.Name,
-			DisplayName: ka.DisplayName,
-			Harness:     ka.Harness,
-			BaseUrl:     ka.BaseURL,
+			Name:        s.Hostname,
+			DisplayName: s.DisplayName,
+			Harness:     s.Harness,
+			BaseUrl:     s.BaseURL,
 			Metadata:    []byte("{}"),
 		})
 		if err != nil {
 			// pgx.ErrNoRows means the agent already existed — that's the expected happy path.
-			slog.Debug("agent seeding skipped (already exists)", "agent", ka.Name)
+			slog.Debug("agent seeding skipped (already exists)", "agent", s.Hostname)
 		} else {
-			slog.Info("agent seeding created new agent", "agent", ka.Name, "harness", ka.Harness)
+			slog.Info("agent seeding created new agent", "agent", s.Hostname, "harness", s.Harness)
 		}
 	}
 }
