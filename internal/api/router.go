@@ -297,6 +297,7 @@ func (a *API) Router() http.Handler {
 
 	// Workflow routes
 	r.Mount("/workflows", a.WorkflowRoutes())
+	r.Mount("/workflow-templates", a.WorkflowTemplateRoutes())
 
 	// Skills routes
 	r.Mount("/skills", a.SkillRoutes())

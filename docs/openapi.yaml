@@ -44,6 +44,7 @@ tags:
   - name: vision
   - name: voice
   - name: work-units
+  - name: workflow-templates
   - name: workflows
   - name: worktrees
 paths:
@@ -1481,6 +1482,33 @@ paths:
       operationId: get_ListWorkUnits
       summary: List Work Units
       description: Handler ListWorkUnits in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/workflow-templates:
+    get:
+      tags: [workflow-templates]
+      operationId: get_ListWorkflowTemplates
+      summary: List Workflow Templates
+      description: Handler ListWorkflowTemplates in internal/api.
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
+  /api/workflow-templates/{key}:
+    get:
+      tags: [workflow-templates]
+      operationId: get_GetWorkflowTemplate
+      summary: Get Workflow Template
+      description: Handler GetWorkflowTemplate in internal/api.
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema: { type: string }
       responses:
         '200': { description: Success }
         '400': { description: Bad request }
