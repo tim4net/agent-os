@@ -22,6 +22,27 @@ func (a *API) ListAgents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Workspace scoping (issue #134): when project_id is supplied, return only
+	// the agents assigned to that workspace.
+	if pidStr := r.URL.Query().Get("project_id"); pidStr != "" {
+		var projectID pgtype.UUID
+		if err := projectID.Scan(pidStr); err != nil {
+			http.Error(w, "invalid project_id parameter", http.StatusBadRequest)
+			return
+		}
+		agents, err := a.queries.ListAgentsByProject(r.Context(), db.ListAgentsByProjectParams{
+			OwnerID:   ownerID,
+			ProjectID: projectID,
+		})
+		if err != nil {
+			http.Error(w, "failed to list agents", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(sanitizeAgents(agents))
+		return
+	}
+
 	agents, err := a.queries.ListVisibleAgents(r.Context(), ownerID)
 	if err != nil {
 		http.Error(w, "failed to list agents", http.StatusInternalServerError)

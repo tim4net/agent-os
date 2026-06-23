@@ -14,7 +14,7 @@ import (
 const createAgent = `-- name: CreateAgent :one
 INSERT INTO agents (owner_id, name, display_name, harness, base_url, metadata)
 VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id
+RETURNING id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id, project_id
 `
 
 type CreateAgentParams struct {
@@ -52,6 +52,7 @@ func (q *Queries) CreateAgent(ctx context.Context, arg CreateAgentParams) (Agent
 		&i.Persona,
 		&i.Visible,
 		&i.OwnerID,
+		&i.ProjectID,
 	)
 	return i, err
 }
@@ -74,7 +75,7 @@ const ensureAgent = `-- name: EnsureAgent :one
 INSERT INTO agents (owner_id, name, display_name, harness, base_url, metadata)
 VALUES ($1, $2, $3, $4, $5, $6)
 ON CONFLICT (name) DO NOTHING
-RETURNING id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id
+RETURNING id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id, project_id
 `
 
 type EnsureAgentParams struct {
@@ -112,12 +113,13 @@ func (q *Queries) EnsureAgent(ctx context.Context, arg EnsureAgentParams) (Agent
 		&i.Persona,
 		&i.Visible,
 		&i.OwnerID,
+		&i.ProjectID,
 	)
 	return i, err
 }
 
 const getAgent = `-- name: GetAgent :one
-SELECT id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id FROM agents WHERE id = $1 AND owner_id = $2
+SELECT id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id, project_id FROM agents WHERE id = $1 AND owner_id = $2
 `
 
 type GetAgentParams struct {
@@ -144,12 +146,13 @@ func (q *Queries) GetAgent(ctx context.Context, arg GetAgentParams) (Agent, erro
 		&i.Persona,
 		&i.Visible,
 		&i.OwnerID,
+		&i.ProjectID,
 	)
 	return i, err
 }
 
 const getAgentByName = `-- name: GetAgentByName :one
-SELECT id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id FROM agents WHERE name = $1 AND owner_id = $2
+SELECT id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id, project_id FROM agents WHERE name = $1 AND owner_id = $2
 `
 
 type GetAgentByNameParams struct {
@@ -176,12 +179,13 @@ func (q *Queries) GetAgentByName(ctx context.Context, arg GetAgentByNameParams) 
 		&i.Persona,
 		&i.Visible,
 		&i.OwnerID,
+		&i.ProjectID,
 	)
 	return i, err
 }
 
 const getAgentByNameAndOwner = `-- name: GetAgentByNameAndOwner :one
-SELECT id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id FROM agents WHERE name = $1 AND owner_id = $2
+SELECT id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id, project_id FROM agents WHERE name = $1 AND owner_id = $2
 `
 
 type GetAgentByNameAndOwnerParams struct {
@@ -208,12 +212,13 @@ func (q *Queries) GetAgentByNameAndOwner(ctx context.Context, arg GetAgentByName
 		&i.Persona,
 		&i.Visible,
 		&i.OwnerID,
+		&i.ProjectID,
 	)
 	return i, err
 }
 
 const listAgents = `-- name: ListAgents :many
-SELECT id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id FROM agents WHERE owner_id = $1 ORDER BY created_at
+SELECT id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id, project_id FROM agents WHERE owner_id = $1 ORDER BY created_at
 `
 
 func (q *Queries) ListAgents(ctx context.Context, ownerID pgtype.UUID) ([]Agent, error) {
@@ -241,6 +246,56 @@ func (q *Queries) ListAgents(ctx context.Context, ownerID pgtype.UUID) ([]Agent,
 			&i.Persona,
 			&i.Visible,
 			&i.OwnerID,
+			&i.ProjectID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAgentsByProject = `-- name: ListAgentsByProject :many
+SELECT id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id, project_id FROM agents
+WHERE owner_id = $1 AND project_id = $2 AND visible = true
+ORDER BY created_at
+`
+
+type ListAgentsByProjectParams struct {
+	OwnerID   pgtype.UUID `json:"owner_id"`
+	ProjectID pgtype.UUID `json:"project_id"`
+}
+
+// Workspace scoping (issue #134): agents assigned to a given project.
+func (q *Queries) ListAgentsByProject(ctx context.Context, arg ListAgentsByProjectParams) ([]Agent, error) {
+	rows, err := q.db.Query(ctx, listAgentsByProject, arg.OwnerID, arg.ProjectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Agent
+	for rows.Next() {
+		var i Agent
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.DisplayName,
+			&i.Harness,
+			&i.BaseUrl,
+			&i.Status,
+			&i.Metadata,
+			&i.LastSeen,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.Role,
+			&i.SystemPrompt,
+			&i.Persona,
+			&i.Visible,
+			&i.OwnerID,
+			&i.ProjectID,
 		); err != nil {
 			return nil, err
 		}
@@ -253,7 +308,7 @@ func (q *Queries) ListAgents(ctx context.Context, ownerID pgtype.UUID) ([]Agent,
 }
 
 const listVisibleAgents = `-- name: ListVisibleAgents :many
-SELECT id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id FROM agents WHERE owner_id = $1 AND visible = true ORDER BY created_at
+SELECT id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id, project_id FROM agents WHERE owner_id = $1 AND visible = true ORDER BY created_at
 `
 
 func (q *Queries) ListVisibleAgents(ctx context.Context, ownerID pgtype.UUID) ([]Agent, error) {
@@ -281,6 +336,7 @@ func (q *Queries) ListVisibleAgents(ctx context.Context, ownerID pgtype.UUID) ([
 			&i.Persona,
 			&i.Visible,
 			&i.OwnerID,
+			&i.ProjectID,
 		); err != nil {
 			return nil, err
 		}
@@ -295,7 +351,7 @@ func (q *Queries) ListVisibleAgents(ctx context.Context, ownerID pgtype.UUID) ([
 const renameAgent = `-- name: RenameAgent :one
 UPDATE agents SET name = $2, display_name = $3, updated_at = NOW()
 WHERE id = $1 AND owner_id = $4
-RETURNING id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id
+RETURNING id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id, project_id
 `
 
 type RenameAgentParams struct {
@@ -329,6 +385,44 @@ func (q *Queries) RenameAgent(ctx context.Context, arg RenameAgentParams) (Agent
 		&i.Persona,
 		&i.Visible,
 		&i.OwnerID,
+		&i.ProjectID,
+	)
+	return i, err
+}
+
+const setAgentProject = `-- name: SetAgentProject :one
+UPDATE agents SET project_id = $2, updated_at = NOW()
+WHERE id = $1 AND owner_id = $3
+RETURNING id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id, project_id
+`
+
+type SetAgentProjectParams struct {
+	ID        pgtype.UUID `json:"id"`
+	ProjectID pgtype.UUID `json:"project_id"`
+	OwnerID   pgtype.UUID `json:"owner_id"`
+}
+
+// Assign (or clear, when project_id is NULL) an agent to a workspace.
+func (q *Queries) SetAgentProject(ctx context.Context, arg SetAgentProjectParams) (Agent, error) {
+	row := q.db.QueryRow(ctx, setAgentProject, arg.ID, arg.ProjectID, arg.OwnerID)
+	var i Agent
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.DisplayName,
+		&i.Harness,
+		&i.BaseUrl,
+		&i.Status,
+		&i.Metadata,
+		&i.LastSeen,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Role,
+		&i.SystemPrompt,
+		&i.Persona,
+		&i.Visible,
+		&i.OwnerID,
+		&i.ProjectID,
 	)
 	return i, err
 }
@@ -336,7 +430,7 @@ func (q *Queries) RenameAgent(ctx context.Context, arg RenameAgentParams) (Agent
 const updateAgent = `-- name: UpdateAgent :one
 UPDATE agents SET display_name = $2, harness = $3, base_url = $4, metadata = $5, updated_at = NOW()
 WHERE id = $1 AND owner_id = $6
-RETURNING id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id
+RETURNING id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id, project_id
 `
 
 type UpdateAgentParams struct {
@@ -374,6 +468,7 @@ func (q *Queries) UpdateAgent(ctx context.Context, arg UpdateAgentParams) (Agent
 		&i.Persona,
 		&i.Visible,
 		&i.OwnerID,
+		&i.ProjectID,
 	)
 	return i, err
 }
@@ -381,7 +476,7 @@ func (q *Queries) UpdateAgent(ctx context.Context, arg UpdateAgentParams) (Agent
 const updateAgentConfig = `-- name: UpdateAgentConfig :one
 UPDATE agents SET role = $2, system_prompt = $3, persona = $4, updated_at = NOW()
 WHERE id = $1 AND owner_id = $5
-RETURNING id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id
+RETURNING id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id, project_id
 `
 
 type UpdateAgentConfigParams struct {
@@ -417,6 +512,7 @@ func (q *Queries) UpdateAgentConfig(ctx context.Context, arg UpdateAgentConfigPa
 		&i.Persona,
 		&i.Visible,
 		&i.OwnerID,
+		&i.ProjectID,
 	)
 	return i, err
 }
@@ -424,7 +520,7 @@ func (q *Queries) UpdateAgentConfig(ctx context.Context, arg UpdateAgentConfigPa
 const updateAgentStatus = `-- name: UpdateAgentStatus :one
 UPDATE agents SET status = $2, last_seen = NOW(), updated_at = NOW()
 WHERE id = $1 AND owner_id = $3
-RETURNING id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id
+RETURNING id, name, display_name, harness, base_url, status, metadata, last_seen, created_at, updated_at, role, system_prompt, persona, visible, owner_id, project_id
 `
 
 type UpdateAgentStatusParams struct {
@@ -452,6 +548,7 @@ func (q *Queries) UpdateAgentStatus(ctx context.Context, arg UpdateAgentStatusPa
 		&i.Persona,
 		&i.Visible,
 		&i.OwnerID,
+		&i.ProjectID,
 	)
 	return i, err
 }

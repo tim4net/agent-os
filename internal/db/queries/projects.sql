@@ -19,7 +19,11 @@ VALUES ($1, $2, $3, $4)
 ON CONFLICT (slug) DO UPDATE SET updated_at = NOW()
 RETURNING *;
 
--- name: UpdateProjectTracker :one
-UPDATE projects SET tracker = $2, external_ref = $3, repo_url = $4, updated_at = NOW()
-WHERE id = $1 AND owner_id = $5
+-- name: UpdateProject :one
+-- Updates all mutable project fields: name, tracker, external_ref, repo_url.
+-- (Renamed from UpdateProjectTracker once name became mutable so the query
+-- name reflects what it actually persists — previously name was silently
+-- dropped because it wasn't in the SET clause.)
+UPDATE projects SET name = $2, tracker = $3, external_ref = $4, repo_url = $5, updated_at = NOW()
+WHERE id = $1 AND owner_id = $6
 RETURNING *;

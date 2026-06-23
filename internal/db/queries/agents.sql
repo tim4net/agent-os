@@ -46,3 +46,15 @@ SELECT * FROM agents WHERE name = $1 AND owner_id = $2;
 
 -- name: DeleteAgent :exec
 DELETE FROM agents WHERE id = $1 AND owner_id = $2;
+
+-- name: ListAgentsByProject :many
+-- Workspace scoping (issue #134): agents assigned to a given project.
+SELECT * FROM agents
+WHERE owner_id = $1 AND project_id = $2 AND visible = true
+ORDER BY created_at;
+
+-- name: SetAgentProject :one
+-- Assign (or clear, when project_id is NULL) an agent to a workspace.
+UPDATE agents SET project_id = $2, updated_at = NOW()
+WHERE id = $1 AND owner_id = $3
+RETURNING *;

@@ -11,6 +11,24 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countMemoryByProject = `-- name: CountMemoryByProject :one
+SELECT COUNT(*) FROM memory_index
+WHERE owner_id = $1 AND (project_id = $2 OR $2 IS NULL)
+`
+
+type CountMemoryByProjectParams struct {
+	OwnerID   pgtype.UUID `json:"owner_id"`
+	ProjectID pgtype.UUID `json:"project_id"`
+}
+
+// Workspace surface (issue #134): how many notes belong to a project.
+func (q *Queries) CountMemoryByProject(ctx context.Context, arg CountMemoryByProjectParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countMemoryByProject, arg.OwnerID, arg.ProjectID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const deleteMemory = `-- name: DeleteMemory :exec
 DELETE FROM memory_index WHERE file_path = $1 AND owner_id = $2
 `

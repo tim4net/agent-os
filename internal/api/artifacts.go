@@ -128,13 +128,31 @@ func (aa *ArtifactAPI) ListArtifacts(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	artifacts, err := aa.queries.ListArtifacts(ctx, db.ListArtifactsParams{
-		OwnerID: ownerID,
-		Column2: artifactType,
-		Column3: agentID,
-		Limit:   limit,
-		Offset:  offset,
-	})
+	var artifacts []db.Artifact
+	var err error
+	if pidStr := r.URL.Query().Get("project_id"); pidStr != "" {
+		// Workspace scoping (issue #134): restrict to one project.
+		var projectID pgtype.UUID
+		if perr := projectID.Scan(pidStr); perr != nil {
+			http.Error(w, "invalid project_id parameter", http.StatusBadRequest)
+			return
+		}
+		artifacts, err = aa.queries.ListArtifactsByProject(ctx, db.ListArtifactsByProjectParams{
+			OwnerID:   ownerID,
+			ProjectID: projectID,
+			Column3:   artifactType,
+			Limit:     limit,
+			Offset:    offset,
+		})
+	} else {
+		artifacts, err = aa.queries.ListArtifacts(ctx, db.ListArtifactsParams{
+			OwnerID: ownerID,
+			Column2: artifactType,
+			Column3: agentID,
+			Limit:   limit,
+			Offset:  offset,
+		})
+	}
 	if err != nil {
 		http.Error(w, "failed to list artifacts", http.StatusInternalServerError)
 		return

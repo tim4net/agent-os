@@ -202,6 +202,7 @@ type Agent struct {
 	Persona      []byte             `json:"persona"`
 	Visible      bool               `json:"visible"`
 	OwnerID      pgtype.UUID        `json:"owner_id"`
+	ProjectID    pgtype.UUID        `json:"project_id"`
 }
 
 type AgentGrant struct {
@@ -260,6 +261,7 @@ type Artifact struct {
 	Metadata    []byte             `json:"metadata"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	OwnerID     pgtype.UUID        `json:"owner_id"`
+	ProjectID   pgtype.UUID        `json:"project_id"`
 }
 
 type ControlState struct {
