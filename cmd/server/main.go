@@ -89,6 +89,17 @@ func main() {
 	indexer.Start(ctx)
 	defer indexer.Stop()
 
+	// Omi wearable ingest (issue #135). Opt-in / deferred behind
+	// higher-priority work: the background poller is only started when an
+	// OMI_API_TOKEN is configured, so the default deployment is unaffected.
+	if cfg.OmiAPIToken != "" {
+		omiSrc := service.NewOmiClient(cfg.OmiBaseURL, cfg.OmiAPIToken, nil)
+		omiIng := service.NewOmiIngester(omiSrc, queries)
+		omiIng.Start(ctx)
+		defer omiIng.Stop()
+		slog.Info("omi-ingester: enabled", "base_url", cfg.OmiBaseURL)
+	}
+
 	// Build router
 	r := chi.NewRouter()
 	r.Use(api.CORS)
