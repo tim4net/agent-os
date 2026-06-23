@@ -532,6 +532,17 @@ export function listGenerations(): Promise<StudioGeneration[]> {
   return request<StudioGeneration[]>('/api/studio/generations')
 }
 
+export interface VideoJob { id: string; state: 'queued'|'processing'|'complete'|'failed'; progress: number; video_url?: string; error?: string }
+export function submitVideoJob(prompt: string, model?: string, provider?: string): Promise<VideoJob> {
+  const body: Record<string,string> = { prompt }
+  if (model) body.model = model
+  if (provider) body.provider = provider
+  return request<VideoJob>('/api/studio/video/jobs', { method:'POST', body: JSON.stringify(body) })
+}
+export function getVideoJob(id: string): Promise<VideoJob> {
+  return request<VideoJob>(`/api/studio/video/jobs/${id}`)
+}
+
 // --- Tasks ---
 
 export interface Task {

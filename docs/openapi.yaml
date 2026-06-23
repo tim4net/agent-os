@@ -1375,6 +1375,34 @@ paths:
         '400': { description: Bad request }
         '404': { description: Not found }
         '500': { description: Server error }
+  /api/studio/video/jobs:
+    post:
+      tags: [studio]
+      operationId: post_SubmitVideoJob
+      summary: Submit Video Job
+      description: Handler SubmitVideoJob in internal/api.
+      responses:
+        '201': { description: Created }
+        '400': { description: Bad request }
+        '502': { description: Upstream submit failed }
+        '503': { description: Job queue full }
+        '500': { description: Server error }
+  /api/studio/video/jobs/{id}:
+    get:
+      tags: [studio]
+      operationId: get_GetVideoJob
+      summary: Get Video Job
+      description: Handler GetVideoJob in internal/api.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Success }
+        '400': { description: Bad request }
+        '404': { description: Not found }
+        '500': { description: Server error }
   /api/tasks:
     get:
       tags: [tasks]

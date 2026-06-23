@@ -1,4 +1,5 @@
 package api
+
 import (
 	"context"
 	b64 "encoding/base64"
@@ -9,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -25,7 +28,7 @@ type StudioProvider interface {
 // ProviderInfo describes a registered studio provider.
 type ProviderInfo struct {
 	Name        string   `json:"name"`
-	Type        string   `json:"type"`         // "image", "video", "audio"
+	Type        string   `json:"type"` // "image", "video", "audio"
 	Models      []string `json:"models"`
 	RequiresKey bool     `json:"requires_key"`
 	Available   bool     `json:"available"`
@@ -33,10 +36,16 @@ type ProviderInfo struct {
 
 // StudioAPI holds dependencies for studio/generation endpoints.
 type StudioAPI struct {
-	queries       *db.Queries
-	artifactsPath string
-	providers     map[string]StudioProvider
-	providerInfo  map[string]ProviderInfo
+	queries             *db.Queries
+	artifactsPath       string
+	providers           map[string]StudioProvider
+	providerInfo        map[string]ProviderInfo
+	videoProviders      map[string]VideoProvider
+	videoJobs           *VideoJobStore
+	videoFinalizer      VideoFinalizer
+	stopVideoPoller     chan struct{}
+	stopVideoPollerOnce sync.Once
+	pollCallTimeout     time.Duration // per-job upstream call deadline; defaults to videoPollCallTimeout
 }
 
 // NewStudioAPI creates a new StudioAPI with multiple providers.
@@ -44,11 +53,16 @@ type StudioAPI struct {
 // Providers without a key are still registered but marked unavailable.
 func NewStudioAPI(queries *db.Queries, artifactsPath string, keys map[string]string) *StudioAPI {
 	s := &StudioAPI{
-		queries:       queries,
-		artifactsPath: artifactsPath,
-		providers:     make(map[string]StudioProvider),
-		providerInfo:  make(map[string]ProviderInfo),
+		queries:         queries,
+		artifactsPath:   artifactsPath,
+		providers:       make(map[string]StudioProvider),
+		providerInfo:    make(map[string]ProviderInfo),
+		videoProviders:  make(map[string]VideoProvider),
+		videoJobs:       NewVideoJobStore(),
+		stopVideoPoller: make(chan struct{}),
+		pollCallTimeout: videoPollCallTimeout,
 	}
+	s.videoFinalizer = &studioVideoFinalizer{api: s}
 
 	// Provider 1: xAI
 	// NOTE: xAI has the API key but team has no billing credits — returns 403.
@@ -108,13 +122,27 @@ func NewStudioAPI(queries *db.Queries, artifactsPath string, keys map[string]str
 		Available:   falKey != "",
 	}
 
+	// Provider 6: Grok Video (xAI)
+	s.videoProviders["grok-video"] = NewXAIVideoProvider(xaiKey)
+	s.providerInfo["grok-video"] = ProviderInfo{
+		Name:        "grok-video",
+		Type:        "video",
+		Models:      []string{"grok-2-video"},
+		RequiresKey: true,
+		Available:   xaiKey != "",
+	}
+
+	if s.videoJobs != nil && len(s.videoProviders) > 0 {
+		go s.runVideoPoller()
+	}
+
 	return s
 }
 
 // GenerateRequest is the JSON body for the generate endpoint.
 type GenerateRequest struct {
 	Prompt   string `json:"prompt"`
-	Type     string `json:"type"`     // "image", "video", "audio"
+	Type     string `json:"type"` // "image", "video", "audio"
 	Model    string `json:"model"`
 	Provider string `json:"provider"`
 	AgentID  string `json:"agent_id"` // optional: associate artifact with an agent
@@ -128,6 +156,9 @@ func (s *StudioAPI) StudioRoutes() http.Handler {
 	r.Get("/generations", s.ListGenerations)
 	r.Get("/providers", s.ListProviders)
 
+	r.Post("/video/jobs", s.SubmitVideoJob)
+	r.Get("/video/jobs/{id}", s.GetVideoJob)
+
 	return r
 }
 
@@ -135,7 +166,7 @@ func (s *StudioAPI) StudioRoutes() http.Handler {
 func (s *StudioAPI) ListProviders(w http.ResponseWriter, r *http.Request) {
 	providers := make([]ProviderInfo, 0, len(s.providerInfo))
 	// Return in a deterministic order
-	for _, name := range []string{"xai", "pollinations", "openrouter", "gemini", "fal"} {
+	for _, name := range []string{"xai", "pollinations", "openrouter", "gemini", "fal", "grok-video"} {
 		if info, ok := s.providerInfo[name]; ok {
 			providers = append(providers, info)
 		}
@@ -148,7 +179,7 @@ func (s *StudioAPI) ListProviders(w http.ResponseWriter, r *http.Request) {
 // firstAvailableProvider returns the name of the first available provider.
 func (s *StudioAPI) firstAvailableProvider() string {
 	// Prefer pollinations since it's always available and free
-	for _, name := range []string{"pollinations", "xai", "openrouter", "gemini", "fal"} {
+	for _, name := range []string{"pollinations", "xai", "openrouter", "gemini", "fal", "grok-video"} {
 		if info, ok := s.providerInfo[name]; ok && info.Available {
 			return name
 		}
@@ -398,6 +429,48 @@ func downloadFile(ctx context.Context, url string) ([]byte, error) {
 	}
 
 	return io.ReadAll(resp.Body)
+}
+
+// downloadFileToPath streams a URL's response body directly to destPath without
+// buffering the whole file in memory (unlike downloadFile, which io.ReadAll's
+// the entire body). This matters for video, which is far larger than images and
+// may be finalized concurrently (up to videoPollConcurrency at once). maxBytes
+// caps the body size; pass 0 for no cap. http.MaxBytesReader turns an oversize
+// download into a readable error instead of an OOM.
+func downloadFileToPath(ctx context.Context, url, destPath string, maxBytes int64) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("download failed with status %d", resp.StatusCode)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
+		return err
+	}
+
+	out, err := os.Create(destPath)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	body := io.Reader(resp.Body)
+	if maxBytes > 0 {
+		body = http.MaxBytesReader(nil, resp.Body, maxBytes)
+	}
+	if _, err := io.Copy(out, body); err != nil {
+		return err
+	}
+	return out.Sync()
 }
 
 // detectExtension returns a file extension based on URL or type.

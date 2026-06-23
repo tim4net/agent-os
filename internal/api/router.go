@@ -87,6 +87,14 @@ type ProviderKeys struct {
 	OpenRouter string
 }
 
+// Close releases background resources owned by the API (e.g. the studio video
+// poller goroutine). Call from the server graceful-stop path.
+func (a *API) Close() {
+	if a.studio != nil {
+		a.studio.Close()
+	}
+}
+
 // buildHarnessConfig creates a harness config map for the given agent by
 // resolving its GRANTED vault resources (default-deny). Only resources explicitly
 // granted to the agent are injected; revoking a grant removes the capability at

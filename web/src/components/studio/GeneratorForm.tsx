@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import type { StudioGeneration, StudioProvider } from '../../api/client'
-import { getStudioProviders, studioGenerate } from '../../api/client'
+import { getStudioProviders, studioGenerate, submitVideoJob, getVideoJob } from '../../api/client'
 import { Icon } from '../Icon'
 
 interface GeneratorFormProps {
@@ -16,8 +16,18 @@ export function GeneratorForm({ onGenerated, agentId }: GeneratorFormProps) {
   const [providers, setProviders] = useState<StudioProvider[]>([])
   const [providersLoading, setProvidersLoading] = useState(true)
   const [generating, setGenerating] = useState(false)
+  const [progressMsg, setProgressMsg] = useState<string | null>(null)
   const [result, setResult] = useState<StudioGeneration | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const pollTimerRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (pollTimerRef.current !== null) {
+        window.clearInterval(pollTimerRef.current)
+      }
+    }
+  }, [])
 
   // Fetch providers on mount
   useEffect(() => {
@@ -55,14 +65,64 @@ export function GeneratorForm({ onGenerated, agentId }: GeneratorFormProps) {
     setGenerating(true)
     setError(null)
     setResult(null)
+    setProgressMsg(null)
+
+    if (pollTimerRef.current !== null) {
+      window.clearInterval(pollTimerRef.current)
+      pollTimerRef.current = null
+    }
+
     try {
-      const gen = await studioGenerate(prompt, type, model || undefined, provider, agentId)
-      setResult(gen)
-      onGenerated?.(gen)
+      if (type === 'video') {
+        const job = await submitVideoJob(prompt, model || undefined, provider)
+        setProgressMsg(`${job.state} (${job.progress}%)`)
+        
+        pollTimerRef.current = window.setInterval(async () => {
+          try {
+            const currentJob = await getVideoJob(job.id)
+            if (currentJob.state === 'complete') {
+              if (pollTimerRef.current !== null) window.clearInterval(pollTimerRef.current)
+              pollTimerRef.current = null
+              setGenerating(false)
+              setProgressMsg(null)
+              
+              const gen: StudioGeneration = {
+                id: currentJob.id,
+                prompt,
+                type: 'video',
+                model: model || '',
+                url: currentJob.video_url || '',
+                created_at: new Date().toISOString(),
+              }
+              setResult(gen)
+              onGenerated?.(gen)
+            } else if (currentJob.state === 'failed') {
+              if (pollTimerRef.current !== null) window.clearInterval(pollTimerRef.current)
+              pollTimerRef.current = null
+              setGenerating(false)
+              setProgressMsg(null)
+              setError(currentJob.error || 'Video generation failed')
+            } else {
+              setProgressMsg(`${currentJob.state} (${currentJob.progress}%)`)
+            }
+          } catch (err: unknown) {
+            if (pollTimerRef.current !== null) window.clearInterval(pollTimerRef.current)
+            pollTimerRef.current = null
+            setGenerating(false)
+            setProgressMsg(null)
+            setError(err instanceof Error ? err.message : 'Polling failed')
+          }
+        }, 1500)
+      } else {
+        const gen = await studioGenerate(prompt, type, model || undefined, provider, agentId)
+        setResult(gen)
+        onGenerated?.(gen)
+        setGenerating(false)
+      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Generation failed')
-    } finally {
       setGenerating(false)
+      setProgressMsg(null)
     }
   }
 
@@ -198,8 +258,8 @@ export function GeneratorForm({ onGenerated, agentId }: GeneratorFormProps) {
         className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
       >
         {generating ? (
-          <span className="flex items-center gap-2">
-            <span className="animate-spin">⏳</span> Generating…
+          <span className="flex items-center gap-2" role="status" aria-live="polite">
+            <span className="animate-spin" aria-hidden="true">⏳</span> {progressMsg ? progressMsg : 'Generating…'}
           </span>
         ) : (
           `Generate ${type}`
