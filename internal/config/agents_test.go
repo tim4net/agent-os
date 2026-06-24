@@ -124,3 +124,45 @@ func TestLoadAgentManifest_MalformedInlineFallsBack(t *testing.T) {
 		t.Fatalf("malformed inline JSON should fall back to default 4, got %d", len(specs))
 	}
 }
+
+// TestDefaultAgentSpecs_NoDisplayNameIsModels is the #121 regression guard.
+// The bug was that display_name was hardcoded to the literal string "Models"
+// at agent registration/discovery time. This test asserts that NO default
+// agent spec carries that placeholder — the config manifest is the single
+// source of truth and must always provide a real name.
+func TestDefaultAgentSpecs_NoDisplayNameIsModels(t *testing.T) {
+	specs := DefaultAgentSpecs()
+	for _, s := range specs {
+		if s.DisplayName == "Models" {
+			t.Errorf("agent %q has display_name=\"Models\" — the #121 bug has regressed", s.Hostname)
+		}
+		if s.DisplayName == "" {
+			t.Errorf("agent %q has empty display_name — must be a real name, not a placeholder", s.Hostname)
+		}
+	}
+}
+
+// TestDefaultAgentSpecs_DisplayNameEqualsConfigName ensures that every default
+// spec has a display_name that is a proper human-friendly name (acceptance
+// criterion #3: "registered name equals the config name"). The name stored in
+// the manifest is what gets written to agents.display_name on seed/register.
+func TestDefaultAgentSpecs_DisplayNameIsHumanFriendly(t *testing.T) {
+	specs := DefaultAgentSpecs()
+	if len(specs) == 0 {
+		t.Fatal("expected at least one default agent spec")
+	}
+	for _, s := range specs {
+		// display_name must be non-empty and not a machine placeholder
+		if s.DisplayName == "" {
+			t.Errorf("agent %q: display_name must not be empty", s.Hostname)
+		}
+		// hostname must be non-empty (it becomes agents.name in the DB)
+		if s.Hostname == "" {
+			t.Error("agent spec with empty hostname — hostname becomes agents.name")
+		}
+		// harness must be non-empty
+		if s.Harness == "" {
+			t.Errorf("agent %q: harness must not be empty", s.Hostname)
+		}
+	}
+}

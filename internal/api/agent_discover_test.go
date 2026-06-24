@@ -153,3 +153,55 @@ func TestManifest_UsesExplicitField(t *testing.T) {
 		t.Fatalf("explicit manifest must win; got %+v", m)
 	}
 }
+
+// TestComputeDiscovered_DisplayNameNotModels is a #121 regression guard at the
+// API layer. Discovery candidates must carry the display_name from the config
+// manifest, never the hardcoded "Models" placeholder that caused #121.
+func TestComputeDiscovered_DisplayNameNotModels(t *testing.T) {
+	manifest := config.DefaultAgentSpecs()
+	got := computeDiscovered(manifest, map[string]bool{}, map[string]bool{}, allKnown)
+	if len(got) == 0 {
+		t.Fatal("expected discovered agents from default manifest")
+	}
+	for _, d := range got {
+		if d.DisplayName == "Models" {
+			t.Errorf("discovered agent %q has display_name=\"Models\" — #121 regressed", d.Hostname)
+		}
+		if d.DisplayName == "" {
+			t.Errorf("discovered agent %q has empty display_name", d.Hostname)
+		}
+	}
+}
+
+// TestUnregisteredCandidates_PreservesConfigDisplayName ensures the
+// auto-register path (unregisteredCandidates → EnsureAgent) carries the
+// display_name from the config manifest. This is acceptance criterion #3 for
+// #121: "the registered name equals the config name."
+func TestUnregisteredCandidates_PreservesConfigDisplayName(t *testing.T) {
+	manifest := []config.AgentSpec{
+		{Hostname: "alpha", DisplayName: "Alpha One", Harness: "hermes", BaseURL: "http://alpha"},
+		{Hostname: "beta", DisplayName: "Beta Two", Harness: "agy", BaseURL: "local://beta"},
+	}
+	candidates := unregisteredCandidates(manifest, map[string]bool{}, allKnown)
+	if len(candidates) != 2 {
+		t.Fatalf("expected 2 candidates, got %d", len(candidates))
+	}
+	// Each candidate's DisplayName must match what the manifest declared —
+	// this is the value EnsureAgent writes to agents.display_name.
+	for _, c := range candidates {
+		if c.DisplayName == "Models" || c.DisplayName == "" {
+			t.Errorf("candidate %q has invalid display_name %q — must use config value", c.Hostname, c.DisplayName)
+		}
+	}
+	// Verify specific values round-trip correctly.
+	byHost := map[string]string{}
+	for _, c := range candidates {
+		byHost[c.Hostname] = c.DisplayName
+	}
+	if byHost["alpha"] != "Alpha One" {
+		t.Errorf("alpha display_name: want \"Alpha One\", got %q", byHost["alpha"])
+	}
+	if byHost["beta"] != "Beta Two" {
+		t.Errorf("beta display_name: want \"Beta Two\", got %q", byHost["beta"])
+	}
+}
