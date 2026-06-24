@@ -126,7 +126,7 @@ export function JarvisMode({ agent, conversationId, onConversationCreated, model
         },
         {
           onUserText: () => {},
-          onAssistantText: (text, convId) => {
+          onAssistantText: (_text, convId) => {
             if (convId && convId !== conversationIdRef.current) {
               conversationIdRef.current = convId
               live.current.onConversationCreated(convId)
