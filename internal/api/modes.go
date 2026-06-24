@@ -13,6 +13,14 @@ const (
 	// numbered citations, and followed by a sources list. It reuses the
 	// agent's existing web-search tooling — no new search infra is added.
 	ModePerplexity = "perplexity"
+	// ModeJarvis is a voice-activated computer-control mode: the user speaks a
+	// command and the agent interprets it as an actionable instruction, then
+	// executes it using its existing browser/host tools (launch apps, click,
+	// navigate, run commands). Destructive actions must be described and held
+	// for explicit confirmation before execution. No new automation primitives
+	// are introduced — the agent simply reuses the browser/terminal tooling it
+	// already has (#125).
+	ModeJarvis = "jarvis"
 )
 
 // modeSystemPrompt returns the system-prompt augmentation text for the given
@@ -25,6 +33,16 @@ const (
 // infrastructure — matching the acceptance criteria of #137.
 func modeSystemPrompt(mode string) string {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case ModeJarvis, "assistant":
+		return strings.TrimSpace(`[JARVIS MODE] You are a voice-activated computer-control assistant. The user is speaking commands to you through a microphone and expecting you to act on the host machine and browser.
+Follow these rules strictly for this turn:
+1. Interpret the user's message as an actionable command to perform on the computer (e.g. open a website, launch an application, click a button, navigate, run a shell command, search the web).
+2. EXECUTE the command immediately using your available tools — browser, terminal/shell, web search, file access. Do not just describe what you would do; do it.
+3. Report the outcome concisely in one or two sentences (the user is listening, not reading). State what you did and the result.
+4. DESTRUCTIVE ACTIONS (deleting files, closing applications, overwriting data, running commands that modify state, formatting, etc.): Before executing, clearly state what the action will do and ask the user to confirm. Do not proceed with destructive actions until the user explicitly approves.
+5. If the command is ambiguous, ask a brief clarifying question instead of guessing.
+6. If a command cannot be executed with available tools, say so plainly and suggest the closest alternative.
+Prefer browser/host tools you already have. Never invent results — only report what actually happened.`)
 	case ModePerplexity, "search":
 		return strings.TrimSpace(`[PERPLEXITY MODE] You are a search-grounded answer engine.
 Follow these rules strictly for this turn:

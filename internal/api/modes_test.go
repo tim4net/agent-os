@@ -26,6 +26,28 @@ func TestModeSystemPrompt_SearchAlias(t *testing.T) {
 	}
 }
 
+func TestModeSystemPrompt_Jarvis(t *testing.T) {
+	got := modeSystemPrompt(ModeJarvis)
+	if got == "" {
+		t.Fatal("jarvis mode must return a non-empty system prompt")
+	}
+	// The prompt must instruct the agent to execute computer-control commands via
+	// its tools and to confirm destructive actions — the two acceptance-criteria
+	// behaviours for #125.
+	for _, want := range []string{"EXECUTE", "tool", "DESTRUCTIVE", "confirm"} {
+		if !strings.Contains(strings.ToLower(got), strings.ToLower(want)) {
+			t.Errorf("jarvis prompt missing %q (want instruction to reference it)", want)
+		}
+	}
+}
+
+func TestModeSystemPrompt_AssistantAlias(t *testing.T) {
+	// "assistant" is an accepted alias for the jarvis mode.
+	if modeSystemPrompt("assistant") == "" {
+		t.Fatal(`"assistant" must map to the jarvis prompt`)
+	}
+}
+
 func TestModeSystemPrompt_CaseInsensitive(t *testing.T) {
 	if modeSystemPrompt("PERPLEXITY") == "" {
 		t.Fatal("mode lookup must be case-insensitive")
