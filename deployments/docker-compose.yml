@@ -1,0 +1,105 @@
+# =============================================================================
+# Agent OS — Self-Contained Docker Compose Stack
+# =============================================================================
+# This is the canonical deployment definition for Agent OS on Docker.
+# It replaces the podman quadlet (.container) files used previously on hpms1.
+#
+# Usage:
+#   1. Copy this file to the deploy host (e.g. /srv/agent-os/)
+#   2. Create a .env file alongside it (see docker-compose.env.example)
+#   3. docker compose up -d
+#
+# The Go API has a built-in migration runner that applies all pending
+# .up.sql migrations on boot, so no external migration step is needed.
+# =============================================================================
+
+services:
+  db:
+    image: docker.io/library/postgres:17-alpine
+    container_name: agent-os-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-agentos}
+      POSTGRES_USER: ${POSTGRES_USER:-agentos}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agentos_dev}
+    volumes:
+      - agent-os-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agentos}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - agent-os-net
+
+  api:
+    build:
+      context: ..
+      dockerfile: deployments/Containerfile.api
+    image: agent-os-api:latest
+    container_name: agent-os-api
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-agentos}:${POSTGRES_PASSWORD:-agentos_dev}@agent-os-db:5432/${POSTGRES_DB:-agentos}?sslmode=disable
+      PORT: "8080"
+      LITELLM_URL: ${LITELLM_URL:-}
+      OBSIDIAN_PATH: /data/obsidian
+      ARTIFACTS_PATH: /data/artifacts
+      HERMES_SKILLS_PATH: /data/hermes-skills
+      XAI_API_KEY: ${XAI_API_KEY:-}
+      HERMES_API_KEY: ${HERMES_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      FAL_KEY: ${FAL_KEY:-}
+      ZAI_API_KEY: ${ZAI_API_KEY:-}
+      AOS_MASTER_KEY: ${AOS_MASTER_KEY:-}
+      AOS_DEV_LOGIN: ${AOS_DEV_LOGIN:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OMI_API_TOKEN: ${OMI_API_TOKEN:-}
+      OMI_BASE_URL: ${OMI_BASE_URL:-}
+      LLM_MODEL: ${LLM_MODEL:-local-qwen}
+    volumes:
+      - agent-os-artifacts:/data/artifacts
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - agent-os-net
+
+  web:
+    build:
+      context: ..
+      dockerfile: deployments/Containerfile.web
+    image: agent-os-web:latest
+    container_name: agent-os-web
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:80/"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    networks:
+      - agent-os-net
+
+networks:
+  agent-os-net:
+    name: agent-os-net
+    driver: bridge
+
+volumes:
+  agent-os-db-data:
+    name: agent-os-db-data
+  agent-os-artifacts:
+    name: agent-os-artifacts
