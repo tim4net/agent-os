@@ -41,13 +41,14 @@ describe('VaultManager — resource vault UI (#131)', () => {
   afterEach(() => cleanup())
 
   it('shows the empty state when the vault has no resources', async () => {
-    listMock.mockResolvedValue({ resources: [] })
+    listMock.mockResolvedValue({ resources: [], secrets_enabled: true })
     render(<VaultManager />)
     expect(await screen.findByText(/your vault is empty/i)).toBeInTheDocument()
   })
 
   it('lists loaded resources grouped by kind', async () => {
     listMock.mockResolvedValue({
+      secrets_enabled: true,
       resources: [
         cred({ id: 'c1', label: 'OpenRouter', slug: 'openrouter' }),
         {
@@ -69,6 +70,7 @@ describe('VaultManager — resource vault UI (#131)', () => {
     const PLAINTEXT = 'sk-liv-SECRET-7890'
     // Even if some field leaked the plaintext, the UI must not print it.
     listMock.mockResolvedValue({
+      secrets_enabled: true,
       resources: [cred({ id: 'c1', last4: '7890', label: 'Leaky' })],
     })
     const { container } = render(<VaultManager />)
@@ -82,6 +84,7 @@ describe('VaultManager — resource vault UI (#131)', () => {
 
   it('shows •••••••• for a set credential whose last4 is empty', async () => {
     listMock.mockResolvedValue({
+      secrets_enabled: true,
       resources: [cred({ id: 'c1', last4: '', label: 'NoTail' })],
     })
     render(<VaultManager />)
@@ -91,6 +94,7 @@ describe('VaultManager — resource vault UI (#131)', () => {
 
   it('shows "not set" for a credential with no secret stored', async () => {
     listMock.mockResolvedValue({
+      secrets_enabled: true,
       resources: [cred({ id: 'c1', is_set: false, label: 'Unset' })],
     })
     render(<VaultManager />)
@@ -99,8 +103,8 @@ describe('VaultManager — resource vault UI (#131)', () => {
 
   it('deletes a resource after confirmation and reloads the list', async () => {
     listMock
-      .mockResolvedValueOnce({ resources: [cred({ id: 'c1', label: 'Doomed' })] })
-      .mockResolvedValueOnce({ resources: [] })
+      .mockResolvedValueOnce({ resources: [cred({ id: 'c1', label: 'Doomed' })], secrets_enabled: true })
+      .mockResolvedValueOnce({ resources: [], secrets_enabled: true })
     deleteMock.mockResolvedValue(undefined)
 
     render(<VaultManager />)
@@ -114,7 +118,7 @@ describe('VaultManager — resource vault UI (#131)', () => {
 
   it('does not delete when the confirm dialog is cancelled', async () => {
     vi.spyOn(window, 'confirm').mockReturnValue(false)
-    listMock.mockResolvedValue({ resources: [cred({ id: 'c1', label: 'Safe' })] })
+    listMock.mockResolvedValue({ resources: [cred({ id: 'c1', label: 'Safe' })], secrets_enabled: true })
     render(<VaultManager />)
     await screen.findByText('Safe')
 
@@ -124,7 +128,7 @@ describe('VaultManager — resource vault UI (#131)', () => {
   })
 
   it('opens the add-resource modal', async () => {
-    listMock.mockResolvedValue({ resources: [] })
+    listMock.mockResolvedValue({ resources: [], secrets_enabled: true })
     render(<VaultManager />)
     await screen.findByText(/your vault is empty/i)
     fireEvent.click(screen.getByRole('button', { name: /add resource/i }))
